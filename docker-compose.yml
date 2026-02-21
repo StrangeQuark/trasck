@@ -2,7 +2,6 @@ services:
   trasck-service:
     build: .
     networks:
-      - shared-network
       - trasckdb-network
     ports:
       - "6100:6100"
