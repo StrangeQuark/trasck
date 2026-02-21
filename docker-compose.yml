@@ -1,0 +1,36 @@
+services:
+  trasck-service:
+    build: .
+    networks:
+      - shared-network
+      - trasckdb-network
+    ports:
+      - "6100:6100"
+    container_name: trasck-service
+    depends_on:
+      - trasck-db
+    environment:
+      - SPRING_APPLICATION_NAME=${SPRING_APPLICATION_NAME}
+      - SERVER_PORT=${SERVER_PORT}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_DRIVER=${SPRING_DATASOURCE_DRIVER}
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD}
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=${SPRING_JPA_HIBERNATE_DDL_AUTO}
+      - SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL=${SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL}
+      - SPRING_JPA_DATABASE=${SPRING_JPA_DATABASE}
+      - SPRING_JPA_DATABASE_PLATFORM=${SPRING_JPA_DATABASE_PLATFORM}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+  trasck-db:
+    image: 'postgres:13.1-alpine'
+    container_name: trasck-db
+    networks:
+      - trasckdb-network
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+networks:
+  trasckdb-network:
+    external: true
