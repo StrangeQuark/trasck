@@ -22,6 +22,10 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 10. All important user-visible changes should generate activity events. Security/compliance-sensitive changes should also generate audit log entries.
 11. `work_item_closure` should exist alongside `work_items.parent_id` so hierarchy rollups are fast and reliable.
 12. Time tracking, resolutions, custom screens, and project-specific type availability are first-class backend concepts, not add-ons.
+13. User identity is global, with separate auth identities for password and OAuth providers.
+14. Public project visibility must be modeled from the start, with anonymous read disabled unless a workspace/project explicitly allows it.
+15. Attachment storage is configurable per workspace.
+16. Automation uses hybrid execution: local state changes can run synchronously, while slow or external actions run through queued jobs.
 
 ## Full Work Hierarchy
 
@@ -134,6 +138,7 @@ Recommended conventions:
 erDiagram
     ORGANIZATIONS ||--o{ WORKSPACES : owns
     USERS ||--o{ ORGANIZATIONS : created_by
+    USERS ||--o{ USER_AUTH_IDENTITIES : authenticates_with
     WORKSPACES ||--o{ WORKSPACE_MEMBERSHIPS : has
     USERS ||--o{ WORKSPACE_MEMBERSHIPS : joins
     WORKSPACES ||--o{ ROLES : defines
@@ -191,6 +196,18 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
         timestamptz deleted_at
+    }
+
+    USER_AUTH_IDENTITIES {
+        uuid id PK
+        uuid user_id FK
+        string provider
+        string provider_subject
+        string provider_username
+        string provider_email
+        jsonb metadata
+        timestamptz created_at
+        timestamptz updated_at
     }
 
     WORKSPACE_MEMBERSHIPS {
@@ -310,7 +327,9 @@ erDiagram
         string key UK
         bigint sequence_number
         string title
-        jsonb description
+        text description_markdown
+        jsonb description_document
+        string visibility
         numeric estimate_points
         integer estimate_minutes
         integer remaining_minutes
@@ -535,6 +554,8 @@ erDiagram
     WORK_ITEMS ||--o{ WORK_LOGS : tracked_by
     USERS ||--o{ WORK_LOGS : logs
     WORKSPACES ||--o{ ATTACHMENTS : stores
+    WORKSPACES ||--o{ ATTACHMENT_STORAGE_CONFIGS : configures_storage
+    ATTACHMENT_STORAGE_CONFIGS ||--o{ ATTACHMENTS : stores
     WORK_ITEMS ||--o{ WORK_ITEM_ATTACHMENTS : has
     ATTACHMENTS ||--o{ WORK_ITEM_ATTACHMENTS : attached
     WORK_ITEMS ||--o{ WATCHERS : watched
@@ -606,7 +627,8 @@ erDiagram
         uuid id PK
         uuid work_item_id FK
         uuid author_id FK
-        jsonb body
+        text body_markdown
+        jsonb body_document
         string visibility
         timestamptz created_at
         timestamptz updated_at
@@ -620,7 +642,8 @@ erDiagram
         integer minutes_spent
         date work_date
         timestamptz started_at
-        jsonb description
+        text description_markdown
+        jsonb description_document
         timestamptz created_at
         timestamptz updated_at
         timestamptz deleted_at
@@ -629,13 +652,27 @@ erDiagram
     ATTACHMENTS {
         uuid id PK
         uuid workspace_id FK
+        uuid storage_config_id FK
         uuid uploader_id FK
         string filename
         string content_type
         string storage_key
         bigint size_bytes
         string checksum
+        string visibility
         timestamptz created_at
+    }
+
+    ATTACHMENT_STORAGE_CONFIGS {
+        uuid id PK
+        uuid workspace_id FK
+        string name
+        string provider
+        jsonb config
+        boolean active
+        boolean default_config
+        timestamptz created_at
+        timestamptz updated_at
     }
 
     ACTIVITY_EVENTS {
@@ -674,6 +711,9 @@ erDiagram
     WORKSPACES ||--o{ AUTOMATION_RULES : defines
     AUTOMATION_RULES ||--o{ AUTOMATION_CONDITIONS : has
     AUTOMATION_RULES ||--o{ AUTOMATION_ACTIONS : runs
+    AUTOMATION_RULES ||--o{ AUTOMATION_EXECUTION_JOBS : queues
+    AUTOMATION_EXECUTION_JOBS ||--o{ AUTOMATION_EXECUTION_LOGS : records
+    AUTOMATION_ACTIONS ||--o{ AUTOMATION_EXECUTION_LOGS : executes
     WORKSPACES ||--o{ WEBHOOKS : defines
     WEBHOOKS ||--o{ WEBHOOK_DELIVERIES : attempts
     WORKSPACES ||--o{ EXTERNAL_INTEGRATIONS : connects
@@ -718,8 +758,36 @@ erDiagram
         uuid id PK
         uuid rule_id FK
         string action_type
+        string execution_mode
         jsonb config
         integer position
+    }
+
+    AUTOMATION_EXECUTION_JOBS {
+        uuid id PK
+        uuid rule_id FK
+        uuid workspace_id FK
+        string source_entity_type
+        uuid source_entity_id
+        string status
+        jsonb payload
+        integer attempts
+        timestamptz next_attempt_at
+        timestamptz started_at
+        timestamptz completed_at
+        timestamptz failed_at
+        string last_error
+        timestamptz created_at
+    }
+
+    AUTOMATION_EXECUTION_LOGS {
+        uuid id PK
+        uuid job_id FK
+        uuid action_id FK
+        string status
+        string message
+        jsonb metadata
+        timestamptz created_at
     }
 
     WEBHOOKS {
@@ -810,6 +878,7 @@ erDiagram
 | `organizations` | Top-level customer/account boundary. |
 | `workspaces` | Configuration boundary inside an organization. |
 | `users` | Global user identity. |
+| `user_auth_identities` | Password/OAuth identity mappings for global users. |
 | `workspace_memberships` | User membership and role inside a workspace. |
 | `project_memberships` | Optional project-specific access override. |
 | `roles` | Named permission bundle scoped to workspace or project. |
@@ -888,6 +957,7 @@ erDiagram
 |---|---|
 | `comments` | Work item discussions. |
 | `work_logs` | Time tracking entries on work items. |
+| `attachment_storage_configs` | Workspace-configurable attachment storage providers. |
 | `attachments` | Uploaded file metadata. |
 | `work_item_attachments` | Join table for attachments. |
 | `watchers` | Users watching work items. |
@@ -916,6 +986,8 @@ erDiagram
 | `automation_rules` | Rule definitions. |
 | `automation_conditions` | Rule conditions. |
 | `automation_actions` | Rule actions. |
+| `automation_execution_jobs` | Queued async automation work for hybrid execution. |
+| `automation_execution_logs` | Per-job/per-action automation execution history. |
 | `webhooks` | Outbound webhook definitions. |
 | `webhook_deliveries` | Webhook delivery attempts. |
 
@@ -944,6 +1016,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 
 | Table | Important Columns |
 |---|---|
+| `user_auth_identities` | `id`, `user_id`, `provider`, `provider_subject`, `provider_username`, `provider_email`, `metadata`, `created_at`, `updated_at` |
 | `roles` | `id`, `workspace_id`, `name`, `key`, `scope`, `description`, `system_role`, `created_at`, `updated_at` |
 | `permissions` | `id`, `key`, `name`, `description`, `category` |
 | `role_permissions` | `role_id`, `permission_id`, `created_at` |
@@ -997,7 +1070,8 @@ The ERDs show the main entities and the table catalog names every planned table.
 |---|---|
 | `watchers` | `work_item_id`, `user_id`, `created_at` |
 | `mentions` | `id`, `source_type`, `source_id`, `mentioned_user_id`, `created_at` |
-| `work_logs` | `id`, `work_item_id`, `user_id`, `minutes_spent`, `work_date`, `started_at`, `description`, `created_at`, `updated_at`, `deleted_at` |
+| `work_logs` | `id`, `work_item_id`, `user_id`, `minutes_spent`, `work_date`, `started_at`, `description_markdown`, `description_document`, `created_at`, `updated_at`, `deleted_at` |
+| `attachment_storage_configs` | `id`, `workspace_id`, `name`, `provider`, `config`, `active`, `default_config`, `created_at`, `updated_at` |
 
 ### Reporting Columns
 
@@ -1015,6 +1089,8 @@ The ERDs show the main entities and the table catalog names every planned table.
 |---|---|
 | `notification_preferences` | `id`, `user_id`, `workspace_id`, `channel`, `event_type`, `enabled`, `config` |
 | `notifications` | `id`, `user_id`, `actor_id`, `workspace_id`, `type`, `title`, `body`, `target_type`, `target_id`, `read_at`, `created_at` |
+| `automation_execution_jobs` | `id`, `rule_id`, `workspace_id`, `source_entity_type`, `source_entity_id`, `status`, `payload`, `attempts`, `next_attempt_at`, `started_at`, `completed_at`, `failed_at`, `last_error`, `created_at` |
+| `automation_execution_logs` | `id`, `job_id`, `action_id`, `status`, `message`, `metadata`, `created_at` |
 | `webhook_deliveries` | `id`, `webhook_id`, `event_type`, `payload`, `status`, `response_code`, `response_body`, `attempt_count`, `next_retry_at`, `created_at` |
 
 ### Integration And View Columns
