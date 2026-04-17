@@ -26,6 +26,8 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 14. Public project visibility must be modeled from the start, with anonymous read disabled unless a workspace/project explicitly allows it.
 15. Attachment storage is configurable per workspace.
 16. Automation uses hybrid execution: local state changes can run synchronously, while slow or external actions run through queued jobs.
+17. AI agents are optional assignable actors. Trasck must remain fully usable as a normal Jira/Rally-style project management tool when agent features are disabled.
+18. AI agent integration must be provider-neutral. Codex, Claude Code, local command runners, hosted services, webhook-based workers, and future agents should all plug into the same agent provider contract.
 
 ## Full Work Hierarchy
 
@@ -109,6 +111,7 @@ com.strangequark.trasck.activity
 com.strangequark.trasck.audit
 com.strangequark.trasck.notification
 com.strangequark.trasck.automation
+com.strangequark.trasck.agent
 com.strangequark.trasck.integration
 com.strangequark.trasck.reporting
 com.strangequark.trasck.search
@@ -129,7 +132,7 @@ Recommended conventions:
 - Soft delete: use `deleted_at` for user-owned data that should be recoverable or auditable.
 - Optimistic locking: use a numeric `version` column on heavily edited entities such as work items, projects, workflows, boards, and custom fields.
 - Human keys: use project key plus sequence number for work items, for example `TRASCK-123`.
-- JSON: prefer `jsonb` for configurable payloads, rich text document bodies, custom field values, external integration payloads, automation configs, and dashboard/view configs.
+- JSON: prefer `jsonb` for configurable payloads, rich text document bodies, custom field values, external integration payloads, automation configs, agent provider configs, execution payloads, and dashboard/view configs.
 - Money/billing concepts are intentionally excluded from the first backend domain unless billing becomes a product requirement.
 
 ## ERD: Identity, Access, And Containers
@@ -189,6 +192,7 @@ erDiagram
         string username UK
         string display_name
         string avatar_url
+        string account_type
         string password_hash
         boolean email_verified
         boolean active
@@ -869,6 +873,146 @@ erDiagram
     }
 ```
 
+## ERD: Provider-Neutral AI Agent Integration
+
+AI agents are modeled as optional assignable actors that execute work items through provider adapters. This keeps the normal project management model intact while allowing work to be dispatched to Codex, Claude Code, local runners, webhook workers, hosted coding agents, or future providers.
+
+Agents should reuse global `users` records with `account_type = AGENT` so assignments, permissions, activity events, audit logs, notifications, and reporting continue to work through existing concepts. Agent-specific execution state belongs in dedicated agent tables.
+
+```mermaid
+erDiagram
+    WORKSPACES ||--o{ AGENT_PROVIDERS : configures
+    AGENT_PROVIDERS ||--o{ AGENT_PROVIDER_CREDENTIALS : secures
+    AGENT_PROVIDERS ||--o{ AGENT_PROFILES : powers
+    USERS ||--o| AGENT_PROFILES : represents
+    WORKSPACES ||--o{ REPOSITORY_CONNECTIONS : connects
+    PROJECTS ||--o{ REPOSITORY_CONNECTIONS : scopes
+    WORK_ITEMS ||--o{ AGENT_TASKS : delegates
+    AGENT_PROFILES ||--o{ AGENT_TASKS : executes
+    AGENT_PROVIDERS ||--o{ AGENT_TASKS : dispatches
+    USERS ||--o{ AGENT_TASKS : requested
+    AGENT_TASKS ||--o{ AGENT_TASK_EVENTS : records
+    AGENT_TASKS ||--o{ AGENT_MESSAGES : discusses
+    AGENT_TASKS ||--o{ AGENT_ARTIFACTS : produces
+    AGENT_TASKS ||--o{ AGENT_TASK_REPOSITORIES : uses
+    REPOSITORY_CONNECTIONS ||--o{ AGENT_TASK_REPOSITORIES : attached_to
+
+    AGENT_PROVIDERS {
+        uuid id PK
+        uuid workspace_id FK
+        string provider_key
+        string provider_type
+        string display_name
+        string dispatch_mode
+        string callback_url
+        jsonb capability_schema
+        jsonb config
+        boolean enabled
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    AGENT_PROVIDER_CREDENTIALS {
+        uuid id PK
+        uuid provider_id FK
+        string credential_type
+        string secret_ref
+        jsonb metadata
+        boolean active
+        timestamptz created_at
+        timestamptz rotated_at
+    }
+
+    AGENT_PROFILES {
+        uuid id PK
+        uuid workspace_id FK
+        uuid user_id FK
+        uuid provider_id FK
+        string display_name
+        string status
+        integer max_concurrent_tasks
+        jsonb capabilities
+        jsonb config
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    REPOSITORY_CONNECTIONS {
+        uuid id PK
+        uuid workspace_id FK
+        uuid project_id FK
+        string provider
+        string name
+        string repository_url
+        string default_branch
+        jsonb config
+        boolean active
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    AGENT_TASKS {
+        uuid id PK
+        uuid workspace_id FK
+        uuid work_item_id FK
+        uuid agent_profile_id FK
+        uuid provider_id FK
+        uuid requested_by_id FK
+        string status
+        string dispatch_mode
+        string external_task_id
+        jsonb context_snapshot
+        jsonb request_payload
+        jsonb result_payload
+        timestamptz queued_at
+        timestamptz started_at
+        timestamptz completed_at
+        timestamptz failed_at
+        timestamptz canceled_at
+    }
+
+    AGENT_TASK_EVENTS {
+        uuid id PK
+        uuid agent_task_id FK
+        string event_type
+        string severity
+        text message
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    AGENT_MESSAGES {
+        uuid id PK
+        uuid agent_task_id FK
+        uuid sender_user_id FK
+        string sender_type
+        text body_markdown
+        jsonb body_document
+        timestamptz created_at
+    }
+
+    AGENT_ARTIFACTS {
+        uuid id PK
+        uuid agent_task_id FK
+        string artifact_type
+        string name
+        string external_url
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    AGENT_TASK_REPOSITORIES {
+        uuid id PK
+        uuid agent_task_id FK
+        uuid repository_connection_id FK
+        string base_branch
+        string working_branch
+        string pull_request_url
+        jsonb metadata
+        timestamptz created_at
+    }
+```
+
 ## Table Catalog
 
 ### Identity And Access
@@ -877,7 +1021,7 @@ erDiagram
 |---|---|
 | `organizations` | Top-level customer/account boundary. |
 | `workspaces` | Configuration boundary inside an organization. |
-| `users` | Global user identity. |
+| `users` | Global human, agent, or service identity. |
 | `user_auth_identities` | Password/OAuth identity mappings for global users. |
 | `workspace_memberships` | User membership and role inside a workspace. |
 | `project_memberships` | Optional project-specific access override. |
@@ -991,6 +1135,20 @@ erDiagram
 | `webhooks` | Outbound webhook definitions. |
 | `webhook_deliveries` | Webhook delivery attempts. |
 
+### AI Agents
+
+| Table | Purpose |
+|---|---|
+| `agent_providers` | Workspace-level provider adapter configuration for Codex, Claude Code, local runners, webhook workers, custom agents, and future providers. |
+| `agent_provider_credentials` | Credential references or encrypted provider secrets for dispatching to external or managed agents. |
+| `agent_profiles` | Assignable agent identities backed by `users` rows. |
+| `repository_connections` | Workspace/project repository connections used by coding agents. |
+| `agent_tasks` | Execution records for work delegated to agents. |
+| `agent_task_events` | Agent execution timeline, progress, status, and diagnostic events. |
+| `agent_messages` | Conversation between humans, Trasck, and agents for a delegated task. |
+| `agent_artifacts` | Outputs such as pull requests, branches, patches, logs, screenshots, plans, or generated files. |
+| `agent_task_repositories` | Repositories, branches, and pull requests attached to a specific agent task. |
+
 ### Integrations, Search, And Views
 
 | Table | Purpose |
@@ -1016,6 +1174,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 
 | Table | Important Columns |
 |---|---|
+| `users` | `id`, `email`, `username`, `display_name`, `account_type`, `avatar_url`, `password_hash`, `email_verified`, `active`, `last_login_at`, `created_at`, `updated_at`, `deleted_at` |
 | `user_auth_identities` | `id`, `user_id`, `provider`, `provider_subject`, `provider_username`, `provider_email`, `metadata`, `created_at`, `updated_at` |
 | `roles` | `id`, `workspace_id`, `name`, `key`, `scope`, `description`, `system_role`, `created_at`, `updated_at` |
 | `permissions` | `id`, `key`, `name`, `description`, `category` |
@@ -1026,7 +1185,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 
 | Table | Important Columns |
 |---|---|
-| `project_settings` | `project_id`, `default_workflow_id`, `default_board_id`, `estimation_unit`, `allow_cross_project_parents`, `config`, `updated_at` |
+| `project_settings` | `project_id`, `default_workflow_id`, `default_board_id`, `estimation_unit`, `cross_project_linking_policy`, `config`, `updated_at` |
 | `program_projects` | `program_id`, `project_id`, `position`, `created_at` |
 | `team_memberships` | `id`, `team_id`, `user_id`, `role`, `capacity_percent`, `joined_at`, `left_at` |
 | `project_teams` | `project_id`, `team_id`, `role`, `created_at` |
@@ -1093,6 +1252,20 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `automation_execution_logs` | `id`, `job_id`, `action_id`, `status`, `message`, `metadata`, `created_at` |
 | `webhook_deliveries` | `id`, `webhook_id`, `event_type`, `payload`, `status`, `response_code`, `response_body`, `attempt_count`, `next_retry_at`, `created_at` |
 
+### AI Agent Columns
+
+| Table | Important Columns |
+|---|---|
+| `agent_providers` | `id`, `workspace_id`, `provider_key`, `provider_type`, `display_name`, `dispatch_mode`, `callback_url`, `capability_schema`, `config`, `enabled`, `created_at`, `updated_at` |
+| `agent_provider_credentials` | `id`, `provider_id`, `credential_type`, `secret_ref`, `metadata`, `active`, `created_at`, `rotated_at` |
+| `agent_profiles` | `id`, `workspace_id`, `user_id`, `provider_id`, `display_name`, `status`, `max_concurrent_tasks`, `capabilities`, `config`, `created_at`, `updated_at` |
+| `repository_connections` | `id`, `workspace_id`, `project_id`, `provider`, `name`, `repository_url`, `default_branch`, `config`, `active`, `created_at`, `updated_at` |
+| `agent_tasks` | `id`, `workspace_id`, `work_item_id`, `agent_profile_id`, `provider_id`, `requested_by_id`, `status`, `dispatch_mode`, `external_task_id`, `context_snapshot`, `request_payload`, `result_payload`, `queued_at`, `started_at`, `completed_at`, `failed_at`, `canceled_at` |
+| `agent_task_events` | `id`, `agent_task_id`, `event_type`, `severity`, `message`, `metadata`, `created_at` |
+| `agent_messages` | `id`, `agent_task_id`, `sender_user_id`, `sender_type`, `body_markdown`, `body_document`, `created_at` |
+| `agent_artifacts` | `id`, `agent_task_id`, `artifact_type`, `name`, `external_url`, `metadata`, `created_at` |
+| `agent_task_repositories` | `id`, `agent_task_id`, `repository_connection_id`, `base_branch`, `working_branch`, `pull_request_url`, `metadata`, `created_at` |
+
 ### Integration And View Columns
 
 | Table | Important Columns |
@@ -1112,7 +1285,7 @@ Work item rules:
 - A work item must belong to exactly one workspace and one project.
 - `work_items.workspace_id` must match the workspace of its project.
 - `work_items.parent_id`, when present, must point to a work item in the same workspace.
-- Cross-project parentage should be configurable. Default should allow it only when both projects are in the same workspace and the user has access to both projects.
+- Cross-project parentage is not allowed; use `work_item_links` for cross-project relationships.
 - Parent-child type pairs must exist in `work_item_type_rules`.
 - The work item's type must be enabled for its project in `project_work_item_types`, when project-specific type restrictions are configured.
 - A work item may have one structural parent but many links.
@@ -1142,6 +1315,21 @@ Customization rules:
 - Custom field values should validate against the field's type and context.
 - Screen configurations must support both system fields and custom fields.
 
+AI agent rules:
+
+- Agents are optional. Workspaces that do not configure agent providers should behave like a normal project management tool.
+- An assignable agent must have a global `users` row with `account_type = AGENT` and exactly one active `agent_profiles` row per workspace/provider identity.
+- Agent users must use the same workspace/project membership and role checks as human users.
+- Agent provider adapters must be selected by `agent_providers.provider_type` and provider-specific `jsonb` config, not hardcoded into work item or workflow tables.
+- Provider credentials must be stored as encrypted values or external secret references; secrets must not be copied into work item descriptions, comments, activity events, or agent context snapshots.
+- Assigning a work item to an agent creates an `agent_tasks` row. Reassigning the work item to a human does not delete the agent task history.
+- Agent task context should be a point-in-time snapshot of the work item, linked requirements, attachments, repository references, and safe metadata needed for execution.
+- Agent task callbacks must be authenticated, idempotent, and scoped to the workspace/provider/task they update.
+- Agent task status changes must generate activity events. Provider setup, credential changes, permission changes, and privileged agent actions must generate audit log entries.
+- Agents should request human review before closing work by default. Automatic transition on completion may be configured per workflow or automation rule.
+- Agent concurrency limits must be enforced per agent profile and optionally per provider.
+- Canceled or failed agent tasks should remain visible and auditable.
+
 ## Recommended Indexes
 
 Core indexes:
@@ -1151,6 +1339,7 @@ organizations(slug)
 workspaces(organization_id, key)
 users(email)
 users(username)
+users(account_type)
 workspace_memberships(workspace_id, user_id)
 project_memberships(project_id, user_id)
 projects(workspace_id, key)
@@ -1179,6 +1368,13 @@ work_logs(work_item_id, work_date)
 work_logs(user_id, work_date)
 activity_events(workspace_id, created_at)
 audit_log_entries(workspace_id, created_at)
+agent_providers(workspace_id, provider_key)
+agent_profiles(workspace_id, user_id)
+agent_tasks(workspace_id, status, queued_at)
+agent_tasks(work_item_id, queued_at)
+agent_task_events(agent_task_id, created_at)
+agent_artifacts(agent_task_id, artifact_type)
+repository_connections(workspace_id, project_id)
 ```
 
 Search indexes:
@@ -1205,6 +1401,10 @@ Use versioned REST APIs initially:
 /api/v1/releases
 /api/v1/custom-fields
 /api/v1/automation-rules
+/api/v1/agents
+/api/v1/agent-providers
+/api/v1/agent-tasks
+/api/v1/repository-connections
 /api/v1/reports
 ```
 
@@ -1216,7 +1416,7 @@ Guidelines:
 - Use consistent filtering and sorting conventions.
 - Return work item keys and IDs in API responses.
 - Prefer explicit command endpoints for workflow transitions, moving/ranking work, and bulk changes.
-- Use idempotency keys for imports, webhooks, and bulk operations where appropriate.
+- Use idempotency keys for imports, webhooks, agent callbacks, and bulk operations where appropriate.
 
 Example work item endpoints:
 
@@ -1228,7 +1428,27 @@ POST   /api/v1/work-items/{id}/transition
 POST   /api/v1/work-items/{id}/links
 POST   /api/v1/work-items/{id}/comments
 POST   /api/v1/work-items/{id}/attachments
+POST   /api/v1/work-items/{id}/assign-agent
 POST   /api/v1/work-items/bulk
+```
+
+Example agent endpoints:
+
+```text
+GET    /api/v1/agent-providers
+POST   /api/v1/agent-providers
+PATCH  /api/v1/agent-providers/{id}
+POST   /api/v1/agent-providers/{id}/credentials
+GET    /api/v1/agents
+POST   /api/v1/agents
+PATCH  /api/v1/agents/{id}
+GET    /api/v1/agent-tasks/{id}
+POST   /api/v1/agent-tasks/{id}/cancel
+POST   /api/v1/agent-tasks/{id}/retry
+POST   /api/v1/agent-tasks/{id}/events
+POST   /api/v1/agent-tasks/{id}/messages
+POST   /api/v1/agent-tasks/{id}/artifacts
+POST   /api/v1/agent-callbacks/{providerKey}
 ```
 
 ## Event And Audit Model
@@ -1246,6 +1466,12 @@ WorkflowChanged
 MembershipChanged
 AutomationRuleTriggered
 IntegrationWebhookReceived
+AgentTaskCreated
+AgentTaskDispatched
+AgentTaskStatusChanged
+AgentTaskMessageCreated
+AgentTaskArtifactCreated
+AgentProviderConfigured
 ```
 
 Activity events are for product UI. Audit log entries are for security/compliance.
@@ -1256,6 +1482,8 @@ Examples:
 - Changing a work item title creates an activity event.
 - Changing a role permission creates an audit log entry.
 - Deleting a project creates both an activity event and an audit log entry.
+- Assigning work to an agent creates activity events on the work item and an auditable agent task record.
+- Rotating an agent provider credential creates an audit log entry.
 
 ## Reporting Strategy
 
@@ -1293,6 +1521,12 @@ Example triggers:
 - Work item updated.
 - Status changed.
 - Comment added.
+- Work item assigned to agent.
+- Agent task queued.
+- Agent task completed.
+- Agent task failed.
+- Agent requested human input.
+- Agent artifact created.
 - Due date approaching.
 - Sprint started.
 - Release completed.
@@ -1303,6 +1537,9 @@ Example conditions:
 - Type is Bug.
 - Priority is Critical.
 - Assignee is empty.
+- Assignee account type is Agent.
+- Agent provider supports capability X.
+- Agent task status is X.
 - Project equals X.
 - Field changed from A to B.
 - Linked item is blocked.
@@ -1316,6 +1553,11 @@ Example actions:
 - Send notification.
 - Create linked work item.
 - Call webhook.
+- Assign agent.
+- Create agent task.
+- Cancel agent task.
+- Request human review.
+- Transition work item when agent completes.
 
 ## Import And Integration Strategy
 
@@ -1324,6 +1566,8 @@ Expected integrations:
 - GitHub issues and pull requests.
 - GitLab issues and merge requests.
 - Slack notifications.
+- Repository connections for agent execution context.
+- Provider-neutral AI agent adapters.
 - Jira import.
 - Rally import.
 - CSV import/export.
@@ -1336,6 +1580,76 @@ Integration model:
 - `external_references` maps Trasck entities to external objects.
 - `import_jobs` and `import_job_records` provide observable import progress and error reporting.
 - Imported items should retain external IDs and URLs.
+
+## AI Agent Integration Strategy
+
+Trasck should support AI-assisted execution without becoming dependent on any one agent product. The core domain should know about provider adapters, capabilities, dispatch modes, task state, callbacks, artifacts, and permissions. It should not know Codex-specific or Claude-specific request formats outside adapter implementations.
+
+Provider model:
+
+- `agent_providers.provider_type` selects an adapter such as `codex`, `claude_code`, `webhook`, `local_runner`, `hosted_service`, or `custom`.
+- `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff.
+- Provider-specific options belong in `agent_providers.config`; shared capability declarations belong in `capability_schema`.
+- Secrets must be referenced through `agent_provider_credentials.secret_ref` or encrypted storage, not embedded directly in provider configs or agent task payloads.
+
+Agent model:
+
+- Each assignable AI agent is represented by a normal `users` row with `account_type = AGENT`.
+- `agent_profiles` stores provider-specific capabilities, limits, and runtime options for that assignable agent.
+- Agent users participate in workspace/project membership and role checks like human users.
+- Agent assignment should use the existing work item assignee model so boards, filters, reports, and notifications stay consistent.
+
+Execution model:
+
+- Assigning a work item to an agent creates an `agent_tasks` row.
+- `agent_tasks.context_snapshot` records the safe, point-in-time context sent to the agent.
+- `agent_task_events` record progress, status changes, errors, retries, and provider diagnostics.
+- `agent_messages` support clarifying questions and human replies.
+- `agent_artifacts` capture outputs such as branches, pull requests, patches, logs, generated docs, screenshots, or external task URLs.
+- `agent_task_repositories` attaches one or more repositories, base branches, working branches, and pull request URLs to the task.
+
+Provider contract:
+
+```text
+AgentProviderAdapter
+  validateConfiguration(config)
+  describeCapabilities()
+  dispatch(agentTask)
+  cancel(agentTask)
+  retry(agentTask)
+  handleCallback(callbackPayload)
+```
+
+Provider adapters should translate between Trasck's stable internal model and provider-specific APIs. New agents should be addable by implementing the adapter contract and registering a `provider_type`, without changing work item, workflow, or reporting logic.
+
+Expected provider categories:
+
+- Hosted coding agents with API dispatch.
+- CLI-based local or self-hosted agents.
+- Webhook-based workers that receive signed payloads and call back to Trasck.
+- Polling agents that fetch assigned work from Trasck.
+- Manual handoff agents where Trasck records task state and artifacts but execution happens outside the system.
+
+Agent permission keys should include:
+
+```text
+agent.provider.manage
+agent.provider.credential.manage
+agent.profile.manage
+agent.assign
+agent.task.view
+agent.task.cancel
+agent.task.retry
+agent.task.view_logs
+agent.task.accept_result
+repository_connection.manage
+```
+
+Human review:
+
+- Agent completion should normally move a task to a review state or create a review request rather than closing the work item.
+- Workflows and automation may opt into automatic transitions for trusted agents or low-risk work.
+- Humans must be able to cancel, retry, reassign, or request changes on an agent task.
 
 ## Initial Seed Data
 
@@ -1417,6 +1731,7 @@ Default roles:
 Workspace Owner
 Workspace Admin
 Project Admin
+Agent Manager
 Member
 Viewer
 ```
@@ -1438,7 +1753,8 @@ Recommended order:
 9. Implement custom fields, screens, screen assignments, and field configurations.
 10. Implement reporting history and snapshots.
 11. Implement notifications, automation, webhooks, and integrations.
-12. Implement saved filters, dashboards, views, favorites, and recent items.
+12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events.
+13. Implement saved filters, dashboards, views, favorites, and recent items.
 
 ## Testing Requirements
 
@@ -1452,6 +1768,9 @@ Required backend tests:
 - Migration tests when schema grows.
 - Import job tests for idempotency and partial failure handling.
 - Reporting calculation tests for cycle time, velocity, and cumulative flow.
+- Agent provider adapter contract tests with a fake provider.
+- Agent task lifecycle tests for dispatch, callback, progress, completion, failure, cancellation, retry, and artifact creation.
+- Agent permission tests proving agents cannot exceed their workspace/project roles.
 
 High-risk cases to test early:
 
@@ -1463,31 +1782,9 @@ High-risk cases to test early:
 - Preserving audit logs on sensitive changes.
 - Enforcing workspace/project access.
 - Keeping project sequence numbers unique under concurrent creation.
-
-## Open Design Questions
-
-These should be decided before or during implementation:
-
-1. Should user identity be global across all organizations, or should each organization own isolated user accounts?
-    - Answer: User identity should be global across all organizations
-2. Should cross-project work item parentage be allowed by default, or only links across projects?
-    - Answer: Only allow links across projects
-3. Should project keys be unique globally, per workspace, or per organization?
-    - Answer: Per workspace
-4. Should descriptions and comments be stored as Markdown, rich-text JSON, or both?
-    - Answer: Allow for both
-5. Should custom field values be fully `jsonb`, typed side tables, or hybrid?
-    - Answer: JSON
-6. Should reporting snapshots be generated synchronously on change or asynchronously by scheduled jobs?
-    - Answer: Synchronously on change
-7. Should initial authentication be username/password, OAuth, or both?
-    - Answer: Allow for both
-8. Should Trasck support public/open-source projects with anonymous read access?
-    - Answer: Yes
-9. Should file attachment storage start local, S3-compatible, or configurable?
-    - Answer: Configurable, we should allow users to use whatever file attachment storage they want
-10. Should automation execution be synchronous, queued, or both depending on action type?
-    - Answer: Hybrid depending on the action type
+- Preventing unauthenticated or replayed agent callbacks.
+- Preventing secrets from leaking into agent task context snapshots, comments, or activity events.
+- Keeping agent assignment and task history intact when work is reassigned to a human.
 
 ## Reference Summary
 
@@ -1496,6 +1793,7 @@ This spec intentionally blends proven Jira-style and Rally-style concepts:
 - Jira-like configurable work item types, workflows, boards, custom fields, screens, and links.
 - Rally-like workspace/project separation, portfolio hierarchy, teams, iterations, and roadmap planning.
 - Trasck-specific decision: use one universal `work_items` table with data-driven hierarchy and rules.
+- Provider-neutral AI agent integration: agents are optional assignable users backed by provider adapters, execution records, callbacks, messages, and artifacts.
 
 The most important thing to preserve while implementing is flexibility:
 

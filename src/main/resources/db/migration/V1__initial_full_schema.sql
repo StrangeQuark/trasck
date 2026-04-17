@@ -6,13 +6,15 @@ create table users (
     username varchar(80) not null,
     display_name varchar(160) not null,
     avatar_url text,
+    account_type varchar(40) not null default 'human',
     password_hash text,
     email_verified boolean not null default false,
     active boolean not null default true,
     last_login_at timestamptz,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    deleted_at timestamptz
+    deleted_at timestamptz,
+    constraint ck_users_account_type check (account_type in ('human', 'agent', 'service'))
 );
 
 create unique index ux_users_email_lower on users (lower(email));
@@ -508,9 +510,12 @@ create table project_settings (
     default_workflow_id uuid references workflows(id) on delete set null,
     default_board_id uuid references boards(id) on delete set null,
     estimation_unit varchar(40) not null default 'points',
-    allow_cross_project_parents boolean not null default false,
+    cross_project_linking_policy varchar(40) not null default 'links_only',
     config jsonb not null default '{}'::jsonb,
-    updated_at timestamptz not null default now()
+    updated_at timestamptz not null default now(),
+    constraint ck_project_settings_cross_project_linking_policy check (
+        cross_project_linking_policy in ('links_only', 'disabled')
+    )
 );
 
 create table custom_fields (
@@ -871,6 +876,139 @@ create table webhook_deliveries (
     constraint ck_webhook_deliveries_status check (status in ('queued', 'delivered', 'failed', 'cancelled'))
 );
 
+create table agent_providers (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    provider_key varchar(80) not null,
+    provider_type varchar(80) not null,
+    display_name varchar(160) not null,
+    dispatch_mode varchar(40) not null,
+    callback_url text,
+    capability_schema jsonb not null default '{}'::jsonb,
+    config jsonb not null default '{}'::jsonb,
+    enabled boolean not null default true,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_agent_providers_dispatch_mode check (
+        dispatch_mode in ('webhook_push', 'polling', 'managed', 'manual')
+    ),
+    unique (workspace_id, provider_key)
+);
+
+create table agent_provider_credentials (
+    id uuid primary key default gen_random_uuid(),
+    provider_id uuid not null references agent_providers(id) on delete cascade,
+    credential_type varchar(80) not null,
+    secret_ref text not null,
+    metadata jsonb not null default '{}'::jsonb,
+    active boolean not null default true,
+    created_at timestamptz not null default now(),
+    rotated_at timestamptz
+);
+
+create table agent_profiles (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    user_id uuid not null references users(id) on delete cascade,
+    provider_id uuid not null references agent_providers(id) on delete cascade,
+    display_name varchar(160) not null,
+    status varchar(40) not null default 'active',
+    max_concurrent_tasks integer not null default 1,
+    capabilities jsonb not null default '{}'::jsonb,
+    config jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_agent_profiles_status check (status in ('active', 'paused', 'disabled')),
+    constraint ck_agent_profiles_max_concurrent_tasks check (max_concurrent_tasks > 0),
+    unique (workspace_id, user_id),
+    unique (provider_id, user_id)
+);
+
+create table repository_connections (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    project_id uuid references projects(id) on delete cascade,
+    provider varchar(80) not null,
+    name varchar(160) not null,
+    repository_url text not null,
+    default_branch varchar(255) not null default 'main',
+    config jsonb not null default '{}'::jsonb,
+    active boolean not null default true,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (workspace_id, project_id, name)
+);
+
+create table agent_tasks (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    work_item_id uuid not null references work_items(id) on delete cascade,
+    agent_profile_id uuid not null references agent_profiles(id) on delete restrict,
+    provider_id uuid not null references agent_providers(id) on delete restrict,
+    requested_by_id uuid references users(id) on delete set null,
+    status varchar(40) not null default 'queued',
+    dispatch_mode varchar(40) not null,
+    external_task_id varchar(255),
+    context_snapshot jsonb not null default '{}'::jsonb,
+    request_payload jsonb not null default '{}'::jsonb,
+    result_payload jsonb,
+    queued_at timestamptz not null default now(),
+    started_at timestamptz,
+    completed_at timestamptz,
+    failed_at timestamptz,
+    canceled_at timestamptz,
+    constraint ck_agent_tasks_status check (
+        status in ('queued', 'running', 'waiting_for_input', 'review_requested', 'completed', 'failed', 'canceled')
+    ),
+    constraint ck_agent_tasks_dispatch_mode check (
+        dispatch_mode in ('webhook_push', 'polling', 'managed', 'manual')
+    )
+);
+
+create table agent_task_events (
+    id uuid primary key default gen_random_uuid(),
+    agent_task_id uuid not null references agent_tasks(id) on delete cascade,
+    event_type varchar(120) not null,
+    severity varchar(40) not null default 'info',
+    message text,
+    metadata jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    constraint ck_agent_task_events_severity check (severity in ('debug', 'info', 'warning', 'error'))
+);
+
+create table agent_messages (
+    id uuid primary key default gen_random_uuid(),
+    agent_task_id uuid not null references agent_tasks(id) on delete cascade,
+    sender_user_id uuid references users(id) on delete set null,
+    sender_type varchar(40) not null,
+    body_markdown text,
+    body_document jsonb,
+    created_at timestamptz not null default now(),
+    constraint ck_agent_messages_sender_type check (sender_type in ('human', 'agent', 'system'))
+);
+
+create table agent_artifacts (
+    id uuid primary key default gen_random_uuid(),
+    agent_task_id uuid not null references agent_tasks(id) on delete cascade,
+    artifact_type varchar(80) not null,
+    name varchar(255) not null,
+    external_url text,
+    metadata jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now()
+);
+
+create table agent_task_repositories (
+    id uuid primary key default gen_random_uuid(),
+    agent_task_id uuid not null references agent_tasks(id) on delete cascade,
+    repository_connection_id uuid not null references repository_connections(id) on delete restrict,
+    base_branch varchar(255),
+    working_branch varchar(255),
+    pull_request_url text,
+    metadata jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    unique (agent_task_id, repository_connection_id)
+);
+
 create table external_integrations (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
@@ -1016,6 +1154,16 @@ insert into permissions (key, name, description, category) values
     ('workflow.admin', 'Administer workflows', 'Manage workflows, statuses, and transitions.', 'workflow'),
     ('board.admin', 'Administer boards', 'Manage board configuration.', 'planning'),
     ('automation.admin', 'Administer automation', 'Manage automation rules and webhooks.', 'automation'),
+    ('agent.provider.manage', 'Manage agent providers', 'Create and update AI agent provider configuration.', 'agent'),
+    ('agent.provider.credential.manage', 'Manage agent provider credentials', 'Create, rotate, and disable AI agent provider credentials.', 'agent'),
+    ('agent.profile.manage', 'Manage agent profiles', 'Create and update assignable AI agent profiles.', 'agent'),
+    ('agent.assign', 'Assign agents', 'Assign work items to AI agents.', 'agent'),
+    ('agent.task.view', 'View agent tasks', 'View AI agent task details.', 'agent'),
+    ('agent.task.cancel', 'Cancel agent tasks', 'Cancel running or queued AI agent tasks.', 'agent'),
+    ('agent.task.retry', 'Retry agent tasks', 'Retry failed or canceled AI agent tasks.', 'agent'),
+    ('agent.task.view_logs', 'View agent task logs', 'View AI agent task events and diagnostic details.', 'agent'),
+    ('agent.task.accept_result', 'Accept agent task results', 'Accept AI agent results and continue workflow.', 'agent'),
+    ('repository_connection.manage', 'Manage repository connections', 'Create and update source repository connections.', 'agent'),
     ('report.read', 'Read reports', 'View reports and dashboards.', 'reporting')
 on conflict (key) do nothing;
 
@@ -1127,7 +1275,11 @@ create trigger trg_work_logs_updated_at before update on work_logs for each row 
 create trigger trg_attachment_storage_configs_updated_at before update on attachment_storage_configs for each row execute function set_updated_at();
 create trigger trg_external_integrations_updated_at before update on external_integrations for each row execute function set_updated_at();
 create trigger trg_automation_rules_updated_at before update on automation_rules for each row execute function set_updated_at();
+create trigger trg_agent_providers_updated_at before update on agent_providers for each row execute function set_updated_at();
+create trigger trg_agent_profiles_updated_at before update on agent_profiles for each row execute function set_updated_at();
+create trigger trg_repository_connections_updated_at before update on repository_connections for each row execute function set_updated_at();
 
+create index ix_users_account_type on users(account_type);
 create index ix_workspaces_organization_key on workspaces(organization_id, key);
 create index ix_workspace_memberships_workspace_user on workspace_memberships(workspace_id, user_id);
 create index ix_project_memberships_project_user on project_memberships(project_id, user_id);
@@ -1182,6 +1334,14 @@ create index ix_work_item_estimate_history_work_item_changed_at on work_item_est
 create index ix_notifications_user_created_at on notifications(user_id, created_at);
 create index ix_automation_execution_jobs_status_next on automation_execution_jobs(status, next_attempt_at);
 create index ix_webhook_deliveries_status_next on webhook_deliveries(status, next_retry_at);
+create index ix_agent_providers_workspace_key on agent_providers(workspace_id, provider_key);
+create index ix_agent_profiles_workspace_user on agent_profiles(workspace_id, user_id);
+create index ix_agent_tasks_workspace_status_queued_at on agent_tasks(workspace_id, status, queued_at);
+create index ix_agent_tasks_work_item_queued_at on agent_tasks(work_item_id, queued_at);
+create unique index ux_agent_tasks_provider_external on agent_tasks(provider_id, external_task_id) where external_task_id is not null;
+create index ix_agent_task_events_task_created_at on agent_task_events(agent_task_id, created_at);
+create index ix_agent_artifacts_task_type on agent_artifacts(agent_task_id, artifact_type);
+create index ix_repository_connections_workspace_project on repository_connections(workspace_id, project_id);
 create index ix_external_references_entity on external_references(entity_type, entity_id);
 create index ix_import_job_records_job_status on import_job_records(import_job_id, status);
 create index ix_saved_filters_workspace_owner on saved_filters(workspace_id, owner_id);
