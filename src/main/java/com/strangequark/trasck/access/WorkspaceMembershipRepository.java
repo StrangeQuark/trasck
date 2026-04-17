@@ -1,0 +1,7 @@
+package com.strangequark.trasck.access;
+
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface WorkspaceMembershipRepository extends JpaRepository<WorkspaceMembership, UUID> {
+}
