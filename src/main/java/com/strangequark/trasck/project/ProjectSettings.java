@@ -31,8 +31,8 @@ public class ProjectSettings {
     @Column(name = "estimation_unit")
     private String estimationUnit;
 
-    @Column(name = "allow_cross_project_parents")
-    private Boolean allowCrossProjectParents;
+    @Column(name = "cross_project_linking_policy")
+    private String crossProjectLinkingPolicy;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "config")
@@ -74,12 +74,12 @@ public class ProjectSettings {
         this.estimationUnit = estimationUnit;
     }
 
-    public Boolean getAllowCrossProjectParents() {
-        return allowCrossProjectParents;
+    public String getCrossProjectLinkingPolicy() {
+        return crossProjectLinkingPolicy;
     }
 
-    public void setAllowCrossProjectParents(Boolean allowCrossProjectParents) {
-        this.allowCrossProjectParents = allowCrossProjectParents;
+    public void setCrossProjectLinkingPolicy(String crossProjectLinkingPolicy) {
+        this.crossProjectLinkingPolicy = crossProjectLinkingPolicy;
     }
 
     public JsonNode getConfig() {

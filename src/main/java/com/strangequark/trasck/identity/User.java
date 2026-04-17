@@ -34,6 +34,9 @@ public class User {
     @Column(name = "avatar_url")
     private String avatarUrl;
 
+    @Column(name = "account_type")
+    private String accountType;
+
     @Column(name = "password_hash")
     private String passwordHash;
 
@@ -94,6 +97,14 @@ public class User {
 
     public void setAvatarUrl(String avatarUrl) {
         this.avatarUrl = avatarUrl;
+    }
+
+    public String getAccountType() {
+        return accountType;
+    }
+
+    public void setAccountType(String accountType) {
+        this.accountType = accountType;
     }
 
     public String getPasswordHash() {

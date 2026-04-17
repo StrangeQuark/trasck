@@ -9,6 +9,24 @@ import com.strangequark.trasck.activity.Comment;
 import com.strangequark.trasck.activity.CommentRepository;
 import com.strangequark.trasck.activity.WorkLog;
 import com.strangequark.trasck.activity.WorkLogRepository;
+import com.strangequark.trasck.agent.AgentArtifact;
+import com.strangequark.trasck.agent.AgentArtifactRepository;
+import com.strangequark.trasck.agent.AgentMessage;
+import com.strangequark.trasck.agent.AgentMessageRepository;
+import com.strangequark.trasck.agent.AgentProfile;
+import com.strangequark.trasck.agent.AgentProfileRepository;
+import com.strangequark.trasck.agent.AgentProvider;
+import com.strangequark.trasck.agent.AgentProviderCredential;
+import com.strangequark.trasck.agent.AgentProviderCredentialRepository;
+import com.strangequark.trasck.agent.AgentProviderRepository;
+import com.strangequark.trasck.agent.AgentTask;
+import com.strangequark.trasck.agent.AgentTaskEvent;
+import com.strangequark.trasck.agent.AgentTaskEventRepository;
+import com.strangequark.trasck.agent.AgentTaskRepository;
+import com.strangequark.trasck.agent.AgentTaskRepositoryLink;
+import com.strangequark.trasck.agent.AgentTaskRepositoryLinkRepository;
+import com.strangequark.trasck.agent.RepositoryConnection;
+import com.strangequark.trasck.agent.RepositoryConnectionRepository;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
 import com.strangequark.trasck.organization.Organization;
@@ -92,6 +110,33 @@ class JpaPersistenceTest {
     @Autowired
     private WorkLogRepository workLogRepository;
 
+    @Autowired
+    private AgentProviderRepository agentProviderRepository;
+
+    @Autowired
+    private AgentProviderCredentialRepository agentProviderCredentialRepository;
+
+    @Autowired
+    private AgentProfileRepository agentProfileRepository;
+
+    @Autowired
+    private RepositoryConnectionRepository repositoryConnectionRepository;
+
+    @Autowired
+    private AgentTaskRepository agentTaskRepository;
+
+    @Autowired
+    private AgentTaskEventRepository agentTaskEventRepository;
+
+    @Autowired
+    private AgentMessageRepository agentMessageRepository;
+
+    @Autowired
+    private AgentArtifactRepository agentArtifactRepository;
+
+    @Autowired
+    private AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -110,10 +155,10 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(88);
-        assertThat(permissionCount).isEqualTo(16);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(87);
-        assertThat(repositories).hasSizeGreaterThanOrEqualTo(87);
+        assertThat(tableCount).isEqualTo(97);
+        assertThat(permissionCount).isEqualTo(26);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(96);
+        assertThat(repositories).hasSizeGreaterThanOrEqualTo(96);
     }
 
     @Test
@@ -174,6 +219,111 @@ class JpaPersistenceTest {
 
         assertThatThrownBy(() -> workItemRepository.saveAndFlush(child))
                 .hasMessageContaining("Structural parentage across projects is not allowed");
+    }
+
+    @Test
+    void persistsProviderNeutralAgentTaskGraph() {
+        CoreFixture fixture = createCoreFixture("agent");
+        WorkItem item = createWorkItem(fixture, fixture.project, "AGENT-1", 1L);
+
+        User agentUser = new User();
+        agentUser.setEmail("agent-" + UUID.randomUUID() + "@example.com");
+        agentUser.setUsername("agent-" + UUID.randomUUID());
+        agentUser.setDisplayName("Fake Test Agent");
+        agentUser.setAccountType("agent");
+        agentUser = userRepository.saveAndFlush(agentUser);
+
+        AgentProvider provider = new AgentProvider();
+        provider.setWorkspaceId(fixture.workspace.getId());
+        provider.setProviderKey("fake-" + UUID.randomUUID());
+        provider.setProviderType("fake");
+        provider.setDisplayName("Fake Agent Provider");
+        provider.setDispatchMode("webhook_push");
+        provider.setCapabilitySchema(objectMapper.createObjectNode().put("coding", true));
+        provider.setConfig(objectMapper.createObjectNode().put("mode", "test"));
+        provider = agentProviderRepository.saveAndFlush(provider);
+
+        AgentProviderCredential credential = new AgentProviderCredential();
+        credential.setProviderId(provider.getId());
+        credential.setCredentialType("api_key");
+        credential.setSecretRef("env:TRASCK_FAKE_AGENT_KEY");
+        credential.setMetadata(objectMapper.createObjectNode().put("owner", "test"));
+        agentProviderCredentialRepository.saveAndFlush(credential);
+
+        AgentProfile profile = new AgentProfile();
+        profile.setWorkspaceId(fixture.workspace.getId());
+        profile.setUserId(agentUser.getId());
+        profile.setProviderId(provider.getId());
+        profile.setDisplayName("Fake Agent");
+        profile.setCapabilities(objectMapper.createObjectNode().put("canEditCode", true));
+        profile.setConfig(objectMapper.createObjectNode().put("temperature", 0));
+        profile = agentProfileRepository.saveAndFlush(profile);
+
+        RepositoryConnection repositoryConnection = new RepositoryConnection();
+        repositoryConnection.setWorkspaceId(fixture.workspace.getId());
+        repositoryConnection.setProjectId(fixture.project.getId());
+        repositoryConnection.setProvider("git");
+        repositoryConnection.setName("trasck-backend");
+        repositoryConnection.setRepositoryUrl("https://example.com/trasck.git");
+        repositoryConnection.setDefaultBranch("main");
+        repositoryConnection.setConfig(objectMapper.createObjectNode().put("checkout", "shallow"));
+        repositoryConnection = repositoryConnectionRepository.saveAndFlush(repositoryConnection);
+
+        AgentTask task = new AgentTask();
+        task.setWorkspaceId(fixture.workspace.getId());
+        task.setWorkItemId(item.getId());
+        task.setAgentProfileId(profile.getId());
+        task.setProviderId(provider.getId());
+        task.setRequestedById(fixture.user.getId());
+        task.setStatus("queued");
+        task.setDispatchMode("webhook_push");
+        task.setExternalTaskId("fake-task-" + UUID.randomUUID());
+        task.setContextSnapshot(objectMapper.createObjectNode().put("workItemKey", item.getKey()));
+        task.setRequestPayload(objectMapper.createObjectNode().put("instruction", "Implement story"));
+        task = agentTaskRepository.saveAndFlush(task);
+
+        AgentTaskEvent event = new AgentTaskEvent();
+        event.setAgentTaskId(task.getId());
+        event.setEventType("queued");
+        event.setSeverity("info");
+        event.setMessage("Task queued for fake provider");
+        event.setMetadata(objectMapper.createObjectNode().put("source", "test"));
+        agentTaskEventRepository.saveAndFlush(event);
+
+        AgentMessage message = new AgentMessage();
+        message.setAgentTaskId(task.getId());
+        message.setSenderUserId(agentUser.getId());
+        message.setSenderType("agent");
+        message.setBodyMarkdown("I can take this story.");
+        message.setBodyDocument(objectMapper.createObjectNode().put("type", "doc"));
+        agentMessageRepository.saveAndFlush(message);
+
+        AgentArtifact artifact = new AgentArtifact();
+        artifact.setAgentTaskId(task.getId());
+        artifact.setArtifactType("pull_request");
+        artifact.setName("Implement AGENT-1");
+        artifact.setExternalUrl("https://example.com/trasck/pull/1");
+        artifact.setMetadata(objectMapper.createObjectNode().put("branch", "agent/agent-1"));
+        agentArtifactRepository.saveAndFlush(artifact);
+
+        AgentTaskRepositoryLink taskRepositoryLink = new AgentTaskRepositoryLink();
+        taskRepositoryLink.setAgentTaskId(task.getId());
+        taskRepositoryLink.setRepositoryConnectionId(repositoryConnection.getId());
+        taskRepositoryLink.setBaseBranch("main");
+        taskRepositoryLink.setWorkingBranch("agent/agent-1");
+        taskRepositoryLink.setPullRequestUrl("https://example.com/trasck/pull/1");
+        taskRepositoryLink.setMetadata(objectMapper.createObjectNode().put("provider", "fake"));
+        agentTaskRepositoryLinkRepository.saveAndFlush(taskRepositoryLink);
+
+        entityManager.clear();
+
+        AgentTask reloaded = agentTaskRepository.findById(task.getId()).orElseThrow();
+        assertThat(reloaded.getContextSnapshot().get("workItemKey").asText()).isEqualTo("AGENT-1");
+        assertThat(agentProviderCredentialRepository.count()).isEqualTo(1);
+        assertThat(agentTaskEventRepository.count()).isEqualTo(1);
+        assertThat(agentMessageRepository.count()).isEqualTo(1);
+        assertThat(agentArtifactRepository.count()).isEqualTo(1);
+        assertThat(agentTaskRepositoryLinkRepository.count()).isEqualTo(1);
     }
 
     private CoreFixture createCoreFixture(String keyPrefix) {
