@@ -60,6 +60,9 @@ public class WorkItem {
     @Column(name = "sequence_number")
     private Long sequenceNumber;
 
+    @Column(name = "workspace_sequence_number")
+    private Long workspaceSequenceNumber;
+
     @Column(name = "title")
     private String title;
 
@@ -83,7 +86,7 @@ public class WorkItem {
     private Integer remainingMinutes;
 
     @Column(name = "rank")
-    private BigDecimal rank;
+    private String rank;
 
     @Column(name = "start_date")
     private LocalDate startDate;
@@ -209,6 +212,14 @@ public class WorkItem {
         this.sequenceNumber = sequenceNumber;
     }
 
+    public Long getWorkspaceSequenceNumber() {
+        return workspaceSequenceNumber;
+    }
+
+    public void setWorkspaceSequenceNumber(Long workspaceSequenceNumber) {
+        this.workspaceSequenceNumber = workspaceSequenceNumber;
+    }
+
     public String getTitle() {
         return title;
     }
@@ -265,11 +276,11 @@ public class WorkItem {
         this.remainingMinutes = remainingMinutes;
     }
 
-    public BigDecimal getRank() {
+    public String getRank() {
         return rank;
     }
 
-    public void setRank(BigDecimal rank) {
+    public void setRank(String rank) {
         this.rank = rank;
     }
 

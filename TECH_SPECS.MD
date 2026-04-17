@@ -30,6 +30,13 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 18. AI agent integration must be provider-neutral. Codex, Claude Code, local command runners, hosted services, webhook-based workers, and future agents should all plug into the same agent provider contract.
 19. Anonymous read access for public project data must be wired into the first security configuration, but every public read must still pass domain-level visibility checks.
 20. Work completed by humans or AI agents must pass through a human approval stage before it can transition to Done.
+21. `POST /api/v1/setup` is first-run-only. Once any admin/user bootstrap exists, additional organizations and workspaces must be created through authenticated flows.
+22. Username/password auth and OAuth should share the global user model. GitHub, Google, GitLab, and Microsoft are the first OAuth providers to support.
+23. Work item changes must publish in-process Spring events and persist durable outbox rows in `domain_events`.
+24. Work item ordering uses sortable rank strings, not numeric position columns.
+25. Work items have both project-local sequence numbers for human keys and workspace-wide sequence numbers for cross-project ordering, imports, exports, and reporting.
+26. Workspace Admins may manage agent providers, agent credentials, agent profiles, agent assignment, agent tasks, and repository connections by default.
+27. Seeded field/screen configuration should start with core system fields only; custom field expansion can happen later.
 
 ## Full Work Hierarchy
 
@@ -111,6 +118,7 @@ com.strangequark.trasck.board
 com.strangequark.trasck.customfield
 com.strangequark.trasck.activity
 com.strangequark.trasck.audit
+com.strangequark.trasck.event
 com.strangequark.trasck.notification
 com.strangequark.trasck.automation
 com.strangequark.trasck.agent
@@ -127,8 +135,16 @@ The first runnable backend slice is intentionally explicit. Local development do
 
 Implemented endpoints:
 
-- `POST /api/v1/setup` creates the initial admin user, organization, workspace, project, workspace membership, project membership, and deterministic default configuration.
+- `POST /api/v1/setup` creates the initial admin user, organization, workspace, project, workspace membership, project membership, and deterministic default configuration. It is first-run-only and returns conflict after bootstrap.
 - `GET /api/v1/public/projects/{projectId}` returns anonymous project metadata only when the workspace has anonymous read enabled, the project is public, and both records are active and not soft-deleted.
+- `POST /api/v1/projects/{projectId}/work-items` creates work items in a seeded project.
+- `GET /api/v1/projects/{projectId}/work-items` lists active project work items in rank order.
+- `GET /api/v1/work-items/{workItemId}` returns an active work item.
+- `PATCH /api/v1/work-items/{workItemId}` updates editable work item fields and parentage.
+- `POST /api/v1/work-items/{workItemId}/assign` changes assignee and writes assignment history.
+- `POST /api/v1/work-items/{workItemId}/rank` changes sortable rank string ordering.
+- `POST /api/v1/work-items/{workItemId}/transition` applies an allowed workflow transition and writes status history.
+- `DELETE /api/v1/work-items/{workItemId}` soft-archives a work item.
 
 Implemented seed data:
 
@@ -139,9 +155,17 @@ Implemented seed data:
 
 Security state:
 
-- Setup and public project reads are explicitly permitted in the first security configuration.
+- Setup, public project reads, and the first work item endpoints are explicitly permitted in the temporary security configuration until authentication and permission checks are implemented.
 - Other API routes are denied until authentication and permission checks are implemented.
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
+
+Work item implementation state:
+
+- Work item create/update validates project activity, workspace type enablement, project type enablement, parent-child type rules, same-project structural parentage, workflow assignment, and workflow status ownership.
+- Parent changes rebuild `work_item_closure` transactionally for the project.
+- Sequence allocation uses durable project and workspace sequence counter tables.
+- Work item rank uses fixed-width sortable strings.
+- Work item changes persist rows in `domain_events` and publish in-process Spring events after commit.
 
 ## Database Conventions
 
@@ -155,7 +179,9 @@ Recommended conventions:
 - Audit columns: `created_by_id`, `updated_by_id`, and optional `deleted_by_id` for user-created business records.
 - Soft delete: use `deleted_at` for user-owned data that should be recoverable or auditable.
 - Optimistic locking: use a numeric `version` column on heavily edited entities such as work items, projects, workflows, boards, and custom fields.
-- Human keys: use project key plus sequence number for work items, for example `TRASCK-123`.
+- Human keys: use project key plus project-local sequence number for work items, for example `TRASCK-123`.
+- Cross-project ordering and import/export correlation: use `workspace_sequence_number` as internal metadata.
+- Rank ordering: use sortable rank strings so work can be moved between neighbors without rewriting every row.
 - JSON: prefer `jsonb` for configurable payloads, rich text document bodies, custom field values, external integration payloads, automation configs, agent provider configs, execution payloads, and dashboard/view configs.
 - Money/billing concepts are intentionally excluded from the first backend domain unless billing becomes a product requirement.
 
@@ -355,6 +381,7 @@ erDiagram
         uuid reporter_id FK
         string key UK
         bigint sequence_number
+        bigint workspace_sequence_number
         string title
         text description_markdown
         jsonb description_document
@@ -362,7 +389,7 @@ erDiagram
         numeric estimate_points
         integer estimate_minutes
         integer remaining_minutes
-        numeric rank
+        string rank
         date start_date
         date due_date
         timestamptz resolved_at
@@ -1074,6 +1101,8 @@ erDiagram
 | `work_item_type_rules` | Allowed parent-child type combinations. |
 | `project_work_item_types` | Project-specific enablement/defaults for work item types. |
 | `work_items` | Universal table for all work artifacts. |
+| `workspace_work_item_sequences` | Durable workspace-wide sequence counter for cross-project ordering and import/export correlation. |
+| `project_work_item_sequences` | Durable project-local sequence counter for human work item keys. |
 | `work_item_closure` | Ancestor/descendant rows for fast hierarchy rollups. |
 | `work_item_links` | Non-tree relationships between work items. |
 | `priorities` | Workspace-configured priorities. |
@@ -1133,6 +1162,7 @@ erDiagram
 | `mentions` | Mentions in descriptions/comments. |
 | `activity_events` | User-visible activity feed. |
 | `audit_log_entries` | Compliance/security audit log. |
+| `domain_events` | Durable outbox events for domain changes and future asynchronous consumers. |
 
 ### Reporting
 
@@ -1222,6 +1252,9 @@ The ERDs show the main entities and the table catalog names every planned table.
 
 | Table | Important Columns |
 |---|---|
+| `work_items` | `id`, `workspace_id`, `project_id`, `type_id`, `parent_id`, `status_id`, `priority_id`, `resolution_id`, `assignee_id`, `reporter_id`, `key`, `sequence_number`, `workspace_sequence_number`, `title`, `description_markdown`, `description_document`, `visibility`, `estimate_points`, `estimate_minutes`, `remaining_minutes`, `rank`, `start_date`, `due_date`, `resolved_at`, `created_by_id`, `updated_by_id`, `created_at`, `updated_at`, `deleted_at`, `version` |
+| `workspace_work_item_sequences` | `workspace_id`, `next_value`, `updated_at` |
+| `project_work_item_sequences` | `project_id`, `workspace_id`, `next_value`, `updated_at` |
 | `labels` | `id`, `workspace_id`, `name`, `color`, `created_at` |
 | `work_item_labels` | `work_item_id`, `label_id`, `created_at` |
 | `work_item_components` | `work_item_id`, `component_id`, `created_at` |
@@ -1259,6 +1292,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `mentions` | `id`, `source_type`, `source_id`, `mentioned_user_id`, `created_at` |
 | `work_logs` | `id`, `work_item_id`, `user_id`, `minutes_spent`, `work_date`, `started_at`, `description_markdown`, `description_document`, `created_at`, `updated_at`, `deleted_at` |
 | `attachment_storage_configs` | `id`, `workspace_id`, `name`, `provider`, `config`, `active`, `default_config`, `created_at`, `updated_at` |
+| `domain_events` | `id`, `workspace_id`, `aggregate_type`, `aggregate_id`, `event_type`, `payload`, `processing_status`, `attempts`, `last_error`, `occurred_at`, `published_at` |
 
 ### Reporting Columns
 
@@ -1319,8 +1353,11 @@ Work item rules:
 - A work item may have one structural parent but many links.
 - Prevent cycles in the `work_items.parent_id` tree.
 - Maintain `work_item_closure` transactionally whenever a work item parent changes.
+- Work item type changes must not make existing child work items invalid.
 - Prevent duplicate `work_item_links` for the same source, target, and type unless the link type explicitly allows duplicates.
-- A work item key must be unique within a workspace. Project key plus sequence number should also be unique.
+- A work item key must be unique within a workspace. Project key plus project-local sequence number should also be unique.
+- `workspace_sequence_number` must be unique within a workspace and should be allocated from a durable workspace counter.
+- Work item rank values must be sortable strings.
 - A completed work item may have a `resolution_id`; unresolved work should not.
 
 Workflow rules:
@@ -1336,6 +1373,12 @@ Access rules:
 - Project membership may further restrict project access when a project is private.
 - Permissions are checked through roles and explicit project membership.
 - Audit log writes should not be user-editable.
+
+Event rules:
+
+- Work item changes must write durable `domain_events` rows in the same transaction as the domain change.
+- Work item changes must also publish in-process Spring events after commit for immediate same-service consumers.
+- The persisted event row is the source of truth for future queued automation, webhook delivery, reporting, notification, and integration dispatch.
 
 Customization rules:
 
@@ -1377,6 +1420,7 @@ work_item_type_rules(workspace_id, parent_type_id, child_type_id)
 project_work_item_types(project_id, work_item_type_id)
 work_items(workspace_id, key)
 work_items(project_id, sequence_number)
+work_items(workspace_id, workspace_sequence_number)
 work_items(project_id, type_id)
 work_items(parent_id)
 work_items(resolution_id)
@@ -1389,6 +1433,9 @@ work_item_closure(ancestor_work_item_id, descendant_work_item_id)
 work_item_closure(descendant_work_item_id, depth)
 work_item_links(source_work_item_id, link_type)
 work_item_links(target_work_item_id, link_type)
+domain_events(workspace_id, occurred_at)
+domain_events(aggregate_type, aggregate_id)
+domain_events(processing_status, occurred_at)
 workflow_assignments(project_id, work_item_type_id)
 custom_field_values(work_item_id, custom_field_id)
 screen_assignments(project_id, work_item_type_id, operation)
@@ -1449,10 +1496,14 @@ Guidelines:
 Example work item endpoints:
 
 ```text
-POST   /api/v1/work-items
+POST   /api/v1/projects/{projectId}/work-items
+GET    /api/v1/projects/{projectId}/work-items
 GET    /api/v1/work-items/{id}
 PATCH  /api/v1/work-items/{id}
+POST   /api/v1/work-items/{id}/assign
+POST   /api/v1/work-items/{id}/rank
 POST   /api/v1/work-items/{id}/transition
+DELETE /api/v1/work-items/{id}
 POST   /api/v1/work-items/{id}/links
 POST   /api/v1/work-items/{id}/comments
 POST   /api/v1/work-items/{id}/attachments
@@ -1778,7 +1829,7 @@ Recommended order:
 3. Implement projects, teams, and project/team memberships.
 4. Implement work item types, type rules, project type availability, priorities, resolutions, and workspace seed data.
 5. Implement workflows, statuses, transitions, and workflow assignments.
-6. Implement work items, hierarchy validation, closure-table maintenance, links, labels, and components.
+6. Implement work items, hierarchy validation, closure-table maintenance, ranking, transitions, assignment, archived state, and domain events.
 7. Implement comments, watchers, work logs, attachments, activity events, and audit logs.
 8. Implement boards, columns, iterations, releases, and roadmaps.
 9. Implement custom fields, screens, screen assignments, and field configurations.
@@ -1789,7 +1840,7 @@ Recommended order:
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence and the first setup flow, including deterministic seed data and anonymous public project visibility.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, and the initial work item API flow with hierarchy validation, ranking, transitions, assignment history, closure rows, and domain events.
 
 Required backend tests:
 
@@ -1814,7 +1865,7 @@ High-risk cases to test early:
 - Ensuring work item status belongs to the assigned workflow.
 - Preserving audit logs on sensitive changes.
 - Enforcing workspace/project access.
-- Keeping project sequence numbers unique under concurrent creation.
+- Keeping project and workspace sequence numbers unique under concurrent creation.
 - Preventing unauthenticated or replayed agent callbacks.
 - Preventing secrets from leaking into agent task context snapshots, comments, or activity events.
 - Keeping agent assignment and task history intact when work is reassigned to a human.

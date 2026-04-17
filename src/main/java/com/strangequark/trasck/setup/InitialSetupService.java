@@ -1,11 +1,14 @@
 package com.strangequark.trasck.setup;
 
 import com.strangequark.trasck.identity.User;
+import com.strangequark.trasck.identity.UserRepository;
 import com.strangequark.trasck.organization.Organization;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.workspace.Workspace;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class InitialSetupService {
@@ -15,24 +18,30 @@ public class InitialSetupService {
     private final WorkspaceSetupService workspaceSetupService;
     private final ProjectSetupService projectSetupService;
     private final WorkspaceSeedService workspaceSeedService;
+    private final UserRepository userRepository;
 
     public InitialSetupService(
             IdentitySetupService identitySetupService,
             OrganizationSetupService organizationSetupService,
             WorkspaceSetupService workspaceSetupService,
             ProjectSetupService projectSetupService,
-            WorkspaceSeedService workspaceSeedService
+            WorkspaceSeedService workspaceSeedService,
+            UserRepository userRepository
     ) {
         this.identitySetupService = identitySetupService;
         this.organizationSetupService = organizationSetupService;
         this.workspaceSetupService = workspaceSetupService;
         this.projectSetupService = projectSetupService;
         this.workspaceSeedService = workspaceSeedService;
+        this.userRepository = userRepository;
     }
 
     @Transactional
     public InitialSetupResponse createInitialSetup(InitialSetupRequest request) {
         InitialSetupRequest setupRequest = SetupRequestValidator.required(request, "request");
+        if (userRepository.count() > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Initial setup has already been completed");
+        }
         User adminUser = identitySetupService.createAdminUser(setupRequest.adminUser());
         Organization organization = organizationSetupService.createOrganization(setupRequest.organization(), adminUser.getId());
         Workspace workspace = workspaceSetupService.createWorkspace(setupRequest.workspace(), organization.getId());

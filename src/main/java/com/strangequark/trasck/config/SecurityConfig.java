@@ -26,6 +26,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/trasck/health", "/api/trasck/health/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/setup").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/public/**").permitAll()
+                        .requestMatchers("/api/v1/projects/*/work-items", "/api/v1/projects/*/work-items/**", "/api/v1/work-items/**").permitAll()
                         .anyRequest().denyAll()
                 );
         return http.build();

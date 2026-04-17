@@ -155,10 +155,10 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(97);
+        assertThat(tableCount).isEqualTo(100);
         assertThat(permissionCount).isEqualTo(26);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(96);
-        assertThat(repositories).hasSizeGreaterThanOrEqualTo(96);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(97);
+        assertThat(repositories).hasSizeGreaterThanOrEqualTo(97);
     }
 
     @Test
@@ -176,9 +176,11 @@ class JpaPersistenceTest {
         item.setReporterId(fixture.user.getId());
         item.setKey("PERSIST-1");
         item.setSequenceNumber(1L);
+        item.setWorkspaceSequenceNumber(1L);
         item.setTitle("Persist core work item");
         item.setDescriptionMarkdown("Markdown description");
         item.setDescriptionDocument(descriptionDocument);
+        item.setRank("0000001000000000");
         WorkItem savedItem = workItemRepository.saveAndFlush(item);
 
         ObjectNode commentDocument = objectMapper.createObjectNode()
@@ -385,8 +387,19 @@ class JpaPersistenceTest {
         item.setStatusId(fixture.status.getId());
         item.setKey(key);
         item.setSequenceNumber(sequenceNumber);
+        item.setWorkspaceSequenceNumber(nextWorkspaceSequence(fixture.workspace.getId()));
         item.setTitle("Work item " + key);
+        item.setRank("0000001000000000");
         return workItemRepository.saveAndFlush(item);
+    }
+
+    private Long nextWorkspaceSequence(UUID workspaceId) {
+        Long next = jdbcTemplate.queryForObject(
+                "select count(*) + 1 from work_items where workspace_id = ?",
+                Long.class,
+                workspaceId
+        );
+        return next == null ? 1L : next;
     }
 
     private record CoreFixture(

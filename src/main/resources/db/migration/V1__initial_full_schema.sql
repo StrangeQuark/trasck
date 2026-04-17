@@ -80,6 +80,19 @@ create table projects (
     unique (workspace_id, key)
 );
 
+create table workspace_work_item_sequences (
+    workspace_id uuid primary key references workspaces(id) on delete cascade,
+    next_value bigint not null default 1,
+    updated_at timestamptz not null default now()
+);
+
+create table project_work_item_sequences (
+    project_id uuid primary key references projects(id) on delete cascade,
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    next_value bigint not null default 1,
+    updated_at timestamptz not null default now()
+);
+
 create table programs (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
@@ -336,6 +349,7 @@ create table work_items (
     reporter_id uuid references users(id) on delete set null,
     key varchar(80) not null,
     sequence_number bigint not null,
+    workspace_sequence_number bigint not null,
     title varchar(500) not null,
     description_markdown text,
     description_document jsonb,
@@ -343,7 +357,7 @@ create table work_items (
     estimate_points numeric(12, 2),
     estimate_minutes integer,
     remaining_minutes integer,
-    rank numeric(30, 15) not null default 0,
+    rank varchar(64) not null default '0000001000000000',
     start_date date,
     due_date date,
     resolved_at timestamptz,
@@ -358,7 +372,8 @@ create table work_items (
     constraint ck_work_items_estimate_minutes check (estimate_minutes is null or estimate_minutes >= 0),
     constraint ck_work_items_remaining_minutes check (remaining_minutes is null or remaining_minutes >= 0),
     unique (workspace_id, key),
-    unique (project_id, sequence_number)
+    unique (project_id, sequence_number),
+    unique (workspace_id, workspace_sequence_number)
 );
 
 create table work_item_closure (
@@ -696,6 +711,20 @@ create table audit_log_entries (
     ip_address varchar(80),
     user_agent text,
     created_at timestamptz not null default now()
+);
+
+create table domain_events (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid references workspaces(id) on delete cascade,
+    aggregate_type varchar(80) not null,
+    aggregate_id uuid not null,
+    event_type varchar(120) not null,
+    payload jsonb not null default '{}'::jsonb,
+    processing_status varchar(40) not null default 'pending',
+    attempts integer not null default 0,
+    last_error text,
+    occurred_at timestamptz not null default now(),
+    published_at timestamptz
 );
 
 create table work_item_status_history (
@@ -1261,6 +1290,8 @@ create trigger trg_user_auth_identities_updated_at before update on user_auth_id
 create trigger trg_organizations_updated_at before update on organizations for each row execute function set_updated_at();
 create trigger trg_workspaces_updated_at before update on workspaces for each row execute function set_updated_at();
 create trigger trg_projects_updated_at before update on projects for each row execute function set_updated_at();
+create trigger trg_workspace_work_item_sequences_updated_at before update on workspace_work_item_sequences for each row execute function set_updated_at();
+create trigger trg_project_work_item_sequences_updated_at before update on project_work_item_sequences for each row execute function set_updated_at();
 create trigger trg_programs_updated_at before update on programs for each row execute function set_updated_at();
 create trigger trg_teams_updated_at before update on teams for each row execute function set_updated_at();
 create trigger trg_roles_updated_at before update on roles for each row execute function set_updated_at();
@@ -1297,6 +1328,7 @@ create index ix_workflow_assignments_project_type on workflow_assignments(projec
 create index ix_workflow_statuses_workflow_category on workflow_statuses(workflow_id, category);
 create index ix_work_items_workspace_key on work_items(workspace_id, key);
 create index ix_work_items_project_sequence on work_items(project_id, sequence_number);
+create index ix_work_items_workspace_sequence on work_items(workspace_id, workspace_sequence_number);
 create index ix_work_items_project_type on work_items(project_id, type_id);
 create index ix_work_items_parent on work_items(parent_id);
 create index ix_work_items_resolution on work_items(resolution_id);
@@ -1328,6 +1360,9 @@ create index ix_work_logs_user_work_date on work_logs(user_id, work_date);
 create index ix_attachments_workspace on attachments(workspace_id);
 create index ix_activity_events_workspace_created_at on activity_events(workspace_id, created_at);
 create index ix_audit_log_entries_workspace_created_at on audit_log_entries(workspace_id, created_at);
+create index ix_domain_events_workspace_occurred_at on domain_events(workspace_id, occurred_at);
+create index ix_domain_events_aggregate on domain_events(aggregate_type, aggregate_id);
+create index ix_domain_events_status_occurred_at on domain_events(processing_status, occurred_at);
 create index ix_work_item_status_history_work_item_changed_at on work_item_status_history(work_item_id, changed_at);
 create index ix_work_item_assignment_history_work_item_changed_at on work_item_assignment_history(work_item_id, changed_at);
 create index ix_work_item_estimate_history_work_item_changed_at on work_item_estimate_history(work_item_id, changed_at);
