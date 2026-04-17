@@ -97,20 +97,30 @@ class InitialSetupIntegrationTest {
         assertThat(publicProject.at("/id").asText()).isEqualTo(projectId.toString());
         assertThat(publicProject.at("/visibility").asText()).isEqualTo("public");
 
-        JsonNode closedWorkspaceSetup = postSetup("closed", false, "public");
-        UUID closedWorkspaceProjectId = uuid(closedWorkspaceSetup, "/project/id");
+        jdbcTemplate.update("update projects set visibility = 'private' where id = ?", projectId);
+        HttpResponse<String> privateProjectReadResponse = get("/api/v1/public/projects/" + projectId);
+        assertThat(privateProjectReadResponse.statusCode()).isEqualTo(404);
 
-        HttpResponse<String> closedWorkspaceReadResponse = get("/api/v1/public/projects/" + closedWorkspaceProjectId);
+        jdbcTemplate.update("update projects set visibility = 'public' where id = ?", projectId);
+        jdbcTemplate.update("update workspaces set anonymous_read_enabled = false where id = ?", workspaceId);
+        HttpResponse<String> closedWorkspaceReadResponse = get("/api/v1/public/projects/" + projectId);
         assertThat(closedWorkspaceReadResponse.statusCode()).isEqualTo(404);
 
-        JsonNode privateProjectSetup = postSetup("private", true, "private");
-        UUID privateProjectId = uuid(privateProjectSetup, "/project/id");
-
-        HttpResponse<String> privateProjectReadResponse = get("/api/v1/public/projects/" + privateProjectId);
-        assertThat(privateProjectReadResponse.statusCode()).isEqualTo(404);
+        HttpResponse<String> secondSetupResponse = post("/api/v1/setup", setupBody("second", true, "public"));
+        assertThat(secondSetupResponse.statusCode()).isEqualTo(409);
     }
 
     private JsonNode postSetup(String prefix, boolean anonymousReadEnabled, String projectVisibility) throws Exception {
+        ObjectNode body = setupBody(prefix, anonymousReadEnabled, projectVisibility);
+        HttpResponse<String> response = post("/api/v1/setup", body);
+        assertThat(response.statusCode()).isEqualTo(201);
+        JsonNode responseBody = objectMapper.readTree(response.body());
+        assertThat(responseBody.at("/adminUser/accountType").asText()).isEqualTo("human");
+        assertThat(responseBody.at("/workspace/anonymousReadEnabled").asBoolean()).isEqualTo(anonymousReadEnabled);
+        return responseBody;
+    }
+
+    private ObjectNode setupBody(String prefix, boolean anonymousReadEnabled, String projectVisibility) {
         String unique = UUID.randomUUID().toString().replace("-", "");
         ObjectNode body = objectMapper.createObjectNode();
         body.set("adminUser", objectMapper.createObjectNode()
@@ -132,13 +142,7 @@ class InitialSetupIntegrationTest {
                 .put("key", "PR" + prefix + unique.substring(0, 6))
                 .put("description", "Project created by setup integration test")
                 .put("visibility", projectVisibility));
-
-        HttpResponse<String> response = post("/api/v1/setup", body);
-        assertThat(response.statusCode()).isEqualTo(201);
-        JsonNode responseBody = objectMapper.readTree(response.body());
-        assertThat(responseBody.at("/adminUser/accountType").asText()).isEqualTo("human");
-        assertThat(responseBody.at("/workspace/anonymousReadEnabled").asBoolean()).isEqualTo(anonymousReadEnabled);
-        return responseBody;
+        return body;
     }
 
     private HttpResponse<String> post(String path, JsonNode body) throws Exception {
