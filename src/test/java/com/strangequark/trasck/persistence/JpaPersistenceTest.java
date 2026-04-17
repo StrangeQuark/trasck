@@ -235,9 +235,9 @@ class JpaPersistenceTest {
 
         AgentProvider provider = new AgentProvider();
         provider.setWorkspaceId(fixture.workspace.getId());
-        provider.setProviderKey("fake-" + UUID.randomUUID());
-        provider.setProviderType("fake");
-        provider.setDisplayName("Fake Agent Provider");
+        provider.setProviderKey("codex-" + UUID.randomUUID());
+        provider.setProviderType("codex");
+        provider.setDisplayName("Codex Agent Provider");
         provider.setDispatchMode("webhook_push");
         provider.setCapabilitySchema(objectMapper.createObjectNode().put("coding", true));
         provider.setConfig(objectMapper.createObjectNode().put("mode", "test"));
@@ -246,7 +246,7 @@ class JpaPersistenceTest {
         AgentProviderCredential credential = new AgentProviderCredential();
         credential.setProviderId(provider.getId());
         credential.setCredentialType("api_key");
-        credential.setSecretRef("env:TRASCK_FAKE_AGENT_KEY");
+        credential.setEncryptedSecret("encrypted:test-secret");
         credential.setMetadata(objectMapper.createObjectNode().put("owner", "test"));
         agentProviderCredentialRepository.saveAndFlush(credential);
 
@@ -277,7 +277,7 @@ class JpaPersistenceTest {
         task.setRequestedById(fixture.user.getId());
         task.setStatus("queued");
         task.setDispatchMode("webhook_push");
-        task.setExternalTaskId("fake-task-" + UUID.randomUUID());
+        task.setExternalTaskId("codex-task-" + UUID.randomUUID());
         task.setContextSnapshot(objectMapper.createObjectNode().put("workItemKey", item.getKey()));
         task.setRequestPayload(objectMapper.createObjectNode().put("instruction", "Implement story"));
         task = agentTaskRepository.saveAndFlush(task);
@@ -286,7 +286,7 @@ class JpaPersistenceTest {
         event.setAgentTaskId(task.getId());
         event.setEventType("queued");
         event.setSeverity("info");
-        event.setMessage("Task queued for fake provider");
+        event.setMessage("Task queued for Codex provider");
         event.setMetadata(objectMapper.createObjectNode().put("source", "test"));
         agentTaskEventRepository.saveAndFlush(event);
 
@@ -312,7 +312,7 @@ class JpaPersistenceTest {
         taskRepositoryLink.setBaseBranch("main");
         taskRepositoryLink.setWorkingBranch("agent/agent-1");
         taskRepositoryLink.setPullRequestUrl("https://example.com/trasck/pull/1");
-        taskRepositoryLink.setMetadata(objectMapper.createObjectNode().put("provider", "fake"));
+        taskRepositoryLink.setMetadata(objectMapper.createObjectNode().put("provider", "codex"));
         agentTaskRepositoryLinkRepository.saveAndFlush(taskRepositoryLink);
 
         entityManager.clear();

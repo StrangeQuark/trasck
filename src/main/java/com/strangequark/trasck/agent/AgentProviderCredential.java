@@ -31,8 +31,8 @@ public class AgentProviderCredential {
     @Column(name = "credential_type")
     private String credentialType;
 
-    @Column(name = "secret_ref")
-    private String secretRef;
+    @Column(name = "encrypted_secret")
+    private String encryptedSecret;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "metadata")
@@ -71,12 +71,12 @@ public class AgentProviderCredential {
         this.credentialType = credentialType;
     }
 
-    public String getSecretRef() {
-        return secretRef;
+    public String getEncryptedSecret() {
+        return encryptedSecret;
     }
 
-    public void setSecretRef(String secretRef) {
-        this.secretRef = secretRef;
+    public void setEncryptedSecret(String encryptedSecret) {
+        this.encryptedSecret = encryptedSecret;
     }
 
     public JsonNode getMetadata() {
