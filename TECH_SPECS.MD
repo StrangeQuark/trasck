@@ -28,6 +28,8 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 16. Automation uses hybrid execution: local state changes can run synchronously, while slow or external actions run through queued jobs.
 17. AI agents are optional assignable actors. Trasck must remain fully usable as a normal Jira/Rally-style project management tool when agent features are disabled.
 18. AI agent integration must be provider-neutral. Codex, Claude Code, local command runners, hosted services, webhook-based workers, and future agents should all plug into the same agent provider contract.
+19. Anonymous read access for public project data must be wired into the first security configuration, but every public read must still pass domain-level visibility checks.
+20. Work completed by humans or AI agents must pass through a human approval stage before it can transition to Done.
 
 ## Full Work Hierarchy
 
@@ -119,6 +121,28 @@ com.strangequark.trasck.search
 
 Each package should own its controllers, services, repositories, DTOs, mappers, and domain exceptions unless a shared abstraction is clearly needed.
 
+## Implemented Backend Slice
+
+The first runnable backend slice is intentionally explicit. Local development does not auto-create an organization, workspace, project, or admin user at application startup.
+
+Implemented endpoints:
+
+- `POST /api/v1/setup` creates the initial admin user, organization, workspace, project, workspace membership, project membership, and deterministic default configuration.
+- `GET /api/v1/public/projects/{projectId}` returns anonymous project metadata only when the workspace has anonymous read enabled, the project is public, and both records are active and not soft-deleted.
+
+Implemented seed data:
+
+- Default work item hierarchy: Theme, Initiative, Capability, Feature, Epic, Story, Task, Bug, and Subtask.
+- Default hierarchy rules from Theme down to Subtask.
+- Default priorities, resolutions, workflow statuses, workflow transitions, board columns, roles, project type availability, workflow assignments, project settings, and local filesystem attachment storage configuration.
+- Default workflow includes an Approval status and requires human approval before Done for human-completed and agent-completed work.
+
+Security state:
+
+- Setup and public project reads are explicitly permitted in the first security configuration.
+- Other API routes are denied until authentication and permission checks are implemented.
+- Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
+
 ## Database Conventions
 
 Use PostgreSQL as the primary database.
@@ -180,6 +204,7 @@ erDiagram
         string timezone
         string locale
         string status
+        boolean anonymous_read_enabled
         timestamptz created_at
         timestamptz updated_at
         timestamptz deleted_at
@@ -916,7 +941,7 @@ erDiagram
         uuid id PK
         uuid provider_id FK
         string credential_type
-        string secret_ref
+        string encrypted_secret
         jsonb metadata
         boolean active
         timestamptz created_at
@@ -1140,7 +1165,7 @@ erDiagram
 | Table | Purpose |
 |---|---|
 | `agent_providers` | Workspace-level provider adapter configuration for Codex, Claude Code, local runners, webhook workers, custom agents, and future providers. |
-| `agent_provider_credentials` | Credential references or encrypted provider secrets for dispatching to external or managed agents. |
+| `agent_provider_credentials` | Encrypted provider credentials for dispatching to external or managed agents. |
 | `agent_profiles` | Assignable agent identities backed by `users` rows. |
 | `repository_connections` | Workspace/project repository connections used by coding agents. |
 | `agent_tasks` | Execution records for work delegated to agents. |
@@ -1185,6 +1210,9 @@ The ERDs show the main entities and the table catalog names every planned table.
 
 | Table | Important Columns |
 |---|---|
+| `organizations` | `id`, `name`, `slug`, `status`, `created_by_id`, `created_at`, `updated_at`, `deleted_at`, `version` |
+| `workspaces` | `id`, `organization_id`, `name`, `key`, `timezone`, `locale`, `status`, `anonymous_read_enabled`, `created_at`, `updated_at`, `deleted_at`, `version` |
+| `projects` | `id`, `workspace_id`, `parent_project_id`, `name`, `key`, `description`, `visibility`, `status`, `lead_user_id`, `created_at`, `updated_at`, `deleted_at`, `version` |
 | `project_settings` | `project_id`, `default_workflow_id`, `default_board_id`, `estimation_unit`, `cross_project_linking_policy`, `config`, `updated_at` |
 | `program_projects` | `program_id`, `project_id`, `position`, `created_at` |
 | `team_memberships` | `id`, `team_id`, `user_id`, `role`, `capacity_percent`, `joined_at`, `left_at` |
@@ -1257,7 +1285,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 | Table | Important Columns |
 |---|---|
 | `agent_providers` | `id`, `workspace_id`, `provider_key`, `provider_type`, `display_name`, `dispatch_mode`, `callback_url`, `capability_schema`, `config`, `enabled`, `created_at`, `updated_at` |
-| `agent_provider_credentials` | `id`, `provider_id`, `credential_type`, `secret_ref`, `metadata`, `active`, `created_at`, `rotated_at` |
+| `agent_provider_credentials` | `id`, `provider_id`, `credential_type`, `encrypted_secret`, `metadata`, `active`, `created_at`, `rotated_at` |
 | `agent_profiles` | `id`, `workspace_id`, `user_id`, `provider_id`, `display_name`, `status`, `max_concurrent_tasks`, `capabilities`, `config`, `created_at`, `updated_at` |
 | `repository_connections` | `id`, `workspace_id`, `project_id`, `provider`, `name`, `repository_url`, `default_branch`, `config`, `active`, `created_at`, `updated_at` |
 | `agent_tasks` | `id`, `workspace_id`, `work_item_id`, `agent_profile_id`, `provider_id`, `requested_by_id`, `status`, `dispatch_mode`, `external_task_id`, `context_snapshot`, `request_payload`, `result_payload`, `queued_at`, `started_at`, `completed_at`, `failed_at`, `canceled_at` |
@@ -1321,12 +1349,12 @@ AI agent rules:
 - An assignable agent must have a global `users` row with `account_type = AGENT` and exactly one active `agent_profiles` row per workspace/provider identity.
 - Agent users must use the same workspace/project membership and role checks as human users.
 - Agent provider adapters must be selected by `agent_providers.provider_type` and provider-specific `jsonb` config, not hardcoded into work item or workflow tables.
-- Provider credentials must be stored as encrypted values or external secret references; secrets must not be copied into work item descriptions, comments, activity events, or agent context snapshots.
+- Provider credentials must be stored as encrypted database values first; secrets must not be copied into work item descriptions, comments, activity events, or agent context snapshots.
 - Assigning a work item to an agent creates an `agent_tasks` row. Reassigning the work item to a human does not delete the agent task history.
 - Agent task context should be a point-in-time snapshot of the work item, linked requirements, attachments, repository references, and safe metadata needed for execution.
 - Agent task callbacks must be authenticated, idempotent, and scoped to the workspace/provider/task they update.
 - Agent task status changes must generate activity events. Provider setup, credential changes, permission changes, and privileged agent actions must generate audit log entries.
-- Agents should request human review before closing work by default. Automatic transition on completion may be configured per workflow or automation rule.
+- Agent completion must request human review and cannot move work directly to Done. Work may transition to Done only after the human approval stage is complete.
 - Agent concurrency limits must be enforced per agent profile and optionally per provider.
 - Canceled or failed agent tasks should remain visible and auditable.
 
@@ -1588,9 +1616,10 @@ Trasck should support AI-assisted execution without becoming dependent on any on
 Provider model:
 
 - `agent_providers.provider_type` selects an adapter such as `codex`, `claude_code`, `webhook`, `local_runner`, `hosted_service`, or `custom`.
-- `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff.
+- Codex is the first provider adapter to implement, while keeping the adapter contract generic enough for Claude Code, webhook workers, local runners, hosted services, and future agents.
+- `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff. Manual handoff is the default dispatch mode.
 - Provider-specific options belong in `agent_providers.config`; shared capability declarations belong in `capability_schema`.
-- Secrets must be referenced through `agent_provider_credentials.secret_ref` or encrypted storage, not embedded directly in provider configs or agent task payloads.
+- Provider credentials should be encrypted database values first. Secrets must not be embedded directly in provider configs or agent task payloads.
 
 Agent model:
 
@@ -1648,7 +1677,7 @@ repository_connection.manage
 Human review:
 
 - Agent completion should normally move a task to a review state or create a review request rather than closing the work item.
-- Workflows and automation may opt into automatic transitions for trusted agents or low-risk work.
+- Workflows must require human approval before Done for human-implemented and agent-implemented work.
 - Humans must be able to cancel, retry, reassign, or request changes on an agent task.
 
 ## Initial Seed Data
@@ -1711,6 +1740,7 @@ Open
 Ready
 In Progress
 In Review
+Approval
 Blocked
 Done
 ```
@@ -1722,6 +1752,7 @@ Backlog: Open
 Ready: Ready
 In Progress: In Progress, Blocked
 Review: In Review
+Approval: Approval
 Done: Done
 ```
 
@@ -1758,6 +1789,8 @@ Recommended order:
 
 ## Testing Requirements
 
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence and the first setup flow, including deterministic seed data and anonymous public project visibility.
+
 Required backend tests:
 
 - Entity/repository tests for core constraints.
@@ -1768,7 +1801,7 @@ Required backend tests:
 - Migration tests when schema grows.
 - Import job tests for idempotency and partial failure handling.
 - Reporting calculation tests for cycle time, velocity, and cumulative flow.
-- Agent provider adapter contract tests with a fake provider.
+- Codex provider adapter contract tests with controlled stubs.
 - Agent task lifecycle tests for dispatch, callback, progress, completion, failure, cancellation, retry, and artifact creation.
 - Agent permission tests proving agents cannot exceed their workspace/project roles.
 
