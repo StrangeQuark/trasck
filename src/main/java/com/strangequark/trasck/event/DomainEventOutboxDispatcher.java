@@ -13,74 +13,93 @@ public class DomainEventOutboxDispatcher {
 
     private final DomainEventRepository domainEventRepository;
     private final DomainEventDeliveryRepository domainEventDeliveryRepository;
+    private final EventConsumerConfigRepository eventConsumerConfigRepository;
     private final List<DomainEventConsumer> consumers;
+    private final List<ConfiguredDomainEventConsumer> configuredConsumers;
     private final int batchSize;
 
     public DomainEventOutboxDispatcher(
             DomainEventRepository domainEventRepository,
             DomainEventDeliveryRepository domainEventDeliveryRepository,
+            EventConsumerConfigRepository eventConsumerConfigRepository,
             List<DomainEventConsumer> consumers,
+            List<ConfiguredDomainEventConsumer> configuredConsumers,
             @Value("${trasck.events.outbox.batch-size:50}") int batchSize
     ) {
         this.domainEventRepository = domainEventRepository;
         this.domainEventDeliveryRepository = domainEventDeliveryRepository;
+        this.eventConsumerConfigRepository = eventConsumerConfigRepository;
         this.consumers = consumers;
+        this.configuredConsumers = configuredConsumers;
         this.batchSize = batchSize;
     }
 
     @Scheduled(fixedDelayString = "${trasck.events.outbox.fixed-delay-ms:5000}")
     @Transactional
     public void dispatchPending() {
-        if (consumers.isEmpty()) {
+        List<EventConsumerConfig> configs = eventConsumerConfigRepository.findByEnabledTrue();
+        if (consumers.isEmpty() && configs.isEmpty()) {
             return;
         }
         for (DomainEvent event : domainEventRepository.findByProcessingStatusInOrderByOccurredAtAsc(
                 List.of("pending", "failed"),
                 PageRequest.of(0, batchSize)
         )) {
-            dispatch(event);
+            dispatch(event, matchingConfigs(event, configs));
         }
     }
 
-    private void dispatch(DomainEvent event) {
-        ensureDeliveries(event);
+    private void dispatch(DomainEvent event, List<EventConsumerConfig> configs) {
+        ensureDeliveries(event, configs);
         List<DomainEventDelivery> deliveries = domainEventDeliveryRepository.findByDomainEventIdAndDeliveryStatusIn(
                 event.getId(),
                 List.of("pending", "failed")
         );
         for (DomainEventDelivery delivery : deliveries) {
-            deliver(event, delivery);
+            deliver(event, delivery, configs);
         }
         refreshEventStatus(event);
     }
 
-    private void ensureDeliveries(DomainEvent event) {
+    private void ensureDeliveries(DomainEvent event, List<EventConsumerConfig> configs) {
         for (DomainEventConsumer consumer : consumers) {
-            domainEventDeliveryRepository.findByDomainEventIdAndConsumerKey(event.getId(), consumer.consumerKey())
-                    .orElseGet(() -> {
-                        DomainEventDelivery delivery = new DomainEventDelivery();
-                        delivery.setDomainEventId(event.getId());
-                        delivery.setConsumerKey(consumer.consumerKey());
-                        delivery.setDeliveryStatus("pending");
-                        delivery.setAttempts(0);
-                        return domainEventDeliveryRepository.save(delivery);
-                    });
+            ensureDelivery(event, consumer.consumerKey());
+        }
+        for (EventConsumerConfig config : configs) {
+            ensureDelivery(event, config.getConsumerKey());
         }
     }
 
-    private void deliver(DomainEvent event, DomainEventDelivery delivery) {
+    private DomainEventDelivery ensureDelivery(DomainEvent event, String consumerKey) {
+        return domainEventDeliveryRepository.findByDomainEventIdAndConsumerKey(event.getId(), consumerKey)
+                .orElseGet(() -> {
+                    DomainEventDelivery delivery = new DomainEventDelivery();
+                    delivery.setDomainEventId(event.getId());
+                    delivery.setConsumerKey(consumerKey);
+                    delivery.setDeliveryStatus("pending");
+                    delivery.setAttempts(0);
+                    return domainEventDeliveryRepository.save(delivery);
+                });
+    }
+
+    private void deliver(DomainEvent event, DomainEventDelivery delivery, List<EventConsumerConfig> configs) {
         DomainEventConsumer consumer = consumers.stream()
                 .filter(candidate -> candidate.consumerKey().equals(delivery.getConsumerKey()))
                 .findFirst()
                 .orElse(null);
-        if (consumer == null) {
+        EventConsumerConfig config = consumer == null ? configuredConsumerConfig(delivery.getConsumerKey(), configs) : null;
+        if (consumer == null && config == null) {
             return;
         }
 
         delivery.setDeliveryStatus("processing");
         delivery.setAttempts(attempts(delivery) + 1);
         try {
-            consumer.handle(event);
+            if (consumer != null) {
+                consumer.handle(event);
+            } else {
+                configuredConsumer(config).handle(event, config);
+            }
             delivery.setDeliveryStatus("delivered");
             delivery.setDeliveredAt(OffsetDateTime.now());
             delivery.setLastError(null);
@@ -106,6 +125,44 @@ public class DomainEventOutboxDispatcher {
             return;
         }
         event.setProcessingStatus("pending");
+    }
+
+    private List<EventConsumerConfig> matchingConfigs(DomainEvent event, List<EventConsumerConfig> configs) {
+        return configs.stream()
+                .filter(config -> workspaceMatches(event, config))
+                .filter(config -> eventTypeMatches(event, config))
+                .toList();
+    }
+
+    private boolean workspaceMatches(DomainEvent event, EventConsumerConfig config) {
+        return config.getWorkspaceId() == null || config.getWorkspaceId().equals(event.getWorkspaceId());
+    }
+
+    private boolean eventTypeMatches(DomainEvent event, EventConsumerConfig config) {
+        if (config.getEventTypes() == null || !config.getEventTypes().isArray() || config.getEventTypes().isEmpty()) {
+            return true;
+        }
+        for (int i = 0; i < config.getEventTypes().size(); i++) {
+            String eventType = config.getEventTypes().get(i).asText();
+            if ("*".equals(eventType) || event.getEventType().equals(eventType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private EventConsumerConfig configuredConsumerConfig(String consumerKey, List<EventConsumerConfig> configs) {
+        return configs.stream()
+                .filter(config -> config.getConsumerKey().equals(consumerKey))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ConfiguredDomainEventConsumer configuredConsumer(EventConsumerConfig config) {
+        return configuredConsumers.stream()
+                .filter(consumer -> consumer.consumerType().equals(config.getConsumerType()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("No configured event consumer handler for type " + config.getConsumerType()));
     }
 
     private int attempts(DomainEvent event) {

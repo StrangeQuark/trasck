@@ -1,5 +1,6 @@
 package com.strangequark.trasck.identity;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,4 +11,8 @@ public interface ApiTokenRepository extends JpaRepository<ApiToken, UUID> {
     Optional<ApiToken> findByIdAndUserIdAndTokenTypeAndRevokedAtIsNull(UUID id, UUID userId, String tokenType);
 
     Optional<ApiToken> findByIdAndWorkspaceIdAndTokenTypeAndRevokedAtIsNull(UUID id, UUID workspaceId, String tokenType);
+
+    List<ApiToken> findByUserIdAndTokenTypeOrderByCreatedAtDesc(UUID userId, String tokenType);
+
+    List<ApiToken> findByWorkspaceIdAndTokenTypeOrderByCreatedAtDesc(UUID workspaceId, String tokenType);
 }

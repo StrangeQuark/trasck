@@ -780,6 +780,19 @@ create table domain_event_deliveries (
     constraint ck_domain_event_deliveries_status check (delivery_status in ('pending', 'processing', 'delivered', 'failed'))
 );
 
+create table event_consumer_configs (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid references workspaces(id) on delete cascade,
+    consumer_key varchar(160) not null unique,
+    consumer_type varchar(80) not null,
+    display_name varchar(160) not null,
+    event_types jsonb not null default '[]'::jsonb,
+    config jsonb not null default '{}'::jsonb,
+    enabled boolean not null default true,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
 create table work_item_status_history (
     id uuid primary key default gen_random_uuid(),
     work_item_id uuid not null references work_items(id) on delete cascade,
@@ -1366,6 +1379,7 @@ create trigger trg_agent_providers_updated_at before update on agent_providers f
 create trigger trg_agent_profiles_updated_at before update on agent_profiles for each row execute function set_updated_at();
 create trigger trg_repository_connections_updated_at before update on repository_connections for each row execute function set_updated_at();
 create trigger trg_domain_event_deliveries_updated_at before update on domain_event_deliveries for each row execute function set_updated_at();
+create trigger trg_event_consumer_configs_updated_at before update on event_consumer_configs for each row execute function set_updated_at();
 
 create index ix_users_account_type on users(account_type);
 create index ix_workspaces_organization_key on workspaces(organization_id, key);
@@ -1425,6 +1439,8 @@ create index ix_api_tokens_workspace_type on api_tokens(workspace_id, token_type
 create index ix_api_tokens_active on api_tokens(token_type, revoked_at, expires_at);
 create index ix_domain_event_deliveries_event on domain_event_deliveries(domain_event_id, delivery_status);
 create index ix_domain_event_deliveries_consumer on domain_event_deliveries(consumer_key, delivery_status);
+create index ix_event_consumer_configs_workspace_type on event_consumer_configs(workspace_id, consumer_type);
+create index ix_event_consumer_configs_enabled on event_consumer_configs(enabled, consumer_type);
 create index ix_work_item_status_history_work_item_changed_at on work_item_status_history(work_item_id, changed_at);
 create index ix_work_item_assignment_history_work_item_changed_at on work_item_assignment_history(work_item_id, changed_at);
 create index ix_work_item_estimate_history_work_item_changed_at on work_item_estimate_history(work_item_id, changed_at);

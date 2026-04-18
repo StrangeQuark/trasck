@@ -41,10 +41,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = resolveToken(request);
         if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                UUID userId = apiTokenService.supports(token)
-                        ? apiTokenService.authenticateBearerToken(token)
-                        : jwtTokenService.parseUserId(token);
-                TrasckPrincipal principal = userDetailsService.loadUserById(userId);
+                TrasckPrincipal principal;
+                if (apiTokenService.supports(token)) {
+                    principal = userDetailsService.loadUserByApiToken(apiTokenService.authenticateBearerToken(token));
+                } else {
+                    UUID userId = jwtTokenService.parseUserId(token);
+                    principal = userDetailsService.loadUserById(userId);
+                }
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         principal,
                         null,

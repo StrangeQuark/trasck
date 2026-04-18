@@ -14,7 +14,10 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -58,7 +61,7 @@ public class ApiTokenService {
     }
 
     @Transactional
-    public UUID authenticateBearerToken(String rawToken) {
+    public ApiTokenAuthentication authenticateBearerToken(String rawToken) {
         if (!supports(rawToken)) {
             throw new BadCredentialsException("Unsupported API token");
         }
@@ -73,7 +76,7 @@ public class ApiTokenService {
             throw new BadCredentialsException("API token user is inactive");
         }
         token.setLastUsedAt(OffsetDateTime.now());
-        return user.getId();
+        return new ApiTokenAuthentication(user.getId(), token.getId(), token.getTokenType(), scopeSet(token.getScopes()));
     }
 
     @Transactional
@@ -93,6 +96,13 @@ public class ApiTokenService {
         ApiToken saved = apiTokenRepository.save(token);
         recordTokenEvent(null, saved, "auth.api_token_created");
         return ApiTokenResponse.from(saved, rawToken.value());
+    }
+
+    @Transactional(readOnly = true)
+    public List<ApiTokenResponse> listPersonalTokens(UUID userId) {
+        return apiTokenRepository.findByUserIdAndTokenTypeOrderByCreatedAtDesc(userId, "personal").stream()
+                .map(token -> ApiTokenResponse.from(token, null))
+                .toList();
     }
 
     @Transactional
@@ -118,6 +128,13 @@ public class ApiTokenService {
         ApiToken saved = apiTokenRepository.save(token);
         recordTokenEvent(workspaceId, saved, "auth.service_token_created");
         return ApiTokenResponse.from(saved, rawToken.value());
+    }
+
+    @Transactional(readOnly = true)
+    public List<ApiTokenResponse> listServiceTokens(UUID workspaceId) {
+        return apiTokenRepository.findByWorkspaceIdAndTokenTypeOrderByCreatedAtDesc(workspaceId, "service").stream()
+                .map(token -> ApiTokenResponse.from(token, null))
+                .toList();
     }
 
     @Transactional
@@ -194,8 +211,30 @@ public class ApiTokenService {
         domainEventService.record(workspaceId, "api_token", token.getId(), eventType, payload);
     }
 
-    private JsonNode scopes(JsonNode scopes) {
-        return scopes == null || scopes.isNull() ? objectMapper.createArrayNode() : scopes;
+    private JsonNode scopes(List<String> scopes) {
+        if (scopes == null || scopes.isEmpty()) {
+            return objectMapper.createArrayNode().add("*");
+        }
+        var array = objectMapper.createArrayNode();
+        for (String scope : scopes) {
+            if (scope != null && !scope.isBlank()) {
+                array.add(scope.trim());
+            }
+        }
+        return array.isEmpty() ? objectMapper.createArrayNode().add("*") : array;
+    }
+
+    private Set<String> scopeSet(JsonNode scopes) {
+        if (scopes == null || !scopes.isArray() || scopes.isEmpty()) {
+            return Set.of("*");
+        }
+        Set<String> values = new LinkedHashSet<>();
+        for (JsonNode scope : scopes) {
+            if (scope.isTextual() && !scope.asText().isBlank()) {
+                values.add(scope.asText().trim());
+            }
+        }
+        return values.isEmpty() ? Set.of("*") : values;
     }
 
     private RawApiToken newRawToken(String typePrefix) {
@@ -247,5 +286,8 @@ public class ApiTokenService {
     }
 
     private record RawApiToken(String value, String prefix) {
+    }
+
+    public record ApiTokenAuthentication(UUID userId, UUID apiTokenId, String tokenType, Set<String> scopes) {
     }
 }

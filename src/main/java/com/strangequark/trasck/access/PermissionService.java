@@ -33,35 +33,38 @@ public class PermissionService {
 
     @Transactional(readOnly = true)
     public boolean canManageUsers(Authentication authentication, UUID workspaceId) {
-        return userId(authentication)
-                .map(userId -> hasWorkspacePermission(userId, workspaceId, "user.manage"))
+        return principal(authentication)
+                .filter(principal -> principal.allowsScope("user.manage"))
+                .map(principal -> hasWorkspacePermission(principal.userId(), workspaceId, "user.manage"))
                 .orElse(false);
     }
 
     @Transactional(readOnly = true)
     public boolean canManageWorkspace(Authentication authentication, UUID workspaceId) {
-        return userId(authentication)
-                .map(userId -> hasWorkspacePermission(userId, workspaceId, "workspace.admin"))
+        return principal(authentication)
+                .filter(principal -> principal.allowsScope("workspace.admin"))
+                .map(principal -> hasWorkspacePermission(principal.userId(), workspaceId, "workspace.admin"))
                 .orElse(false);
     }
 
     @Transactional(readOnly = true)
     public boolean canUseProject(Authentication authentication, UUID projectId, String permissionKey) {
-        return userId(authentication)
-                .map(userId -> hasProjectPermission(userId, projectId, permissionKey))
+        return principal(authentication)
+                .filter(principal -> principal.allowsScope(permissionKey))
+                .map(principal -> hasProjectPermission(principal.userId(), projectId, permissionKey))
                 .orElse(false);
     }
 
     @Transactional(readOnly = true)
     public void requireWorkspacePermission(UUID userId, UUID workspaceId, String permissionKey) {
-        if (!hasWorkspacePermission(userId, workspaceId, permissionKey)) {
+        if (!currentPrincipalAllows(permissionKey) || !hasWorkspacePermission(userId, workspaceId, permissionKey)) {
             throw forbidden();
         }
     }
 
     @Transactional(readOnly = true)
     public void requireProjectPermission(UUID userId, UUID projectId, String permissionKey) {
-        if (!hasProjectPermission(userId, projectId, permissionKey)) {
+        if (!currentPrincipalAllows(permissionKey) || !hasProjectPermission(userId, projectId, permissionKey)) {
             throw forbidden();
         }
     }
@@ -89,11 +92,16 @@ public class PermissionService {
                 .isPresent();
     }
 
-    private Optional<UUID> userId(Authentication authentication) {
+    private Optional<TrasckPrincipal> principal(Authentication authentication) {
         if (authentication == null || !(authentication.getPrincipal() instanceof TrasckPrincipal principal)) {
             return Optional.empty();
         }
-        return Optional.of(principal.userId());
+        return Optional.of(principal);
+    }
+
+    private boolean currentPrincipalAllows(String permissionKey) {
+        Authentication authentication = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return principal(authentication).map(principal -> principal.allowsScope(permissionKey)).orElse(true);
     }
 
     private ResponseStatusException forbidden() {

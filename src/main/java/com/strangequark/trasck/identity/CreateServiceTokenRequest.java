@@ -1,7 +1,7 @@
 package com.strangequark.trasck.identity;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public record CreateServiceTokenRequest(
@@ -9,7 +9,7 @@ public record CreateServiceTokenRequest(
         String username,
         String displayName,
         UUID roleId,
-        JsonNode scopes,
+        List<String> scopes,
         OffsetDateTime expiresAt
 ) {
 }

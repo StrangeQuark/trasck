@@ -189,7 +189,7 @@ public class AuthService {
                 oauth.providerUsername(),
                 oauth.displayName(),
                 oauth.avatarUrl(),
-                oauth.metadata()
+                toJsonNode(oauth.metadata())
         ));
     }
 
@@ -354,6 +354,16 @@ public class AuthService {
         }
         result.put("emailVerified", Boolean.TRUE.equals(emailVerified));
         return result;
+    }
+
+    private JsonNode toJsonNode(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof JsonNode jsonNode) {
+            return jsonNode;
+        }
+        return objectMapper.valueToTree(value);
     }
 
     private void recordUserEvent(UUID workspaceId, User user, String eventType) {

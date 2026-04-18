@@ -1,6 +1,6 @@
 package com.strangequark.trasck.workitem;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.strangequark.trasck.JsonValues;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -22,7 +22,7 @@ public record WorkItemResponse(
         Long workspaceSequenceNumber,
         String title,
         String descriptionMarkdown,
-        JsonNode descriptionDocument,
+        Object descriptionDocument,
         String visibility,
         BigDecimal estimatePoints,
         Integer estimateMinutes,
@@ -52,7 +52,7 @@ public record WorkItemResponse(
                 item.getWorkspaceSequenceNumber(),
                 item.getTitle(),
                 item.getDescriptionMarkdown(),
-                item.getDescriptionDocument(),
+                JsonValues.toJavaValue(item.getDescriptionDocument()),
                 item.getVisibility(),
                 item.getEstimatePoints(),
                 item.getEstimateMinutes(),
