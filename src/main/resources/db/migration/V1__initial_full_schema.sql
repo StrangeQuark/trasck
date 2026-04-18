@@ -728,17 +728,20 @@ create table mentions (
 
 create table activity_events (
     id uuid primary key default gen_random_uuid(),
+    domain_event_id uuid,
     workspace_id uuid not null references workspaces(id) on delete cascade,
     actor_id uuid references users(id) on delete set null,
     entity_type varchar(80) not null,
     entity_id uuid not null,
     event_type varchar(120) not null,
     metadata jsonb not null default '{}'::jsonb,
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    unique (domain_event_id, entity_type, entity_id)
 );
 
 create table audit_log_entries (
     id uuid primary key default gen_random_uuid(),
+    domain_event_id uuid,
     workspace_id uuid not null references workspaces(id) on delete cascade,
     actor_id uuid references users(id) on delete set null,
     action varchar(120) not null,
@@ -748,7 +751,8 @@ create table audit_log_entries (
     after_value jsonb,
     ip_address varchar(80),
     user_agent text,
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    unique (domain_event_id, workspace_id, action)
 );
 
 create table domain_events (
@@ -791,6 +795,18 @@ create table event_consumer_configs (
     enabled boolean not null default true,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
+);
+
+create table audit_retention_policies (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null unique references workspaces(id) on delete cascade,
+    retention_enabled boolean not null default false,
+    retention_days integer,
+    updated_by_id uuid references users(id) on delete set null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_audit_retention_days_positive check (retention_days is null or retention_days > 0),
+    constraint ck_audit_retention_enabled_days check (retention_enabled = false or retention_days is not null)
 );
 
 create table work_item_status_history (
@@ -1380,6 +1396,7 @@ create trigger trg_agent_profiles_updated_at before update on agent_profiles for
 create trigger trg_repository_connections_updated_at before update on repository_connections for each row execute function set_updated_at();
 create trigger trg_domain_event_deliveries_updated_at before update on domain_event_deliveries for each row execute function set_updated_at();
 create trigger trg_event_consumer_configs_updated_at before update on event_consumer_configs for each row execute function set_updated_at();
+create trigger trg_audit_retention_policies_updated_at before update on audit_retention_policies for each row execute function set_updated_at();
 
 create index ix_users_account_type on users(account_type);
 create index ix_workspaces_organization_key on workspaces(organization_id, key);
@@ -1430,6 +1447,7 @@ create index ix_work_logs_work_item_work_date on work_logs(work_item_id, work_da
 create index ix_work_logs_user_work_date on work_logs(user_id, work_date);
 create index ix_attachments_workspace on attachments(workspace_id);
 create index ix_activity_events_workspace_created_at on activity_events(workspace_id, created_at);
+create index ix_activity_events_entity_created_at on activity_events(entity_type, entity_id, created_at);
 create index ix_audit_log_entries_workspace_created_at on audit_log_entries(workspace_id, created_at);
 create index ix_domain_events_workspace_occurred_at on domain_events(workspace_id, occurred_at);
 create index ix_domain_events_aggregate on domain_events(aggregate_type, aggregate_id);

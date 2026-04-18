@@ -25,6 +25,9 @@ public class ActivityEvent {
     @Column(name = "id")
     private UUID id;
 
+    @Column(name = "domain_event_id")
+    private UUID domainEventId;
+
     @Column(name = "workspace_id")
     private UUID workspaceId;
 
@@ -54,6 +57,14 @@ public class ActivityEvent {
 
     public void setId(UUID id) {
         this.id = id;
+    }
+
+    public UUID getDomainEventId() {
+        return domainEventId;
+    }
+
+    public void setDomainEventId(UUID domainEventId) {
+        this.domainEventId = domainEventId;
     }
 
     public UUID getWorkspaceId() {

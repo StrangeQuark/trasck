@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.event.DomainEventOutboxDispatcher;
 import com.strangequark.trasck.event.DomainEventPublished;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -14,6 +15,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -61,6 +63,9 @@ class WorkItemApiIntegrationTest {
 
     @Autowired
     private CapturedDomainEvents capturedDomainEvents;
+
+    @Autowired
+    private DomainEventOutboxDispatcher domainEventOutboxDispatcher;
 
     private String accessToken;
 
@@ -233,6 +238,22 @@ class WorkItemApiIntegrationTest {
         assertThat(getJson("/api/v1/work-items/" + storyId + "/links")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + commentId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/comments")).isEmpty();
+
+        domainEventOutboxDispatcher.dispatchPending();
+        JsonNode workItemActivity = getJson("/api/v1/work-items/" + storyId + "/activity");
+        assertThat(eventTypes(workItemActivity)).contains("work_item.created", "work_item.comment_created", "work_item.attachment_removed");
+        JsonNode projectActivity = getJson("/api/v1/workspaces/" + workspaceId + "/projects/" + projectId + "/activity");
+        assertThat(eventTypes(projectActivity)).contains("work_item.created", "work_item.updated");
+        JsonNode workspaceActivity = getJson("/api/v1/workspaces/" + workspaceId + "/activity");
+        assertThat(eventTypes(workspaceActivity)).contains("work_item.created", "label.created");
+
+        ObjectNode replayRequest = objectMapper.createObjectNode()
+                .put("includePublished", true);
+        replayRequest.set("consumerKeys", objectMapper.createArrayNode().add("activity-projection"));
+        JsonNode replay = postJson("/api/v1/workspaces/" + workspaceId + "/domain-events/replay", replayRequest);
+        assertThat(replay.at("/deliveriesReset").asInt()).isGreaterThan(0);
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(countActivity("work_item", storyId, "work_item.created")).isEqualTo(1);
 
         HttpResponse<String> archiveResponse = delete("/api/v1/work-items/" + storyId);
         assertThat(archiveResponse.statusCode()).isEqualTo(204);
@@ -436,11 +457,28 @@ class WorkItemApiIntegrationTest {
         return UUID.fromString(node.at(pointer).asText());
     }
 
+    private List<String> eventTypes(JsonNode events) {
+        List<String> types = new ArrayList<>();
+        events.forEach(event -> types.add(event.at("/eventType").asText()));
+        return types;
+    }
+
     private int countWhere(String table, String column, Object value) {
         Integer count = jdbcTemplate.queryForObject(
                 "select count(*) from " + table + " where " + column + " = ?",
                 Integer.class,
                 value
+        );
+        return count == null ? 0 : count;
+    }
+
+    private int countActivity(String entityType, UUID entityId, String eventType) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from activity_events where entity_type = ? and entity_id = ? and event_type = ?",
+                Integer.class,
+                entityType,
+                entityId,
+                eventType
         );
         return count == null ? 0 : count;
     }

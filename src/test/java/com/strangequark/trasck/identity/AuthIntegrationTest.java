@@ -232,6 +232,38 @@ class AuthIntegrationTest {
         assertThat(countWhere("domain_event_deliveries", "consumer_key", "auth-integration-test")).isGreaterThan(0);
         assertThat(countWhere("domain_event_deliveries", "consumer_key", "configured-auth-test")).isEqualTo(1);
         assertThat(countWhere("domain_events", "processing_status", "published")).isGreaterThan(0);
+
+        JsonNode defaultRetention = read(get("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy", admin.accessToken()));
+        assertThat(defaultRetention.at("/retentionEnabled").asBoolean()).isFalse();
+        JsonNode retention = read(put("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy", objectMapper.createObjectNode()
+                .put("retentionEnabled", true)
+                .put("retentionDays", 365), admin.accessToken()));
+        assertThat(retention.at("/retentionEnabled").asBoolean()).isTrue();
+        assertThat(retention.at("/retentionDays").asInt()).isEqualTo(365);
+
+        UUID secretEventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                insert into domain_events (id, workspace_id, aggregate_type, aggregate_id, event_type, payload)
+                values (?, ?, ?, ?, ?, cast(? as jsonb))
+                """,
+                secretEventId,
+                workspaceId,
+                "user",
+                adminUserId,
+                "auth.user_created",
+                "{\"actorUserId\":\"" + adminUserId + "\",\"userId\":\"" + adminUserId + "\",\"secret\":\"super-secret\",\"token\":\"raw-token\",\"safe\":\"visible\"}"
+        );
+        domainEventOutboxDispatcher.dispatchPending();
+        JsonNode auditLog = read(get("/api/v1/workspaces/" + workspaceId + "/audit-log?limit=100", admin.accessToken()));
+        assertThat(actions(auditLog)).contains("audit.retention_policy_updated", "auth.service_token_created", "auth.user_created");
+        assertThat(auditLog.toString()).contains("[REDACTED]").doesNotContain("super-secret").doesNotContain("raw-token");
+
+        ObjectNode replayRequest = objectMapper.createObjectNode().put("includePublished", true);
+        replayRequest.set("consumerKeys", objectMapper.createArrayNode().add("audit-projection"));
+        JsonNode replay = read(post("/api/v1/workspaces/" + workspaceId + "/domain-events/replay", replayRequest, admin.accessToken()));
+        assertThat(replay.at("/deliveriesReset").asInt()).isGreaterThan(0);
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(countAuditForDomainEvent(secretEventId)).isEqualTo(1);
     }
 
     private JsonNode postSetup() throws Exception {
@@ -274,6 +306,14 @@ class AuthIntegrationTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> put(String path, JsonNode body, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
@@ -340,6 +380,14 @@ class AuthIntegrationTest {
         return UUID.fromString(node.at(pointer).asText());
     }
 
+    private String[] actions(JsonNode entries) {
+        String[] actions = new String[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            actions[i] = entries.get(i).at("/action").asText();
+        }
+        return actions;
+    }
+
     private UUID roleId(JsonNode setup, String key) {
         for (JsonNode role : setup.at("/seedData/roles")) {
             if (key.equals(role.at("/key").asText())) {
@@ -354,6 +402,15 @@ class AuthIntegrationTest {
                 "select count(*) from " + table + " where " + column + " = ?",
                 Integer.class,
                 value
+        );
+        return count == null ? 0 : count;
+    }
+
+    private int countAuditForDomainEvent(UUID domainEventId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from audit_log_entries where domain_event_id = ?",
+                Integer.class,
+                domainEventId
         );
         return count == null ? 0 : count;
     }
