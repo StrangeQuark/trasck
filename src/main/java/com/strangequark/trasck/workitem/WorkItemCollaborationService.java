@@ -16,6 +16,9 @@ import com.strangequark.trasck.activity.WatcherRepository;
 import com.strangequark.trasck.activity.WorkItemAttachment;
 import com.strangequark.trasck.activity.WorkItemAttachmentId;
 import com.strangequark.trasck.activity.WorkItemAttachmentRepository;
+import com.strangequark.trasck.activity.storage.AttachmentStorageService;
+import com.strangequark.trasck.activity.storage.AttachmentUpload;
+import com.strangequark.trasck.activity.storage.StoredAttachment;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
@@ -42,6 +45,7 @@ public class WorkItemCollaborationService {
     private final AttachmentRepository attachmentRepository;
     private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
     private final WorkItemAttachmentRepository workItemAttachmentRepository;
+    private final AttachmentStorageService attachmentStorageService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -58,6 +62,7 @@ public class WorkItemCollaborationService {
             AttachmentRepository attachmentRepository,
             AttachmentStorageConfigRepository attachmentStorageConfigRepository,
             WorkItemAttachmentRepository workItemAttachmentRepository,
+            AttachmentStorageService attachmentStorageService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService
@@ -73,6 +78,7 @@ public class WorkItemCollaborationService {
         this.attachmentRepository = attachmentRepository;
         this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
         this.workItemAttachmentRepository = workItemAttachmentRepository;
+        this.attachmentStorageService = attachmentStorageService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -106,10 +112,11 @@ public class WorkItemCollaborationService {
     @Transactional
     public CommentResponse updateComment(UUID workItemId, UUID commentId, CommentRequest request) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.comment");
+        UUID actorId = currentUserService.requireUserId();
         CommentRequest updateRequest = required(request, "request");
         Comment comment = commentRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(commentId, workItemId)
                 .orElseThrow(() -> notFound("Comment not found"));
+        requireCommentMutationPermission(item, comment, actorId);
         if (updateRequest.bodyMarkdown() != null) {
             comment.setBodyMarkdown(requiredText(updateRequest.bodyMarkdown(), "bodyMarkdown"));
         }
@@ -127,9 +134,10 @@ public class WorkItemCollaborationService {
     @Transactional
     public void deleteComment(UUID workItemId, UUID commentId) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.comment");
+        UUID actorId = currentUserService.requireUserId();
         Comment comment = commentRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(commentId, workItemId)
                 .orElseThrow(() -> notFound("Comment not found"));
+        requireCommentMutationPermission(item, comment, actorId);
         comment.setDeletedAt(OffsetDateTime.now());
         recordWorkItemEvent(item, "work_item.comment_deleted", actorId, "commentId", comment.getId());
     }
@@ -189,8 +197,9 @@ public class WorkItemCollaborationService {
     @Transactional
     public WatcherResponse addWatcher(UUID workItemId, WatcherRequest request) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.update");
-        UUID watcherUserId = request == null || request.userId() == null ? actorId : request.userId();
+        UUID currentUserId = currentUserService.requireUserId();
+        UUID watcherUserId = request == null || request.userId() == null ? currentUserId : request.userId();
+        UUID actorId = requireWatcherMutationPermission(item, watcherUserId);
         activeUser(watcherUserId);
         Watcher watcher = new Watcher();
         watcher.setId(new WatcherId(workItemId, watcherUserId));
@@ -205,7 +214,7 @@ public class WorkItemCollaborationService {
     @Transactional
     public void removeWatcher(UUID workItemId, UUID userId) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.update");
+        UUID actorId = requireWatcherMutationPermission(item, required(userId, "userId"));
         WatcherId id = new WatcherId(workItemId, userId);
         if (watcherRepository.existsById(id)) {
             watcherRepository.deleteById(id);
@@ -315,12 +324,68 @@ public class WorkItemCollaborationService {
     }
 
     @Transactional
+    public AttachmentResponse uploadAttachment(
+            UUID workItemId,
+            String filename,
+            String contentType,
+            byte[] content,
+            UUID storageConfigId,
+            String checksum,
+            String visibility
+    ) {
+        WorkItem item = readableWorkItem(workItemId);
+        UUID actorId = requireProjectPermission(item, "work_item.update");
+        AttachmentStorageConfig storageConfig = resolveActiveStorageConfig(item.getWorkspaceId(), storageConfigId);
+        StoredAttachment stored = attachmentStorageService.store(
+                storageConfig,
+                new AttachmentUpload(requiredText(filename, "filename"), blankToNull(contentType), required(content, "file"), checksum)
+        );
+        try {
+            Attachment attachment = new Attachment();
+            attachment.setWorkspaceId(item.getWorkspaceId());
+            attachment.setStorageConfigId(storageConfig.getId());
+            attachment.setUploaderId(actorId);
+            attachment.setFilename(requiredText(filename, "filename"));
+            attachment.setContentType(blankToNull(contentType));
+            attachment.setStorageKey(stored.storageKey());
+            attachment.setSizeBytes(stored.sizeBytes());
+            attachment.setChecksum(stored.checksum());
+            attachment.setVisibility(normalizeAttachmentVisibility(visibility));
+            Attachment saved = attachmentRepository.save(attachment);
+            WorkItemAttachment join = new WorkItemAttachment();
+            join.setId(new WorkItemAttachmentId(workItemId, saved.getId()));
+            workItemAttachmentRepository.save(join);
+            recordWorkItemEvent(item, "work_item.attachment_added", actorId, "attachmentId", saved.getId());
+            return AttachmentResponse.from(saved);
+        } catch (RuntimeException ex) {
+            attachmentStorageService.delete(storageConfig, stored.storageKey());
+            throw ex;
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public AttachmentFileResponse downloadAttachment(UUID workItemId, UUID attachmentId) {
+        WorkItem item = readableWorkItem(workItemId);
+        requireProjectPermission(item, "work_item.read");
+        Attachment attachment = attachmentForWorkItem(workItemId, attachmentId);
+        AttachmentStorageConfig storageConfig = resolveExistingStorageConfig(item.getWorkspaceId(), attachment.getStorageConfigId());
+        byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
+        return new AttachmentFileResponse(attachment.getFilename(), attachment.getContentType(), bytes);
+    }
+
+    @Transactional
     public void removeAttachment(UUID workItemId, UUID attachmentId) {
         WorkItem item = readableWorkItem(workItemId);
         UUID actorId = requireProjectPermission(item, "work_item.update");
         WorkItemAttachmentId id = new WorkItemAttachmentId(workItemId, attachmentId);
         if (workItemAttachmentRepository.existsById(id)) {
+            Attachment attachment = attachmentRepository.findById(attachmentId).orElseThrow(() -> notFound("Attachment not found"));
+            boolean removeBytes = workItemAttachmentRepository.countByIdAttachmentId(attachmentId) <= 1;
             workItemAttachmentRepository.deleteById(id);
+            if (removeBytes) {
+                deleteAttachmentBytes(item.getWorkspaceId(), attachment);
+                attachmentRepository.delete(attachment);
+            }
             recordWorkItemEvent(item, "work_item.attachment_removed", actorId, "attachmentId", attachmentId);
         }
     }
@@ -331,6 +396,18 @@ public class WorkItemCollaborationService {
 
     private UUID requireProjectPermission(WorkItem item, String permissionKey) {
         UUID actorId = currentUserService.requireUserId();
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
+        return actorId;
+    }
+
+    private void requireCommentMutationPermission(WorkItem item, Comment comment, UUID actorId) {
+        String permissionKey = actorId.equals(comment.getAuthorId()) ? "work_item.comment" : "work_item.update";
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
+    }
+
+    private UUID requireWatcherMutationPermission(WorkItem item, UUID watcherUserId) {
+        UUID actorId = currentUserService.requireUserId();
+        String permissionKey = actorId.equals(watcherUserId) ? "work_item.read" : "work_item.update";
         permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
         return actorId;
     }
@@ -360,17 +437,37 @@ public class WorkItemCollaborationService {
     }
 
     private UUID resolveStorageConfigId(UUID workspaceId, UUID storageConfigId) {
+        return resolveActiveStorageConfig(workspaceId, storageConfigId).getId();
+    }
+
+    private AttachmentStorageConfig resolveActiveStorageConfig(UUID workspaceId, UUID storageConfigId) {
         if (storageConfigId == null) {
             return attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(workspaceId)
-                    .map(AttachmentStorageConfig::getId)
-                    .orElse(null);
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default attachment storage config not found"));
         }
-        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findById(storageConfigId)
+        return attachmentStorageConfigRepository.findByIdAndWorkspaceIdAndActiveTrue(storageConfigId, workspaceId)
                 .orElseThrow(() -> notFound("Attachment storage config not found"));
-        if (!workspaceId.equals(storageConfig.getWorkspaceId()) || !Boolean.TRUE.equals(storageConfig.getActive())) {
-            throw notFound("Attachment storage config not found");
+    }
+
+    private AttachmentStorageConfig resolveExistingStorageConfig(UUID workspaceId, UUID storageConfigId) {
+        UUID id = required(storageConfigId, "storageConfigId");
+        return attachmentStorageConfigRepository.findByIdAndWorkspaceId(id, workspaceId)
+                .orElseThrow(() -> notFound("Attachment storage config not found"));
+    }
+
+    private Attachment attachmentForWorkItem(UUID workItemId, UUID attachmentId) {
+        if (!workItemAttachmentRepository.existsById(new WorkItemAttachmentId(workItemId, attachmentId))) {
+            throw notFound("Attachment not found");
         }
-        return storageConfig.getId();
+        return attachmentRepository.findById(attachmentId).orElseThrow(() -> notFound("Attachment not found"));
+    }
+
+    private void deleteAttachmentBytes(UUID workspaceId, Attachment attachment) {
+        if (attachment.getStorageConfigId() == null) {
+            return;
+        }
+        AttachmentStorageConfig storageConfig = resolveExistingStorageConfig(workspaceId, attachment.getStorageConfigId());
+        attachmentStorageService.delete(storageConfig, attachment.getStorageKey());
     }
 
     private void recordWorkItemEvent(WorkItem item, String eventType, UUID actorId, String relatedIdName, UUID relatedId) {
@@ -444,6 +541,10 @@ public class WorkItemCollaborationService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " is required");
         }
         return value.trim();
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private record LabelMutation(Label label, boolean created) {

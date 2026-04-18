@@ -44,6 +44,8 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 32. Domain events have both immediate in-process publication and durable outbox dispatch. Persisted events remain pending until static or database-configured durable consumers record successful per-consumer delivery rows.
 33. Personal and service API token scopes are enforced in addition to role permissions. A token can reduce access but cannot grant permissions beyond the backing user's workspace/project roles.
 34. Service-token-backed `service` users should be managed through dedicated service-token/admin surfaces by default, not mixed into normal human user/member lists.
+35. Work item attachment bytes use a provider-neutral storage interface. Local filesystem storage is the default development provider; S3-compatible object storage is selected through workspace storage configuration.
+36. The first AI provider adapter should be a stub/local implementation to prove the provider-neutral lifecycle before adding Codex-specific, Claude-specific, or hosted-provider behavior.
 
 ## Full Work Hierarchy
 
@@ -172,7 +174,7 @@ Implemented endpoints:
 - `GET /api/v1/work-items/{workItemId}/links`, `POST /api/v1/work-items/{workItemId}/links`, and `DELETE /api/v1/work-items/{workItemId}/links/{linkId}` manage non-hierarchical work item links.
 - `GET /api/v1/work-items/{workItemId}/watchers`, `POST /api/v1/work-items/{workItemId}/watchers`, and `DELETE /api/v1/work-items/{workItemId}/watchers/{userId}` manage work item watchers.
 - `GET /api/v1/workspaces/{workspaceId}/labels`, `POST /api/v1/workspaces/{workspaceId}/labels`, `GET /api/v1/work-items/{workItemId}/labels`, `POST /api/v1/work-items/{workItemId}/labels`, and `DELETE /api/v1/work-items/{workItemId}/labels/{labelId}` manage workspace labels and work item label assignments.
-- `GET /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments`, and `DELETE /api/v1/work-items/{workItemId}/attachments/{attachmentId}` manage attachment metadata for work items. File bytes still need the attachment storage service.
+- `GET /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments/files`, `GET /api/v1/work-items/{workItemId}/attachments/{attachmentId}/download`, and `DELETE /api/v1/work-items/{workItemId}/attachments/{attachmentId}` manage attachment metadata and file bytes for work items.
 
 Implemented seed data:
 
@@ -194,6 +196,7 @@ Security state:
 - Service token records can be listed through dedicated admin/token APIs without exposing hashes or raw token values. Service users remain implementation identities behind those token-management surfaces by default.
 - Invitations can grant workspace membership only, or workspace membership plus project-specific membership when `projectId` and `projectRoleId` are included.
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
+- Comment edits/deletes are author-or-admin shaped: authors need `work_item.comment`; users editing/deleting someone else's comment need `work_item.update`. Watcher self-service add/remove requires `work_item.read`; managing watchers for other users requires `work_item.update`.
 
 Work item implementation state:
 
@@ -201,7 +204,8 @@ Work item implementation state:
 - Parent changes rebuild `work_item_closure` transactionally for the project.
 - Sequence allocation uses durable project and workspace sequence counter tables.
 - Work item rank uses fixed-width sortable strings.
-- Work item collaboration APIs cover comments, links, watchers, labels, and basic attachment metadata. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, and common bad inputs before database constraints are hit.
+- Work item collaboration APIs cover comments, links, watchers, labels, attachment metadata, and attachment byte upload/download/delete. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, storage configuration, checksums, and common bad inputs before database constraints are hit.
+- Attachment byte storage is behind a provider-neutral storage interface. The first providers are local filesystem storage for development and S3-compatible object storage selected by workspace attachment storage configuration. Local filesystem roots default from `trasck.attachments.local-root`; uploaded files receive generated storage keys and SHA-256 checksums.
 - Work item and collaboration changes persist rows in `domain_events`, publish in-process Spring events after commit, and remain pending in the durable outbox until static or database-configured consumers complete delivery through `domain_event_deliveries`.
 
 ## Database Conventions
@@ -1686,6 +1690,8 @@ POST   /api/v1/work-items/{id}/labels
 DELETE /api/v1/work-items/{id}/labels/{labelId}
 GET    /api/v1/work-items/{id}/attachments
 POST   /api/v1/work-items/{id}/attachments
+POST   /api/v1/work-items/{id}/attachments/files
+GET    /api/v1/work-items/{id}/attachments/{attachmentId}/download
 DELETE /api/v1/work-items/{id}/attachments/{attachmentId}
 POST   /api/v1/work-items/{id}/assign-agent
 POST   /api/v1/work-items/bulk
@@ -1734,6 +1740,8 @@ AgentProviderConfigured
 ```
 
 Activity events are for product UI. Audit log entries are for security/compliance.
+
+Activity and audit rows should be written by durable event consumers fed from `domain_events`, not by duplicating ad hoc writes throughout every command service. Consumers must be idempotent and should record delivery attempts in `domain_event_deliveries`.
 
 Examples:
 
@@ -1847,7 +1855,7 @@ Trasck should support AI-assisted execution without becoming dependent on any on
 Provider model:
 
 - `agent_providers.provider_type` selects an adapter such as `codex`, `claude_code`, `webhook`, `local_runner`, `hosted_service`, or `custom`.
-- Codex is the first provider adapter to implement, while keeping the adapter contract generic enough for Claude Code, webhook workers, local runners, hosted services, and future agents.
+- The first provider adapter should be a non-external stub/local runner to prove the provider-neutral lifecycle without paid or vendor-specific execution. Codex, Claude Code, webhook workers, hosted services, and future agents should then plug into the same contract.
 - `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff. Manual handoff is the default dispatch mode.
 - Provider-specific options belong in `agent_providers.config`; shared capability declarations belong in `capability_schema`.
 - Provider credentials should be encrypted database values first. Secrets must not be embedded directly in provider configs or agent task payloads.
@@ -2010,7 +2018,7 @@ Recommended order:
 4. Implement work item types, type rules, project type availability, priorities, resolutions, and workspace seed data.
 5. Implement workflows, statuses, transitions, and workflow assignments.
 6. Implement work items, hierarchy validation, closure-table maintenance, ranking, transitions, assignment, archived state, and domain events.
-7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/label/attachment metadata slice is implemented; file bytes, work logs, activity projections, and audit writes remain.
+7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/label/attachment storage slice is implemented; work logs, activity projections, and audit writes remain.
 8. Implement boards, columns, iterations, releases, and roadmaps.
 9. Implement custom fields, screens, screen assignments, and field configurations.
 10. Implement reporting history and snapshots.
@@ -2020,7 +2028,7 @@ Recommended order:
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, and authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, basic attachment metadata, and domain events.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, and authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, attachment metadata, local attachment upload/download/delete cleanup, and domain events.
 
 Required backend tests:
 
