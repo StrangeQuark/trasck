@@ -155,10 +155,10 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(100);
-        assertThat(permissionCount).isEqualTo(26);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(97);
-        assertThat(repositories).hasSizeGreaterThanOrEqualTo(97);
+        assertThat(tableCount).isEqualTo(101);
+        assertThat(permissionCount).isEqualTo(27);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(98);
+        assertThat(repositories).hasSizeGreaterThanOrEqualTo(98);
     }
 
     @Test

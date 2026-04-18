@@ -15,7 +15,6 @@ public record WorkItemCreateRequest(
         String priorityKey,
         UUID assigneeId,
         UUID reporterId,
-        UUID actorUserId,
         String title,
         String descriptionMarkdown,
         JsonNode descriptionDocument,

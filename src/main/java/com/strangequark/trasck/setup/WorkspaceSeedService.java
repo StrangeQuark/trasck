@@ -128,7 +128,7 @@ public class WorkspaceSeedService {
 
     private static final Map<String, List<String>> ROLE_PERMISSIONS = Map.of(
             "workspace_owner", List.of("*"),
-            "workspace_admin", List.of("workspace.admin", "workspace.read", "project.create", "project.admin", "project.read",
+            "workspace_admin", List.of("workspace.admin", "workspace.read", "user.manage", "project.create", "project.admin", "project.read",
                     "work_item.create", "work_item.read", "work_item.update", "work_item.delete", "work_item.transition",
                     "work_item.comment", "work_item.link", "workflow.admin", "board.admin", "automation.admin", "report.read",
                     "agent.provider.manage", "agent.provider.credential.manage", "agent.profile.manage", "agent.assign",

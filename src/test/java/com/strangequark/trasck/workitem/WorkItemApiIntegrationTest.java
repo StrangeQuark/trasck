@@ -53,6 +53,8 @@ class WorkItemApiIntegrationTest {
     @Autowired
     private CapturedDomainEvents capturedDomainEvents;
 
+    private String accessToken;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -65,6 +67,7 @@ class WorkItemApiIntegrationTest {
     @BeforeEach
     void clearCapturedEvents() {
         capturedDomainEvents.clear();
+        accessToken = null;
     }
 
     @Test
@@ -72,6 +75,9 @@ class WorkItemApiIntegrationTest {
         JsonNode setup = postSetup();
         UUID actorId = uuid(setup, "/adminUser/id");
         UUID projectId = uuid(setup, "/project/id");
+
+        assertThat(get("/api/v1/projects/" + projectId + "/work-items").statusCode()).isEqualTo(401);
+        accessToken = login(setup);
 
         JsonNode firstEpic = createWorkItem(projectId, actorId, "epic", null, "First epic", null);
         UUID firstEpicId = uuid(firstEpic, "/id");
@@ -95,50 +101,43 @@ class WorkItemApiIntegrationTest {
         UUID secondEpicId = uuid(secondEpic, "/id");
         JsonNode updatedStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
                 .put("title", "Implement story with parent change")
-                .put("parentId", secondEpicId.toString())
-                .put("actorUserId", actorId.toString()));
+                .put("parentId", secondEpicId.toString()));
         assertThat(updatedStory.at("/parentId").asText()).isEqualTo(secondEpicId.toString());
         assertThat(countAncestor(firstEpicId, storyId)).isZero();
         assertThat(countAncestor(secondEpicId, storyId)).isEqualTo(1);
 
         HttpResponse<String> invalidTypeChange = patchResponse("/api/v1/work-items/" + secondEpicId, objectMapper.createObjectNode()
-                .put("typeKey", "story")
-                .put("actorUserId", actorId.toString()));
+                .put("typeKey", "story"));
         assertThat(invalidTypeChange.statusCode()).isEqualTo(400);
 
         JsonNode topLevelStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
-                .put("clearParent", true)
-                .put("actorUserId", actorId.toString()));
+                .put("clearParent", true));
         assertThat(topLevelStory.at("/parentId").isMissingNode() || topLevelStory.at("/parentId").isNull()).isTrue();
         assertThat(countAncestor(secondEpicId, storyId)).isZero();
         assertThat(countWhere("work_item_closure", "descendant_work_item_id", storyId)).isEqualTo(1);
 
         JsonNode assignedStory = postJson("/api/v1/work-items/" + storyId + "/assign", objectMapper.createObjectNode()
-                .put("assigneeId", actorId.toString())
-                .put("actorUserId", actorId.toString()));
+                .put("assigneeId", actorId.toString()));
         assertThat(assignedStory.at("/assigneeId").asText()).isEqualTo(actorId.toString());
         assertThat(countWhere("work_item_assignment_history", "work_item_id", storyId)).isEqualTo(1);
 
         JsonNode rankedStory = postJson("/api/v1/work-items/" + storyId + "/rank", objectMapper.createObjectNode()
-                .put("previousWorkItemId", secondEpicId.toString())
-                .put("actorUserId", actorId.toString()));
+                .put("previousWorkItemId", secondEpicId.toString()));
         assertThat(rankedStory.at("/rank").asText()).isGreaterThan(secondEpic.at("/rank").asText());
 
         JsonNode readyStory = postJson("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
-                .put("transitionKey", "open_to_ready")
-                .put("actorUserId", actorId.toString()));
+                .put("transitionKey", "open_to_ready"));
         assertThat(readyStory.at("/statusId").asText()).isNotEqualTo(story.at("/statusId").asText());
         assertThat(countWhere("work_item_status_history", "work_item_id", storyId)).isEqualTo(2);
 
         HttpResponse<String> invalidTransition = post("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
-                .put("transitionKey", "approval_to_done")
-                .put("actorUserId", actorId.toString()));
+                .put("transitionKey", "approval_to_done"));
         assertThat(invalidTransition.statusCode()).isEqualTo(400);
 
         JsonNode projectWorkItems = getJson("/api/v1/projects/" + projectId + "/work-items");
         assertThat(projectWorkItems).hasSize(3);
 
-        HttpResponse<String> archiveResponse = delete("/api/v1/work-items/" + storyId + "?actorUserId=" + actorId);
+        HttpResponse<String> archiveResponse = delete("/api/v1/work-items/" + storyId);
         assertThat(archiveResponse.statusCode()).isEqualTo(204);
         assertThat(get("/api/v1/work-items/" + storyId).statusCode()).isEqualTo(404);
 
@@ -181,9 +180,19 @@ class WorkItemApiIntegrationTest {
                 .put("key", "WIP" + unique.substring(0, 6))
                 .put("description", "Project created by work item integration test")
                 .put("visibility", "public"));
-        HttpResponse<String> response = post("/api/v1/setup", body);
+        HttpResponse<String> response = rawPost("/api/v1/setup", body);
         assertThat(response.statusCode()).isEqualTo(201);
         return objectMapper.readTree(response.body());
+    }
+
+    private String login(JsonNode setup) throws Exception {
+        ObjectNode body = objectMapper.createObjectNode()
+                .put("identifier", setup.at("/adminUser/email").asText())
+                .put("password", "correct-horse-battery-staple");
+        HttpResponse<String> response = rawPost("/api/v1/auth/login", body);
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Set-Cookie")).hasValueSatisfying(cookie -> assertThat(cookie).contains("HttpOnly"));
+        return objectMapper.readTree(response.body()).at("/accessToken").asText();
     }
 
     private JsonNode createWorkItem(UUID projectId, UUID actorId, String typeKey, UUID parentId, String title, UUID assigneeId) throws Exception {
@@ -197,7 +206,6 @@ class WorkItemApiIntegrationTest {
                 .put("typeKey", typeKey)
                 .put("title", title)
                 .put("descriptionMarkdown", "Test work item")
-                .put("actorUserId", actorId.toString())
                 .put("reporterId", actorId.toString());
         if (parentId != null) {
             body.put("parentId", parentId.toString());
@@ -221,11 +229,11 @@ class WorkItemApiIntegrationTest {
     }
 
     private HttpResponse<String> patchResponse(String path, JsonNode body) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(uri(path))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
-                .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
-                .build();
-        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private JsonNode getJson(String path) throws Exception {
@@ -235,6 +243,14 @@ class WorkItemApiIntegrationTest {
     }
 
     private HttpResponse<String> post(String path, JsonNode body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> rawPost(String path, JsonNode body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
@@ -243,13 +259,21 @@ class WorkItemApiIntegrationTest {
     }
 
     private HttpResponse<String> get(String path) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(uri(path)).GET().build();
-        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private HttpResponse<String> delete(String path) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(uri(path)).DELETE().build();
-        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).DELETE();
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void authorize(HttpRequest.Builder builder) {
+        if (accessToken != null) {
+            builder.header("Authorization", "Bearer " + accessToken);
+        }
     }
 
     private URI uri(String path) {

@@ -4,44 +4,25 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend slices.
 
-1. For authentication, should browser clients use secure HTTP-only cookie sessions, bearer tokens, or support both?
-2. Should username/password registration be invitation-only after first setup, or should workspace admins be able to create users directly?
-3. Should OAuth account linking require an already-authenticated user, or should matching verified email addresses be allowed to link automatically?
-4. What should the first permission-checking shape be: method-level annotations, explicit service calls, request filters, or a combination?
-5. Should the temporary unauthenticated work item endpoints be locked down immediately as part of the auth task, or kept available under a local/dev profile until the frontend is ready?
-6. Should domain event outbox dispatch be implemented in the auth slice for audit/activity side effects, or wait until automation/notification work begins?
+1. Should cookie-authenticated browser API calls enable CSRF protection immediately, and should that use Spring's cookie CSRF token repository or a custom double-submit token?
+2. Should the current signed `/api/v1/auth/oauth/login` verified-identity endpoint remain as an internal/provider-neutral callback for now, or should the next auth hardening task add full GitHub/Google/GitLab/Microsoft OAuth redirects and callbacks with Spring OAuth client registrations?
+3. Should direct API access keep using short-lived login JWTs only, or should Trasck add revocable personal access tokens and service tokens for users, agents, and external integrations?
+4. Should invitations remain workspace-only for now, or should invitations also be able to grant project-specific membership when accepted?
+5. Should `domain_events.processing_status = published` mean "published in-process" as implemented now, or should events remain pending until each real consumer has completed delivery through per-consumer delivery records?
 
 ## Current State
 
 The backend currently has the full initial relational schema, Flyway migration, JPA entity model, JPA repositories, and persistence tests in place. The schema is designed for the full Trasck product direction, including organizations, workspaces, projects, work item hierarchy, workflows, boards, planning, permissions, automation, reporting, notifications, attachments, imports, exports, audit data, durable domain events, and provider-neutral AI agent execution.
 
-The existing automated verification covers schema creation and representative persistence across the generated JPA model using PostgreSQL through Testcontainers. The backend exposes a first-run-only setup API for creating an admin user, organization, workspace, project, memberships, and deterministic default project configuration. Public project reads are wired through the first security configuration and still checked against workspace/project visibility in domain code.
+The existing automated verification covers schema creation and representative persistence across the generated JPA model using PostgreSQL through Testcontainers. The backend exposes a first-run-only setup API for creating an admin user, organization, workspace, project, memberships, and deterministic default project configuration. Public project reads are wired through the security configuration and still checked against workspace/project visibility in domain code.
 
-The first work item API slice is implemented. Seeded projects can create, read, update, list, assign, rank, transition, and archive work items through REST APIs. The service validates parent-child type rules, project type enablement, same-project structural parentage, workflow assignment/status ownership, transition validity, and existing child validity during type changes. Work item changes maintain closure rows, status history, assignment history, sortable rank strings, project-local sequences, workspace-wide sequences, durable `domain_events` outbox rows, and in-process Spring events.
+Authentication and authorization foundations are implemented. Username/password login returns a JWT and sets the same value in an HTTP-only cookie. Direct API callers can use the token as `Authorization: Bearer`. Invitation-based registration, workspace-admin direct user creation, signed verified OAuth identity linking, method-level admin permissions, explicit service-level work item permission checks, and durable outbox publishing are in place. Work item endpoints are locked down and no longer anonymously accessible.
+
+The first work item API slice is implemented. Authenticated users with project/workspace permissions can create, read, update, list, assign, rank, transition, and archive work items through REST APIs. The service validates parent-child type rules, project type enablement, same-project structural parentage, workflow assignment/status ownership, transition validity, and existing child validity during type changes. Work item changes maintain closure rows, status history, assignment history, sortable rank strings, project-local sequences, workspace-wide sequences, durable `domain_events` outbox rows, and in-process Spring events.
 
 ## Primary Next Steps
 
-### 1. Implement Authentication And Authorization Foundations
-
-Goal: replace the temporary deny-by-default security posture with real identity, login, OAuth, and permission checks.
-
-Planned work:
-
-- Add username/password registration and login on the existing global user model.
-- Add OAuth login through `user_auth_identities` for GitHub, Google, GitLab, and Microsoft.
-- Add session or token strategy for API callers.
-- Add workspace/project permission checks for setup-created memberships and roles.
-- Lock down the temporary open setup/work item API posture according to the chosen auth strategy.
-- Keep anonymous public project reads available through the existing public route.
-- Add tests for login, registration, OAuth identity linking, access denial, membership checks, and anonymous public reads.
-
-Done when:
-
-- Humans can authenticate without Spring's generated password behavior.
-- Protected APIs require a valid identity and appropriate workspace/project permissions.
-- Public projects remain readable anonymously only through explicitly public endpoints.
-
-### 2. Replace Raw UUID Foreign-Key Handling With Richer Associations Where Useful
+### 1. Replace Raw UUID Foreign-Key Handling With Richer Associations Where Useful
 
 Goal: keep the generated JPA foundation pragmatic while improving navigation and query code where associations provide real value.
 
@@ -59,7 +40,7 @@ Done when:
 - The entity model supports useful navigation without turning every relationship into a large implicit object graph.
 - Tests cover the changed mappings and representative queries.
 
-### 3. Add Comment, Link, Watcher, Label, And Basic Attachment APIs
+### 2. Add Comment, Link, Watcher, Label, And Basic Attachment APIs
 
 Goal: complete the core work item collaboration surface before richer planning and AI workflows are layered on.
 
@@ -78,6 +59,26 @@ Done when:
 - A user-facing work item detail page can show and edit the primary collaboration data.
 - Collaboration changes are represented in durable domain events.
 - Tests cover valid and invalid link/comment/watch/label flows.
+
+### 3. Harden Authentication, OAuth, Tokens, And Outbox Semantics
+
+Goal: tighten the auth and event foundations before broader frontend and integration work depends on them.
+
+Planned work:
+
+- Add browser CSRF protection once the frontend request strategy is decided.
+- Decide whether to keep the signed verified OAuth endpoint as an internal callback or add full provider-specific OAuth redirects/callbacks now.
+- Decide whether short-lived JWTs are enough for direct API access or whether revocable personal/service tokens should be added.
+- Decide whether invitation acceptance should optionally create project membership.
+- Decide whether outbox `published` remains a single in-process status or moves to per-consumer delivery records.
+- Add focused tests for the chosen CSRF, OAuth, token, invitation, and outbox behavior.
+
+Done when:
+
+- Browser auth has an explicit CSRF story.
+- OAuth login cannot rely on caller-provided provider claims without backend verification or signed trusted assertions.
+- Direct API token behavior is clear for users, agents, and integrations.
+- Outbox processing semantics are clear before notifications, automation, and webhooks consume events.
 
 ### 4. Add Configurable Attachment Storage Service
 
@@ -122,8 +123,8 @@ The following work should be completed before the application is ready for a mea
 
 ### Backend Readiness
 
-- Implement authentication and account creation according to the chosen first auth path.
-- Add permission checks for workspace and project access.
+- Harden authentication for production use, including CSRF, cookie security defaults, OAuth provider callbacks or trusted callback assertions, and direct API token lifecycle.
+- Expand permission checks beyond work items and user-management endpoints as more APIs are exposed.
 - Add comment, link, watcher, label, and basic attachment APIs.
 - Add provider-neutral agent provider, agent profile, repository connection, and agent task APIs.
 - Add Codex as the first real agent provider adapter while keeping tests isolated from paid or external AI execution.
@@ -142,7 +143,9 @@ The following work should be completed before the application is ready for a mea
 
 ### Test Readiness
 
-- Add permission tests for hierarchy, workflow, work item APIs, and public read access once authentication is implemented.
+- Expand permission tests for hierarchy, workflow, work item APIs, user management, future collaboration APIs, and public read access.
+- Add CSRF, OAuth provider callback/assertion, token expiry, token revocation or rotation, and invitation expiry tests when those decisions are implemented.
+- Add outbox consumer delivery tests once notifications, automation, activity, audit, or webhooks consume durable events.
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for list screens and detail pages.
 - Add attachment storage tests with the first local provider.
