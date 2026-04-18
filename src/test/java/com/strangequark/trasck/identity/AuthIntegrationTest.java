@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.event.DomainEvent;
+import com.strangequark.trasck.event.ConfiguredDomainEventConsumer;
 import com.strangequark.trasck.event.DomainEventConsumer;
+import com.strangequark.trasck.event.EventConsumerConfig;
 import com.strangequark.trasck.event.DomainEventOutboxDispatcher;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -116,6 +118,9 @@ class AuthIntegrationTest {
         ));
         assertThat(personalToken.at("/token").asText()).startsWith("trpat_");
         assertThat(get("/api/v1/auth/me", personalToken.at("/token").asText()).statusCode()).isEqualTo(200);
+        JsonNode listedPersonalTokens = read(get("/api/v1/auth/tokens/personal", admin.accessToken()));
+        assertThat(listedPersonalTokens).hasSize(1);
+        assertThat(listedPersonalTokens.get(0).at("/token").isNull()).isTrue();
 
         HttpResponse<String> openRegister = post("/api/v1/auth/register", objectMapper.createObjectNode()
                 .put("email", "no-invite@example.com")
@@ -173,6 +178,18 @@ class AuthIntegrationTest {
                 .put("roleId", viewerRoleId.toString()), admin.accessToken()));
         assertThat(serviceToken.at("/token").asText()).startsWith("trsvc_");
         assertThat(get("/api/v1/projects/" + projectId + "/work-items", serviceToken.at("/token").asText()).statusCode()).isEqualTo(200);
+        JsonNode listedServiceTokens = read(get("/api/v1/workspaces/" + workspaceId + "/service-tokens", admin.accessToken()));
+        assertThat(listedServiceTokens).hasSize(1);
+        assertThat(listedServiceTokens.get(0).at("/token").isNull()).isTrue();
+
+        JsonNode readOnlyToken = read(post("/api/v1/auth/tokens/personal", objectMapper.createObjectNode()
+                .put("name", "Read-only work item token")
+                .set("scopes", objectMapper.createArrayNode().add("work_item.read")), admin.accessToken()));
+        assertThat(get("/api/v1/projects/" + projectId + "/work-items", readOnlyToken.at("/token").asText()).statusCode()).isEqualTo(200);
+        HttpResponse<String> scopeDeniedCreate = post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Token scope should block create"), readOnlyToken.at("/token").asText());
+        assertThat(scopeDeniedCreate.statusCode()).isEqualTo(403);
 
         HttpResponse<String> oauthRedirect = get("/api/v1/auth/oauth2/authorization/github", null);
         assertThat(oauthRedirect.statusCode()).isBetween(300, 399);
@@ -195,8 +212,13 @@ class AuthIntegrationTest {
         assertThat(countWhere("domain_events", "event_type", "auth.oauth_identity_linked")).isEqualTo(1);
         assertThat(countWhere("domain_events", "processing_status", "published")).isEqualTo(0);
 
+        jdbcTemplate.update("""
+                insert into event_consumer_configs (consumer_key, consumer_type, display_name, event_types, config)
+                values (?, ?, ?, cast(? as jsonb), cast(? as jsonb))
+                """, "configured-auth-test", "test-configured", "Configured Auth Test", "[\"auth.oauth_identity_linked\"]", "{}");
         domainEventOutboxDispatcher.dispatchPending();
         assertThat(countWhere("domain_event_deliveries", "consumer_key", "auth-integration-test")).isGreaterThan(0);
+        assertThat(countWhere("domain_event_deliveries", "consumer_key", "configured-auth-test")).isEqualTo(1);
         assertThat(countWhere("domain_events", "processing_status", "published")).isGreaterThan(0);
     }
 
@@ -344,6 +366,20 @@ class AuthIntegrationTest {
 
                 @Override
                 public void handle(DomainEvent event) {
+                }
+            };
+        }
+
+        @Bean
+        ConfiguredDomainEventConsumer configuredAuthIntegrationDomainEventConsumer() {
+            return new ConfiguredDomainEventConsumer() {
+                @Override
+                public String consumerType() {
+                    return "test-configured";
+                }
+
+                @Override
+                public void handle(DomainEvent event, EventConsumerConfig config) {
                 }
             };
         }

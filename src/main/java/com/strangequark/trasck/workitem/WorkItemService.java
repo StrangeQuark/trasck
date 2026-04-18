@@ -1,5 +1,6 @@
 package com.strangequark.trasck.workitem;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
@@ -129,7 +130,7 @@ public class WorkItemService {
         item.setWorkspaceSequenceNumber(workspaceSequence);
         item.setTitle(requiredText(createRequest.title(), "title"));
         item.setDescriptionMarkdown(createRequest.descriptionMarkdown());
-        item.setDescriptionDocument(createRequest.descriptionDocument());
+        item.setDescriptionDocument(toJsonNode(createRequest.descriptionDocument()));
         item.setVisibility(normalizeVisibility(createRequest.visibility()));
         item.setEstimatePoints(createRequest.estimatePoints());
         item.setEstimateMinutes(createRequest.estimateMinutes());
@@ -204,7 +205,7 @@ public class WorkItemService {
             item.setDescriptionMarkdown(updateRequest.descriptionMarkdown());
         }
         if (updateRequest.descriptionDocument() != null) {
-            item.setDescriptionDocument(updateRequest.descriptionDocument());
+            item.setDescriptionDocument(toJsonNode(updateRequest.descriptionDocument()));
         }
         if (updateRequest.visibility() != null) {
             item.setVisibility(normalizeVisibility(updateRequest.visibility()));
@@ -488,6 +489,16 @@ public class WorkItemService {
             payload.put("actorUserId", actorId.toString());
         }
         domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), eventType, payload);
+    }
+
+    private JsonNode toJsonNode(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof JsonNode jsonNode) {
+            return jsonNode;
+        }
+        return objectMapper.valueToTree(value);
     }
 
     private String normalizeVisibility(String visibility) {

@@ -1,6 +1,4 @@
 package com.strangequark.trasck.workitem;
-
-import com.fasterxml.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -17,7 +15,7 @@ public record WorkItemCreateRequest(
         UUID reporterId,
         String title,
         String descriptionMarkdown,
-        JsonNode descriptionDocument,
+        Object descriptionDocument,
         String visibility,
         BigDecimal estimatePoints,
         Integer estimateMinutes,

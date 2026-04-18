@@ -12,6 +12,8 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
@@ -22,17 +24,23 @@ import org.springframework.stereotype.Component;
 public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
 
     private final AuthService authService;
+    private final OAuth2AuthorizedClientService authorizedClientService;
+    private final OAuthVerifiedEmailResolver verifiedEmailResolver;
     private final ObjectMapper objectMapper;
     private final boolean cookieSecure;
     private final String successRedirectUri;
 
     public OAuth2LoginSuccessHandler(
             AuthService authService,
+            OAuth2AuthorizedClientService authorizedClientService,
+            OAuthVerifiedEmailResolver verifiedEmailResolver,
             ObjectMapper objectMapper,
             @Value("${trasck.security.cookie-secure:false}") boolean cookieSecure,
             @Value("${trasck.security.oauth-success-redirect:http://localhost:5173/auth/callback}") String successRedirectUri
     ) {
         this.authService = authService;
+        this.authorizedClientService = authorizedClientService;
+        this.verifiedEmailResolver = verifiedEmailResolver;
         this.objectMapper = objectMapper;
         this.cookieSecure = cookieSecure;
         this.successRedirectUri = successRedirectUri;
@@ -59,19 +67,13 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
     private OAuthProviderProfile toProfile(String registrationId, OAuth2User principal) {
         Map<String, Object> attributes = principal.getAttributes();
         String provider = registrationId.toLowerCase();
-        String email = firstString(attributes, "email", "mail", "preferred_username", "userPrincipalName");
-        Boolean emailVerified = booleanValue(attributes, "email_verified");
-        if (emailVerified == null) {
-            emailVerified = booleanValue(attributes, "verified_email");
-        }
-        if (emailVerified == null) {
-            emailVerified = email != null && !email.isBlank();
-        }
+        OAuth2AuthorizedClient authorizedClient = authorizedClientService.loadAuthorizedClient(registrationId, principal.getName());
+        OAuthVerifiedEmailResolver.VerifiedEmail verifiedEmail = verifiedEmailResolver.resolve(provider, attributes, authorizedClient);
         return new OAuthProviderProfile(
                 provider,
                 firstString(attributes, "sub", "id", "oid", "user_id", "login", "username", "preferred_username"),
-                email,
-                emailVerified,
+                verifiedEmail.email(),
+                verifiedEmail.verified(),
                 firstString(attributes, "login", "username", "preferred_username", "nickname"),
                 firstString(attributes, "name", "displayName"),
                 firstString(attributes, "avatar_url", "picture"),
@@ -95,14 +97,4 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
         return null;
     }
 
-    private Boolean booleanValue(Map<String, Object> attributes, String name) {
-        Object value = attributes.get(name);
-        if (value instanceof Boolean bool) {
-            return bool;
-        }
-        if (value instanceof String stringValue) {
-            return Boolean.parseBoolean(stringValue);
-        }
-        return null;
-    }
 }

@@ -29,8 +29,27 @@ public class TrasckUserDetailsService implements UserDetailsService {
         return toPrincipal(user);
     }
 
+    public TrasckPrincipal loadUserByApiToken(ApiTokenService.ApiTokenAuthentication apiTokenAuthentication) {
+        User user = userRepository.findById(apiTokenAuthentication.userId())
+                .orElseThrow(() -> new UsernameNotFoundException(apiTokenAuthentication.userId().toString()));
+        return toPrincipal(user, apiTokenAuthentication);
+    }
+
     private TrasckPrincipal toPrincipal(User user) {
         TrasckPrincipal principal = new TrasckPrincipal(user);
+        if (!principal.isEnabled()) {
+            throw new UsernameNotFoundException(user.getUsername());
+        }
+        return principal;
+    }
+
+    private TrasckPrincipal toPrincipal(User user, ApiTokenService.ApiTokenAuthentication apiTokenAuthentication) {
+        TrasckPrincipal principal = new TrasckPrincipal(
+                user,
+                apiTokenAuthentication.apiTokenId(),
+                apiTokenAuthentication.tokenType(),
+                apiTokenAuthentication.scopes()
+        );
         if (!principal.isEnabled()) {
             throw new UsernameNotFoundException(user.getUsername());
         }

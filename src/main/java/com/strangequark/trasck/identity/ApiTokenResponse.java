@@ -2,6 +2,8 @@ package com.strangequark.trasck.identity;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public record ApiTokenResponse(
@@ -13,7 +15,7 @@ public record ApiTokenResponse(
         String tokenPrefix,
         String token,
         UUID roleId,
-        JsonNode scopes,
+        List<String> scopes,
         OffsetDateTime expiresAt,
         OffsetDateTime createdAt,
         OffsetDateTime lastUsedAt,
@@ -29,11 +31,24 @@ public record ApiTokenResponse(
                 token.getTokenPrefix(),
                 rawToken,
                 token.getRoleId(),
-                token.getScopes(),
+                scopes(token.getScopes()),
                 token.getExpiresAt(),
                 token.getCreatedAt(),
                 token.getLastUsedAt(),
                 token.getRevokedAt()
         );
+    }
+
+    private static List<String> scopes(JsonNode scopes) {
+        if (scopes == null || !scopes.isArray()) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode scope : scopes) {
+            if (scope.isTextual() && !scope.asText().isBlank()) {
+                values.add(scope.asText());
+            }
+        }
+        return values;
     }
 }

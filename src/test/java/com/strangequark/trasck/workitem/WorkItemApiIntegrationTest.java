@@ -74,6 +74,7 @@ class WorkItemApiIntegrationTest {
     void createsUpdatesRanksTransitionsAssignsAndArchivesWorkItemsWithValidationAndEvents() throws Exception {
         JsonNode setup = postSetup();
         UUID actorId = uuid(setup, "/adminUser/id");
+        UUID workspaceId = uuid(setup, "/workspace/id");
         UUID projectId = uuid(setup, "/project/id");
 
         assertThat(get("/api/v1/projects/" + projectId + "/work-items").statusCode()).isEqualTo(401);
@@ -88,6 +89,7 @@ class WorkItemApiIntegrationTest {
         assertThat(story.at("/sequenceNumber").asLong()).isEqualTo(2);
         assertThat(story.at("/workspaceSequenceNumber").asLong()).isEqualTo(2);
         assertThat(story.at("/rank").asText()).hasSize(16);
+        assertThat(story.at("/descriptionDocument/type").asText()).isEqualTo("doc");
         assertThat(countWhere("work_item_closure", "descendant_work_item_id", storyId)).isEqualTo(2);
         assertThat(countWhere("work_item_status_history", "work_item_id", storyId)).isEqualTo(1);
 
@@ -137,6 +139,75 @@ class WorkItemApiIntegrationTest {
         JsonNode projectWorkItems = getJson("/api/v1/projects/" + projectId + "/work-items");
         assertThat(projectWorkItems).hasSize(3);
 
+        ObjectNode commentBody = objectMapper.createObjectNode()
+                .put("bodyMarkdown", "This story needs collaboration coverage.")
+                .put("visibility", "workspace");
+        commentBody.set("bodyDocument", objectMapper.createObjectNode()
+                .put("type", "doc")
+                .put("text", "This story needs collaboration coverage."));
+        JsonNode comment = postJson("/api/v1/work-items/" + storyId + "/comments", commentBody);
+        UUID commentId = uuid(comment, "/id");
+        assertThat(comment.at("/bodyDocument/type").asText()).isEqualTo("doc");
+        JsonNode comments = getJson("/api/v1/work-items/" + storyId + "/comments");
+        assertThat(comments).hasSize(1);
+        JsonNode updatedComment = patch("/api/v1/work-items/" + storyId + "/comments/" + commentId, objectMapper.createObjectNode()
+                .put("bodyMarkdown", "Updated collaboration note."));
+        assertThat(updatedComment.at("/bodyMarkdown").asText()).isEqualTo("Updated collaboration note.");
+
+        JsonNode link = postJson("/api/v1/work-items/" + storyId + "/links", objectMapper.createObjectNode()
+                .put("targetWorkItemId", secondEpicId.toString())
+                .put("linkType", "relates_to"));
+        UUID linkId = uuid(link, "/id");
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/links")).hasSize(1);
+        HttpResponse<String> duplicateLink = post("/api/v1/work-items/" + storyId + "/links", objectMapper.createObjectNode()
+                .put("targetWorkItemId", secondEpicId.toString())
+                .put("linkType", "relates_to"));
+        assertThat(duplicateLink.statusCode()).isEqualTo(409);
+
+        JsonNode watcher = postJson("/api/v1/work-items/" + storyId + "/watchers", objectMapper.createObjectNode()
+                .put("userId", actorId.toString()));
+        assertThat(uuid(watcher, "/userId")).isEqualTo(actorId);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/watchers")).hasSize(1);
+        HttpResponse<String> invalidWatcher = post("/api/v1/work-items/" + storyId + "/watchers", objectMapper.createObjectNode()
+                .put("userId", UUID.randomUUID().toString()));
+        assertThat(invalidWatcher.statusCode()).isEqualTo(404);
+
+        JsonNode label = postJson("/api/v1/workspaces/" + workspaceId + "/labels", objectMapper.createObjectNode()
+                .put("name", "backend")
+                .put("color", "#3366ff"));
+        UUID labelId = uuid(label, "/id");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/labels")).hasSize(1);
+        JsonNode attachedLabel = postJson("/api/v1/work-items/" + storyId + "/labels", objectMapper.createObjectNode()
+                .put("labelId", labelId.toString()));
+        assertThat(uuid(attachedLabel, "/id")).isEqualTo(labelId);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/labels")).hasSize(1);
+
+        JsonNode attachment = postJson("/api/v1/work-items/" + storyId + "/attachments", objectMapper.createObjectNode()
+                .put("filename", "requirements.txt")
+                .put("contentType", "text/plain")
+                .put("storageKey", "test/requirements.txt")
+                .put("sizeBytes", 64)
+                .put("checksum", "sha256:test")
+                .put("visibility", "restricted"));
+        UUID attachmentId = uuid(attachment, "/id");
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/attachments")).hasSize(1);
+        HttpResponse<String> invalidAttachment = post("/api/v1/work-items/" + storyId + "/attachments", objectMapper.createObjectNode()
+                .put("filename", "bad.txt")
+                .put("storageKey", "test/bad.txt")
+                .put("sizeBytes", -1));
+        assertThat(invalidAttachment.statusCode()).isEqualTo(400);
+
+        assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + attachmentId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/attachments")).isEmpty();
+        assertThat(delete("/api/v1/work-items/" + storyId + "/labels/" + labelId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/labels")).isEmpty();
+        assertThat(delete("/api/v1/work-items/" + storyId + "/watchers/" + actorId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/watchers")).isEmpty();
+        assertThat(delete("/api/v1/work-items/" + storyId + "/links/" + linkId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/links")).isEmpty();
+        assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + commentId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/comments")).isEmpty();
+
         HttpResponse<String> archiveResponse = delete("/api/v1/work-items/" + storyId);
         assertThat(archiveResponse.statusCode()).isEqualTo(204);
         assertThat(get("/api/v1/work-items/" + storyId).statusCode()).isEqualTo(404);
@@ -153,6 +224,17 @@ class WorkItemApiIntegrationTest {
                 "work_item.assigned",
                 "work_item.rank_changed",
                 "work_item.status_changed",
+                "work_item.comment_created",
+                "work_item.comment_updated",
+                "work_item.comment_deleted",
+                "work_item.link_created",
+                "work_item.link_deleted",
+                "work_item.watcher_added",
+                "work_item.watcher_removed",
+                "work_item.label_added",
+                "work_item.label_removed",
+                "work_item.attachment_added",
+                "work_item.attachment_removed",
                 "work_item.archived"
         );
         assertThat(capturedDomainEvents.eventTypes()).containsAll(persistedEventTypes);
@@ -207,6 +289,9 @@ class WorkItemApiIntegrationTest {
                 .put("title", title)
                 .put("descriptionMarkdown", "Test work item")
                 .put("reporterId", actorId.toString());
+        body.set("descriptionDocument", objectMapper.createObjectNode()
+                .put("type", "doc")
+                .put("title", title));
         if (parentId != null) {
             body.put("parentId", parentId.toString());
         }

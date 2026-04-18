@@ -1,11 +1,11 @@
 package com.strangequark.trasck.identity;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.time.OffsetDateTime;
+import java.util.List;
 
 public record CreatePersonalTokenRequest(
         String name,
-        JsonNode scopes,
+        List<String> scopes,
         OffsetDateTime expiresAt
 ) {
 }

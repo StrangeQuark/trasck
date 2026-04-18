@@ -2,6 +2,7 @@ package com.strangequark.trasck.identity;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -82,6 +83,11 @@ public class AuthController {
                 .body(apiTokenService.createPersonalToken(currentUserService.requireUserId(), request));
     }
 
+    @GetMapping("/auth/tokens/personal")
+    public List<ApiTokenResponse> listPersonalTokens() {
+        return apiTokenService.listPersonalTokens(currentUserService.requireUserId());
+    }
+
     @DeleteMapping("/auth/tokens/{tokenId}")
     public ResponseEntity<Void> revokePersonalToken(@PathVariable UUID tokenId) {
         apiTokenService.revokePersonalToken(tokenId, currentUserService.requireUserId());
@@ -116,6 +122,12 @@ public class AuthController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(apiTokenService.createServiceToken(workspaceId, currentUserService.requireUserId(), request));
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/service-tokens")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public List<ApiTokenResponse> listServiceTokens(@PathVariable UUID workspaceId) {
+        return apiTokenService.listServiceTokens(workspaceId);
     }
 
     @DeleteMapping("/workspaces/{workspaceId}/service-tokens/{tokenId}")

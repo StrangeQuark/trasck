@@ -39,9 +39,11 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 27. Seeded field/screen configuration should start with core system fields only; custom field expansion can happen later.
 28. Browser authentication uses an HTTP-only access-token cookie, while direct API callers may also send the same JWT as a Bearer token.
 29. User creation supports both invitation-based registration and direct workspace-admin user creation.
-30. OAuth identity linking supports GitHub, Google, GitLab, and Microsoft provider identities. Automatic email matching is allowed only for verified provider emails. The signed provider-neutral endpoint remains available as an internal/trusted callback, and full Spring OAuth redirects/callbacks are wired for the first four providers.
+30. OAuth identity linking supports GitHub, Google, GitLab, and Microsoft provider identities. Automatic email matching is allowed only for verified provider emails. The signed provider-neutral endpoint remains available as an internal/trusted callback, full Spring OAuth redirects/callbacks are wired for the first four providers, and production provider callbacks use provider-specific verified-email resolution before automatic email linking.
 31. Permission enforcement uses a combination of broad security filters, method-level annotations for simple administrative routes, and explicit service-layer checks for domain-heavy operations.
-32. Domain events have both immediate in-process publication and durable outbox dispatch. Persisted events remain pending until configured durable consumers record successful per-consumer delivery rows.
+32. Domain events have both immediate in-process publication and durable outbox dispatch. Persisted events remain pending until static or database-configured durable consumers record successful per-consumer delivery rows.
+33. Personal and service API token scopes are enforced in addition to role permissions. A token can reduce access but cannot grant permissions beyond the backing user's workspace/project roles.
+34. Service-token-backed `service` users should be managed through dedicated service-token/admin surfaces by default, not mixed into normal human user/member lists.
 
 ## Full Work Hierarchy
 
@@ -150,9 +152,11 @@ Implemented endpoints:
 - `POST /api/v1/auth/logout` clears the auth cookie.
 - `GET /api/v1/auth/me` returns the authenticated user.
 - `POST /api/v1/auth/tokens/personal` creates a revocable personal access token for the current user.
+- `GET /api/v1/auth/tokens/personal` lists the current user's personal access tokens without exposing raw token values or token hashes.
 - `DELETE /api/v1/auth/tokens/{tokenId}` revokes one of the current user's personal access tokens.
 - `POST /api/v1/workspaces/{workspaceId}/invitations` creates a workspace invitation for callers with `user.manage`.
 - `POST /api/v1/workspaces/{workspaceId}/service-tokens` creates a revocable workspace service token backed by a service user and workspace role.
+- `GET /api/v1/workspaces/{workspaceId}/service-tokens` lists workspace service tokens without exposing raw token values or token hashes.
 - `DELETE /api/v1/workspaces/{workspaceId}/service-tokens/{tokenId}` revokes a workspace service token.
 - `POST /api/v1/workspaces/{workspaceId}/users` lets callers with `user.manage` create a user directly in a workspace.
 - `GET /api/v1/public/projects/{projectId}` returns anonymous project metadata only when the workspace has anonymous read enabled, the project is public, and both records are active and not soft-deleted.
@@ -164,6 +168,11 @@ Implemented endpoints:
 - `POST /api/v1/work-items/{workItemId}/rank` changes sortable rank string ordering.
 - `POST /api/v1/work-items/{workItemId}/transition` applies an allowed workflow transition and writes status history.
 - `DELETE /api/v1/work-items/{workItemId}` soft-archives a work item.
+- `GET /api/v1/work-items/{workItemId}/comments`, `POST /api/v1/work-items/{workItemId}/comments`, `PATCH /api/v1/work-items/{workItemId}/comments/{commentId}`, and `DELETE /api/v1/work-items/{workItemId}/comments/{commentId}` manage work item comments.
+- `GET /api/v1/work-items/{workItemId}/links`, `POST /api/v1/work-items/{workItemId}/links`, and `DELETE /api/v1/work-items/{workItemId}/links/{linkId}` manage non-hierarchical work item links.
+- `GET /api/v1/work-items/{workItemId}/watchers`, `POST /api/v1/work-items/{workItemId}/watchers`, and `DELETE /api/v1/work-items/{workItemId}/watchers/{userId}` manage work item watchers.
+- `GET /api/v1/workspaces/{workspaceId}/labels`, `POST /api/v1/workspaces/{workspaceId}/labels`, `GET /api/v1/work-items/{workItemId}/labels`, `POST /api/v1/work-items/{workItemId}/labels`, and `DELETE /api/v1/work-items/{workItemId}/labels/{labelId}` manage workspace labels and work item label assignments.
+- `GET /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments`, and `DELETE /api/v1/work-items/{workItemId}/attachments/{attachmentId}` manage attachment metadata for work items. File bytes still need the attachment storage service.
 
 Implemented seed data:
 
@@ -180,7 +189,9 @@ Security state:
 - Workspace user-management endpoints use method-level permission checks.
 - Work item endpoints are no longer anonymously accessible; work item service methods enforce project-scoped permissions before reads or writes.
 - The provider-neutral OAuth login endpoint requires `TRASCK_OAUTH_ASSERTION_SECRET` and a signed assertion. Full provider redirects/callbacks are also wired through Spring OAuth client registrations for GitHub, Google, GitLab, and Microsoft.
-- Personal and service API tokens store only token hashes, can be revoked, and update `last_used_at` on successful authentication.
+- Full OAuth callbacks use provider-specific verified-email checks where providers expose that data. Google uses `email_verified`; GitHub and GitLab use verified/confirmed email sources; Microsoft is treated as unverified unless an explicit verified-email signal exists.
+- Personal and service API tokens store only token hashes, can be revoked, update `last_used_at` on successful authentication, and enforce token scopes in addition to role permissions.
+- Service token records can be listed through dedicated admin/token APIs without exposing hashes or raw token values. Service users remain implementation identities behind those token-management surfaces by default.
 - Invitations can grant workspace membership only, or workspace membership plus project-specific membership when `projectId` and `projectRoleId` are included.
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
 
@@ -190,7 +201,8 @@ Work item implementation state:
 - Parent changes rebuild `work_item_closure` transactionally for the project.
 - Sequence allocation uses durable project and workspace sequence counter tables.
 - Work item rank uses fixed-width sortable strings.
-- Work item changes persist rows in `domain_events`, publish in-process Spring events after commit, and remain pending in the durable outbox until configured consumers complete delivery through `domain_event_deliveries`.
+- Work item collaboration APIs cover comments, links, watchers, labels, and basic attachment metadata. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, and common bad inputs before database constraints are hit.
+- Work item and collaboration changes persist rows in `domain_events`, publish in-process Spring events after commit, and remain pending in the durable outbox until static or database-configured consumers complete delivery through `domain_event_deliveries`.
 
 ## Database Conventions
 
@@ -856,6 +868,7 @@ erDiagram
     USERS ||--o{ FAVORITES : owns
     USERS ||--o{ RECENT_ITEMS : owns
     DOMAIN_EVENTS ||--o{ DOMAIN_EVENT_DELIVERIES : delivered_to
+    WORKSPACES ||--o{ EVENT_CONSUMER_CONFIGS : configures
 
     AUTOMATION_RULES {
         uuid id PK
@@ -926,6 +939,19 @@ erDiagram
         text last_error
         timestamptz next_attempt_at
         timestamptz delivered_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    EVENT_CONSUMER_CONFIGS {
+        uuid id PK
+        uuid workspace_id FK
+        string consumer_key
+        string consumer_type
+        string display_name
+        jsonb event_types
+        jsonb config
+        boolean enabled
         timestamptz created_at
         timestamptz updated_at
     }
@@ -1169,6 +1195,7 @@ erDiagram
 | `workspaces` | Configuration boundary inside an organization. |
 | `users` | Global human, agent, or service identity. |
 | `user_auth_identities` | Password/OAuth identity mappings for global users. |
+| `api_tokens` | Revocable personal and service API tokens stored as hashes with enforceable scopes. |
 | `user_invitations` | Workspace invitations used for invitation-based registration. |
 | `workspace_memberships` | User membership and role inside a workspace. |
 | `project_memberships` | Optional project-specific access override. |
@@ -1259,6 +1286,7 @@ erDiagram
 | `audit_log_entries` | Compliance/security audit log. |
 | `domain_events` | Durable outbox events for domain changes and future asynchronous consumers. |
 | `domain_event_deliveries` | Per-consumer durable delivery attempts for outbox events. |
+| `event_consumer_configs` | Database-configured durable event consumers resolved by `consumer_type`. |
 
 ### Reporting
 
@@ -1392,6 +1420,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `attachment_storage_configs` | `id`, `workspace_id`, `name`, `provider`, `config`, `active`, `default_config`, `created_at`, `updated_at` |
 | `domain_events` | `id`, `workspace_id`, `aggregate_type`, `aggregate_id`, `event_type`, `payload`, `processing_status`, `attempts`, `last_error`, `occurred_at`, `published_at` |
 | `domain_event_deliveries` | `id`, `domain_event_id`, `consumer_key`, `delivery_status`, `attempts`, `last_error`, `next_attempt_at`, `delivered_at`, `created_at`, `updated_at` |
+| `event_consumer_configs` | `id`, `workspace_id`, `consumer_key`, `consumer_type`, `display_name`, `event_types`, `config`, `enabled`, `created_at`, `updated_at` |
 
 ### Reporting Columns
 
@@ -1476,8 +1505,9 @@ Access rules:
 - Invitation-based registration must consume a pending, unexpired `user_invitations` row and create workspace membership from the invitation role. If the invitation includes project membership, registration must also create the project membership.
 - Workspace-admin direct user creation requires `user.manage`.
 - Workspace-admin service token creation requires `user.manage`; created service users authenticate through revocable service tokens and normal workspace roles.
+- Personal/service token scopes must be checked before role permission checks succeed. `*` grants the token all permissions already held by the backing user, exact scope keys grant one permission, and prefix scopes such as `work_item.*` grant all matching work item permissions already held by the backing user.
 - Work item operations must derive the actor from the authenticated principal, not from client-provided actor fields.
-- Automatic OAuth email linking must require a verified provider email. Full provider callbacks rely on Spring OAuth token verification, while the provider-neutral endpoint requires a signed assertion from trusted internal infrastructure.
+- Automatic OAuth email linking must require a verified provider email. Full provider callbacks rely on Spring OAuth token verification plus provider-specific verified-email resolution, while the provider-neutral endpoint requires a signed assertion from trusted internal infrastructure.
 - Audit log writes should not be user-editable.
 
 Event rules:
@@ -1485,7 +1515,8 @@ Event rules:
 - Work item changes must write durable `domain_events` rows in the same transaction as the domain change.
 - Work item changes must also publish in-process Spring events after commit for immediate same-service consumers.
 - Auth and user-management events should write durable `domain_events` rows for login, registration, invitation, user creation, and OAuth identity linking.
-- Durable outbox rows remain pending until each configured `DomainEventConsumer` has a delivered `domain_event_deliveries` row.
+- Durable outbox rows remain pending until each static `DomainEventConsumer` and each matching enabled `event_consumer_configs` record has a delivered `domain_event_deliveries` row.
+- Database-configured consumers are resolved by `consumer_type` to a `ConfiguredDomainEventConsumer` handler. Empty `event_types` or `*` means all events; otherwise event types filter delivery creation.
 - If no durable consumers are configured, events remain pending even though in-process Spring events were already published after commit.
 - The persisted event row is the source of truth for future queued automation, webhook delivery, reporting, notification, and integration dispatch.
 
@@ -1550,6 +1581,8 @@ domain_events(aggregate_type, aggregate_id)
 domain_events(processing_status, occurred_at)
 domain_event_deliveries(domain_event_id, delivery_status)
 domain_event_deliveries(consumer_key, delivery_status)
+event_consumer_configs(workspace_id, consumer_type)
+event_consumer_configs(enabled)
 workflow_assignments(project_id, work_item_type_id)
 custom_field_values(work_item_id, custom_field_id)
 screen_assignments(project_id, work_item_type_id, operation)
@@ -1638,9 +1671,22 @@ POST   /api/v1/work-items/{id}/assign
 POST   /api/v1/work-items/{id}/rank
 POST   /api/v1/work-items/{id}/transition
 DELETE /api/v1/work-items/{id}
-POST   /api/v1/work-items/{id}/links
+GET    /api/v1/work-items/{id}/comments
 POST   /api/v1/work-items/{id}/comments
+PATCH  /api/v1/work-items/{id}/comments/{commentId}
+DELETE /api/v1/work-items/{id}/comments/{commentId}
+GET    /api/v1/work-items/{id}/links
+POST   /api/v1/work-items/{id}/links
+DELETE /api/v1/work-items/{id}/links/{linkId}
+GET    /api/v1/work-items/{id}/watchers
+POST   /api/v1/work-items/{id}/watchers
+DELETE /api/v1/work-items/{id}/watchers/{userId}
+GET    /api/v1/work-items/{id}/labels
+POST   /api/v1/work-items/{id}/labels
+DELETE /api/v1/work-items/{id}/labels/{labelId}
+GET    /api/v1/work-items/{id}/attachments
 POST   /api/v1/work-items/{id}/attachments
+DELETE /api/v1/work-items/{id}/attachments/{attachmentId}
 POST   /api/v1/work-items/{id}/assign-agent
 POST   /api/v1/work-items/bulk
 ```
@@ -1964,7 +2010,7 @@ Recommended order:
 4. Implement work item types, type rules, project type availability, priorities, resolutions, and workspace seed data.
 5. Implement workflows, statuses, transitions, and workflow assignments.
 6. Implement work items, hierarchy validation, closure-table maintenance, ranking, transitions, assignment, archived state, and domain events.
-7. Implement comments, watchers, work logs, attachments, activity events, and audit logs.
+7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/label/attachment metadata slice is implemented; file bytes, work logs, activity projections, and audit writes remain.
 8. Implement boards, columns, iterations, releases, and roadmaps.
 9. Implement custom fields, screens, screen assignments, and field configurations.
 10. Implement reporting history and snapshots.
@@ -1974,7 +2020,7 @@ Recommended order:
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication, service token creation/authentication, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, per-consumer domain event delivery publication, permission denial, and the initial authenticated work item API flow with hierarchy validation, ranking, transitions, assignment history, closure rows, and domain events.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, and authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, basic attachment metadata, and domain events.
 
 Required backend tests:
 
