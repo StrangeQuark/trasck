@@ -1,8 +1,14 @@
 package com.strangequark.trasck.workitem;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.InvalidMediaTypeException;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,7 +17,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -192,9 +201,61 @@ public class WorkItemController {
         return ResponseEntity.status(HttpStatus.CREATED).body(collaborationService.addAttachmentMetadata(workItemId, request));
     }
 
+    @PostMapping(value = "/work-items/{workItemId}/attachments/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<AttachmentResponse> uploadAttachment(
+            @PathVariable UUID workItemId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) UUID storageConfigId,
+            @RequestParam(required = false) String checksum,
+            @RequestParam(required = false) String visibility
+    ) {
+        String filename = file.getOriginalFilename();
+        if (filename == null || filename.isBlank()) {
+            filename = file.getName();
+        }
+        try {
+            AttachmentResponse response = collaborationService.uploadAttachment(
+                    workItemId,
+                    filename,
+                    file.getContentType(),
+                    file.getBytes(),
+                    storageConfigId,
+                    checksum,
+                    visibility
+            );
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "file could not be read", ex);
+        }
+    }
+
+    @GetMapping("/work-items/{workItemId}/attachments/{attachmentId}/download")
+    public ResponseEntity<byte[]> downloadAttachment(@PathVariable UUID workItemId, @PathVariable UUID attachmentId) {
+        AttachmentFileResponse file = collaborationService.downloadAttachment(workItemId, attachmentId);
+        ContentDisposition disposition = ContentDisposition.attachment()
+                .filename(file.filename(), StandardCharsets.UTF_8)
+                .build();
+        return ResponseEntity.ok()
+                .contentType(mediaType(file.contentType()))
+                .contentLength(file.bytes().length)
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .body(file.bytes());
+    }
+
     @DeleteMapping("/work-items/{workItemId}/attachments/{attachmentId}")
     public ResponseEntity<Void> removeAttachment(@PathVariable UUID workItemId, @PathVariable UUID attachmentId) {
         collaborationService.removeAttachment(workItemId, attachmentId);
         return ResponseEntity.noContent().build();
+    }
+
+    private MediaType mediaType(String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
+        try {
+            return MediaType.parseMediaType(contentType);
+        } catch (InvalidMediaTypeException ex) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
     }
 }

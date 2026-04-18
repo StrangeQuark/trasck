@@ -4,13 +4,13 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend slices.
 
-1. Should the first attachment byte-storage pass implement only the local filesystem provider, or should it implement the provider interface plus both local filesystem and S3-compatible provider selection immediately?
+1. Should the first activity projection be work-item scoped only, or should project/workspace activity streams be created in the same pass?
     - Answer:
-2. Should collaboration permissions stay role-based for now, or should comment edits/deletes become author-or-admin and watcher self-service become allowed with read permission?
+2. Should audit logs use permanent retention by default, or should retention/export policy be configurable per workspace from the first audit pass?
     - Answer:
-3. Should activity feed and audit log writes be implemented as synchronous service writes first, or as configured durable event consumers fed by `domain_events`?
+3. Should durable activity/audit consumers get an admin replay endpoint in this pass, or should they rely on the scheduled dispatcher plus database delivery state until admin APIs exist?
     - Answer:
-4. Should the first AI agent adapter be a non-external stub/local command runner to prove the provider-neutral lifecycle before adding a Codex-specific adapter?
+4. Should the first stub/local AI runner execute an allowlisted local command, or should it only simulate the provider-neutral lifecycle without running shell commands?
     - Answer:
 
 ## Current State
@@ -21,39 +21,20 @@ The first-run-only setup API creates an admin user, organization, workspace, pro
 
 Authentication and authorization foundations are implemented. Username/password login returns a JWT and sets the same value in an HTTP-only cookie. Direct API callers can use JWTs, revocable personal tokens, or revocable workspace service tokens as `Authorization: Bearer`. Cookie-authenticated unsafe browser requests use Spring cookie CSRF protection. Invitation-based registration supports workspace-only and workspace-plus-project membership. Workspace-admin direct user creation, signed verified OAuth identity linking, full Spring OAuth redirect startup for GitHub/Google/GitLab/Microsoft, provider-specific verified-email resolution, method-level admin permissions, explicit service-level work item permission checks, enforced API token scopes, token list/revoke flows, dedicated service-token listing, and durable hybrid outbox delivery are in place.
 
-The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, list, assign, rank, transition, and archive work items through REST APIs. Work item detail data now includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, workspace label create/list, work item label add/remove/list, and basic attachment metadata add/remove/list APIs. These APIs publish durable domain events and are covered by HTTP integration tests, including rich JSON document request/response handling.
+The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, list, assign, rank, transition, and archive work items through REST APIs. Work item detail data now includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired, default local storage is seeded from configuration, comment edit/delete uses the author-or-admin permission shape, watcher self-service works with read permission, and these APIs publish durable domain events with HTTP integration coverage.
 
 Core JPA mappings now include useful associations for common navigation paths such as workspace/project, project/work item, work item/type/status/priority, and workflow/status/transition while preserving scalar UUID fields where they keep command code explicit.
 
 ## Primary Next Steps
 
-### 1. Add Configurable Attachment Storage Service
-
-Goal: turn the seeded attachment storage configuration and metadata APIs into a working storage abstraction for file bytes.
-
-Planned work:
-
-- Add an attachment storage service interface.
-- Implement the chosen first provider shape from the questions above.
-- Resolve active/default storage configuration per workspace.
-- Add upload/download/delete flows for work item attachments.
-- Keep file-byte handling outside work item command logic.
-- Add tests for storage selection, local writes, cleanup, invalid metadata, and error handling.
-
-Done when:
-
-- Work item attachments can be stored through a provider-neutral interface.
-- Local development has a working default storage provider.
-- Future S3-compatible providers can be added without changing work item collaboration logic.
-
-### 2. Add Activity, Audit, And Durable Consumer Wiring
+### 1. Add Activity, Audit, And Durable Consumer Wiring
 
 Goal: make user-visible activity and security/compliance audit data real consumers of the domain changes already being written.
 
 Planned work:
 
-- Implement the chosen activity/audit write strategy from the questions above.
-- Add consumers for work item create/update/archive, collaboration changes, auth/user-management changes, and token changes.
+- Implement durable consumers that project `domain_events` into `activity_events` and `audit_log_entries`.
+- Add consumers for work item create/update/archive, collaboration changes, attachment changes, auth/user-management changes, and token changes.
 - Add redaction helpers so secrets and raw token values never appear in activity, audit, comments, or context snapshots.
 - Add tests for activity visibility, audit coverage, durable consumer retry/failure behavior, and idempotency.
 
@@ -63,7 +44,7 @@ Done when:
 - Security-sensitive changes have audit rows.
 - Durable consumer delivery records prove each configured consumer completed or failed clearly.
 
-### 3. Add Provider-Neutral AI Agent Service Foundations
+### 2. Add Provider-Neutral AI Agent Service Foundations
 
 Goal: let work items be assigned to AI agents without making Trasck dependent on any one agent vendor or changing the normal Jira/Rally-style workflow.
 
@@ -71,7 +52,7 @@ Planned work:
 
 - Add an `AgentProviderAdapter` service contract that supports configuration validation, capability discovery, dispatch, cancel, retry, and callback handling.
 - Add provider, credential, agent profile, repository connection, and agent task APIs on top of the existing schema/JPA foundation.
-- Implement the chosen first adapter shape from the questions above.
+- Implement the first stub/local adapter shape from the questions above.
 - Keep provider-specific behavior inside adapters selected by `provider_type`.
 - Add audit and activity events for agent assignment, provider configuration, credential rotation, task status changes, messages, and artifacts.
 - Add tests for assignment, dispatch, callback idempotency, cancellation, retry, completion, failure, artifact creation, and permission enforcement.
@@ -82,7 +63,7 @@ Done when:
 - Agent execution state is visible and auditable without closing the work item automatically.
 - A future provider such as Codex, Claude Code, a local runner, or a webhook worker can be added by implementing the adapter contract rather than changing work item or workflow logic.
 
-### 4. Add API Documentation And Local Runtime Polish
+### 3. Add API Documentation And Local Runtime Polish
 
 Goal: make the backend ready for a meaningful manual pass before frontend work depends on it heavily.
 
@@ -104,13 +85,13 @@ The following work should be completed before the application is ready for a mea
 ### Backend Readiness
 
 - Expand permission checks beyond work items and user-management endpoints as more APIs are exposed.
-- Implement configurable attachment byte storage behind a stable interface, defaulting local development to the chosen local provider.
-- Add activity writes for work-item-changing operations.
-- Add audit writes for security-sensitive operations, token lifecycle changes, provider setup, credential rotation, agent assignment, privileged task actions, and callback failures.
+- Implement activity projections for work-item-changing operations.
+- Implement audit projections for security-sensitive operations, token lifecycle changes, provider setup, credential rotation, agent assignment, privileged task actions, and callback failures.
 - Add provider-neutral agent provider, agent profile, repository connection, and agent task APIs.
-- Add the first real or stubbed agent adapter while keeping tests isolated from paid or external AI execution.
+- Add the first stub/local agent adapter while keeping tests isolated from paid or external AI execution.
 - Add authenticated, idempotent agent callback endpoints.
 - Add token expiry integration tests and any remaining token lifecycle edge cases.
+- Add work log APIs and reporting history consumers for time tracking.
 - Add OpenAPI documentation or HTTP example files for the main workflows.
 - Add Docker Compose/local profile support for running the backend with PostgreSQL in a predictable local setup.
 - Clean up remaining default warnings where practical, including open-in-view configuration and duplicate `org.json.JSONObject` dependencies.
@@ -122,12 +103,12 @@ The following work should be completed before the application is ready for a mea
 
 ### Test Readiness
 
-- Expand permission tests for hierarchy, workflow, collaboration APIs, user management, public read access, and future attachment byte APIs.
+- Expand permission tests for hierarchy, workflow, collaboration APIs, user management, public read access, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token expiry tests, token revocation edge cases, and invitation expiry tests.
 - Add durable outbox consumer tests for failure, retry, disabled consumers, and multi-consumer delivery.
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for list screens and detail pages.
-- Add attachment storage tests with the first local provider.
+- Add S3-compatible attachment storage tests using a controlled local fake, MinIO, or LocalStack.
 - Add automation tests once the first automation executor exists.
 - Add agent adapter contract tests covering dispatch, callback, messages, artifacts, cancellation, retry, failure, completion, and idempotency without invoking paid or external execution.
 - Add agent permission tests proving agents cannot exceed their workspace/project role.

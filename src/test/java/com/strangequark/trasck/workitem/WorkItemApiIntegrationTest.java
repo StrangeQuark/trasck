@@ -6,10 +6,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.event.DomainEventPublished;
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -39,6 +43,11 @@ class WorkItemApiIntegrationTest {
             .withUsername("trasck")
             .withPassword("trasck");
 
+    private static final Path ATTACHMENT_ROOT = Path.of(
+            System.getProperty("java.io.tmpdir"),
+            "trasck-work-item-attachments-" + UUID.randomUUID()
+    );
+
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     @LocalServerPort
@@ -62,6 +71,7 @@ class WorkItemApiIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
+        registry.add("trasck.attachments.local-root", ATTACHMENT_ROOT::toString);
     }
 
     @BeforeEach
@@ -197,6 +207,22 @@ class WorkItemApiIntegrationTest {
                 .put("sizeBytes", -1));
         assertThat(invalidAttachment.statusCode()).isEqualTo(400);
 
+        byte[] attachmentBytes = "Implementation notes\n".getBytes(StandardCharsets.UTF_8);
+        JsonNode uploadedAttachment = uploadAttachmentFile(storyId, "implementation-notes.txt", "text/plain", attachmentBytes);
+        UUID uploadedAttachmentId = uuid(uploadedAttachment, "/id");
+        String uploadedStorageKey = uploadedAttachment.at("/storageKey").asText();
+        assertThat(uploadedAttachment.at("/sizeBytes").asLong()).isEqualTo(attachmentBytes.length);
+        assertThat(uploadedAttachment.at("/checksum").asText()).startsWith("sha256:");
+        assertThat(Files.exists(ATTACHMENT_ROOT.resolve(uploadedStorageKey))).isTrue();
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/attachments")).hasSize(2);
+        HttpResponse<byte[]> downloadResponse = getBytes("/api/v1/work-items/" + storyId + "/attachments/" + uploadedAttachmentId + "/download");
+        assertThat(downloadResponse.statusCode()).isEqualTo(200);
+        assertThat(downloadResponse.body()).isEqualTo(attachmentBytes);
+        assertThat(downloadResponse.headers().firstValue("Content-Disposition"))
+                .hasValueSatisfying(value -> assertThat(value).contains("implementation-notes.txt"));
+
+        assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + uploadedAttachmentId).statusCode()).isEqualTo(204);
+        assertThat(Files.exists(ATTACHMENT_ROOT.resolve(uploadedStorageKey))).isFalse();
         assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + attachmentId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/attachments")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/labels/" + labelId).statusCode()).isEqualTo(204);
@@ -343,10 +369,51 @@ class WorkItemApiIntegrationTest {
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
+    private JsonNode uploadAttachmentFile(UUID workItemId, String filename, String contentType, byte[] content) throws Exception {
+        String boundary = "----trasck-" + UUID.randomUUID();
+        byte[] body = multipartBody(boundary, filename, contentType, content);
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri("/api/v1/work-items/" + workItemId + "/attachments/files"))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        authorize(builder);
+        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).isEqualTo(201);
+        return objectMapper.readTree(response.body());
+    }
+
+    private byte[] multipartBody(String boundary, String filename, String contentType, byte[] content) {
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            writeMultipartText(output, boundary, "visibility", "restricted");
+            output.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+            output.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+            output.write(("Content-Type: " + contentType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            output.write(content);
+            output.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            return output.toByteArray();
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private void writeMultipartText(ByteArrayOutputStream output, String boundary, String name, String value) throws Exception {
+        output.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        output.write(("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        output.write(value.getBytes(StandardCharsets.UTF_8));
+        output.write("\r\n".getBytes(StandardCharsets.UTF_8));
+    }
+
     private HttpResponse<String> get(String path) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
         authorize(builder);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<byte[]> getBytes(String path) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
     }
 
     private HttpResponse<String> delete(String path) throws Exception {

@@ -171,6 +171,18 @@ class AuthIntegrationTest {
                 .put("title", "Viewer should not create"), viewerSession.accessToken());
         assertThat(forbiddenCreate.statusCode()).isEqualTo(403);
 
+        JsonNode watchedWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Viewer watcher self-service")
+                .put("reporterId", adminUserId.toString()), admin.accessToken()));
+        UUID watchedWorkItemId = uuid(watchedWorkItem, "/id");
+        JsonNode viewerWatcher = read(post("/api/v1/work-items/" + watchedWorkItemId + "/watchers", objectMapper.createObjectNode(), viewerSession.accessToken()));
+        assertThat(uuid(viewerWatcher, "/userId")).isEqualTo(uuid(viewer, "/id"));
+        HttpResponse<String> forbiddenOtherWatcher = post("/api/v1/work-items/" + watchedWorkItemId + "/watchers", objectMapper.createObjectNode()
+                .put("userId", adminUserId.toString()), viewerSession.accessToken());
+        assertThat(forbiddenOtherWatcher.statusCode()).isEqualTo(403);
+        assertThat(delete("/api/v1/work-items/" + watchedWorkItemId + "/watchers/" + uuid(viewer, "/id"), viewerSession.accessToken()).statusCode()).isEqualTo(204);
+
         JsonNode serviceToken = read(post("/api/v1/workspaces/" + workspaceId + "/service-tokens", objectMapper.createObjectNode()
                 .put("name", "Automation reader")
                 .put("username", "automation-reader")
@@ -268,6 +280,12 @@ class AuthIntegrationTest {
 
     private HttpResponse<String> get(String path, String accessToken) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> delete(String path, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).DELETE();
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }

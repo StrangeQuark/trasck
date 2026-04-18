@@ -58,6 +58,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -167,6 +168,7 @@ public class WorkspaceSeedService {
     private final WorkspaceMembershipRepository workspaceMembershipRepository;
     private final ProjectMembershipRepository projectMembershipRepository;
     private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
+    private final String localAttachmentRoot;
 
     public WorkspaceSeedService(
             ObjectMapper objectMapper,
@@ -190,7 +192,8 @@ public class WorkspaceSeedService {
             RolePermissionRepository rolePermissionRepository,
             WorkspaceMembershipRepository workspaceMembershipRepository,
             ProjectMembershipRepository projectMembershipRepository,
-            AttachmentStorageConfigRepository attachmentStorageConfigRepository
+            AttachmentStorageConfigRepository attachmentStorageConfigRepository,
+            @Value("${trasck.attachments.local-root:./data/attachments}") String localAttachmentRoot
     ) {
         this.objectMapper = objectMapper;
         this.workItemTypeRepository = workItemTypeRepository;
@@ -214,6 +217,7 @@ public class WorkspaceSeedService {
         this.workspaceMembershipRepository = workspaceMembershipRepository;
         this.projectMembershipRepository = projectMembershipRepository;
         this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
+        this.localAttachmentRoot = localAttachmentRoot;
     }
 
     InitialSetupResponse.SeedDataSummary seed(Workspace workspace, Project project, User adminUser) {
@@ -582,7 +586,7 @@ public class WorkspaceSeedService {
 
     private AttachmentStorageConfig seedAttachmentStorage(UUID workspaceId) {
         ObjectNode config = objectMapper.createObjectNode()
-                .put("rootPath", "./data/attachments")
+                .put("rootPath", localAttachmentRoot)
                 .put("createDirectories", true);
         AttachmentStorageConfig storageConfig = new AttachmentStorageConfig();
         storageConfig.setWorkspaceId(workspaceId);
