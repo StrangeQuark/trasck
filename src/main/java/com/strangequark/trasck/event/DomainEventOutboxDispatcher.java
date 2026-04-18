@@ -1,7 +1,9 @@
 package com.strangequark.trasck.event;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -45,28 +47,69 @@ public class DomainEventOutboxDispatcher {
                 List.of("pending", "failed"),
                 PageRequest.of(0, batchSize)
         )) {
-            dispatch(event, matchingConfigs(event, configs));
+            dispatch(event, matchingConfigs(event, configs), null);
         }
     }
 
-    private void dispatch(DomainEvent event, List<EventConsumerConfig> configs) {
-        ensureDeliveries(event, configs);
+    @Transactional
+    public DomainEventReplayResult replayWorkspace(
+            UUID workspaceId,
+            List<UUID> eventIds,
+            List<String> consumerKeys,
+            boolean includePublished
+    ) {
+        List<DomainEvent> events = replayEvents(workspaceId, eventIds, includePublished);
+        List<String> requestedConsumers = consumerKeys == null || consumerKeys.isEmpty()
+                ? List.of("activity-projection", "audit-projection")
+                : consumerKeys.stream().filter(key -> key != null && !key.isBlank()).map(String::trim).distinct().toList();
+        List<EventConsumerConfig> configs = eventConsumerConfigRepository.findByEnabledTrue();
+        int deliveriesReset = 0;
+        for (DomainEvent event : events) {
+            List<EventConsumerConfig> matchingConfigs = matchingConfigs(event, configs);
+            boolean hasReplayConsumer = false;
+            for (String consumerKey : requestedConsumers) {
+                if (canHandle(consumerKey, matchingConfigs)) {
+                    DomainEventDelivery delivery = ensureDelivery(event, consumerKey);
+                    resetDelivery(delivery);
+                    deliveriesReset++;
+                    hasReplayConsumer = true;
+                }
+            }
+            if (hasReplayConsumer) {
+                dispatch(event, matchingConfigs, requestedConsumers);
+            }
+        }
+        return new DomainEventReplayResult(events.size(), deliveriesReset);
+    }
+
+    private void dispatch(DomainEvent event, List<EventConsumerConfig> configs, Collection<String> selectedConsumerKeys) {
+        ensureDeliveries(event, configs, selectedConsumerKeys);
         List<DomainEventDelivery> deliveries = domainEventDeliveryRepository.findByDomainEventIdAndDeliveryStatusIn(
                 event.getId(),
                 List.of("pending", "failed")
-        );
+        ).stream()
+                .filter(delivery -> selectedConsumerKeys == null || selectedConsumerKeys.contains(delivery.getConsumerKey()))
+                .toList();
         for (DomainEventDelivery delivery : deliveries) {
             deliver(event, delivery, configs);
         }
         refreshEventStatus(event);
     }
 
-    private void ensureDeliveries(DomainEvent event, List<EventConsumerConfig> configs) {
-        for (DomainEventConsumer consumer : consumers) {
-            ensureDelivery(event, consumer.consumerKey());
+    private void ensureDeliveries(DomainEvent event, List<EventConsumerConfig> configs, Collection<String> selectedConsumerKeys) {
+        if (selectedConsumerKeys == null) {
+            for (DomainEventConsumer consumer : consumers) {
+                ensureDelivery(event, consumer.consumerKey());
+            }
+            for (EventConsumerConfig config : configs) {
+                ensureDelivery(event, config.getConsumerKey());
+            }
+            return;
         }
-        for (EventConsumerConfig config : configs) {
-            ensureDelivery(event, config.getConsumerKey());
+        for (String consumerKey : selectedConsumerKeys) {
+            if (canHandle(consumerKey, configs)) {
+                ensureDelivery(event, consumerKey);
+            }
         }
     }
 
@@ -80,6 +123,13 @@ public class DomainEventOutboxDispatcher {
                     delivery.setAttempts(0);
                     return domainEventDeliveryRepository.save(delivery);
                 });
+    }
+
+    private void resetDelivery(DomainEventDelivery delivery) {
+        delivery.setDeliveryStatus("pending");
+        delivery.setLastError(null);
+        delivery.setNextAttemptAt(null);
+        delivery.setDeliveredAt(null);
     }
 
     private void deliver(DomainEvent event, DomainEventDelivery delivery, List<EventConsumerConfig> configs) {
@@ -156,6 +206,21 @@ public class DomainEventOutboxDispatcher {
                 .filter(config -> config.getConsumerKey().equals(consumerKey))
                 .findFirst()
                 .orElse(null);
+    }
+
+    private boolean canHandle(String consumerKey, List<EventConsumerConfig> configs) {
+        return consumers.stream().anyMatch(consumer -> consumer.consumerKey().equals(consumerKey))
+                || configs.stream().anyMatch(config -> config.getConsumerKey().equals(consumerKey));
+    }
+
+    private List<DomainEvent> replayEvents(UUID workspaceId, List<UUID> eventIds, boolean includePublished) {
+        if (eventIds != null && !eventIds.isEmpty()) {
+            return domainEventRepository.findByWorkspaceIdAndIdInOrderByOccurredAtAsc(workspaceId, eventIds);
+        }
+        if (includePublished) {
+            return domainEventRepository.findByWorkspaceIdOrderByOccurredAtAsc(workspaceId);
+        }
+        return domainEventRepository.findByWorkspaceIdAndProcessingStatusInOrderByOccurredAtAsc(workspaceId, List.of("pending", "failed"));
     }
 
     private ConfiguredDomainEventConsumer configuredConsumer(EventConsumerConfig config) {

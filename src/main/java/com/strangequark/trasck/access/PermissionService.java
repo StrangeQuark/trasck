@@ -48,6 +48,14 @@ public class PermissionService {
     }
 
     @Transactional(readOnly = true)
+    public boolean canUseWorkspace(Authentication authentication, UUID workspaceId, String permissionKey) {
+        return principal(authentication)
+                .filter(principal -> principal.allowsScope(permissionKey))
+                .map(principal -> hasWorkspacePermission(principal.userId(), workspaceId, permissionKey))
+                .orElse(false);
+    }
+
+    @Transactional(readOnly = true)
     public boolean canUseProject(Authentication authentication, UUID projectId, String permissionKey) {
         return principal(authentication)
                 .filter(principal -> principal.allowsScope(permissionKey))

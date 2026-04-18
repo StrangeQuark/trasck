@@ -11,4 +11,10 @@ public interface DomainEventRepository extends JpaRepository<DomainEvent, UUID> 
     List<DomainEvent> findByProcessingStatusOrderByOccurredAtAsc(String processingStatus, Pageable pageable);
 
     List<DomainEvent> findByProcessingStatusInOrderByOccurredAtAsc(List<String> processingStatuses, Pageable pageable);
+
+    List<DomainEvent> findByWorkspaceIdOrderByOccurredAtAsc(UUID workspaceId);
+
+    List<DomainEvent> findByWorkspaceIdAndProcessingStatusInOrderByOccurredAtAsc(UUID workspaceId, List<String> processingStatuses);
+
+    List<DomainEvent> findByWorkspaceIdAndIdInOrderByOccurredAtAsc(UUID workspaceId, List<UUID> ids);
 }

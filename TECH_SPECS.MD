@@ -175,6 +175,10 @@ Implemented endpoints:
 - `GET /api/v1/work-items/{workItemId}/watchers`, `POST /api/v1/work-items/{workItemId}/watchers`, and `DELETE /api/v1/work-items/{workItemId}/watchers/{userId}` manage work item watchers.
 - `GET /api/v1/workspaces/{workspaceId}/labels`, `POST /api/v1/workspaces/{workspaceId}/labels`, `GET /api/v1/work-items/{workItemId}/labels`, `POST /api/v1/work-items/{workItemId}/labels`, and `DELETE /api/v1/work-items/{workItemId}/labels/{labelId}` manage workspace labels and work item label assignments.
 - `GET /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments/files`, `GET /api/v1/work-items/{workItemId}/attachments/{attachmentId}/download`, and `DELETE /api/v1/work-items/{workItemId}/attachments/{attachmentId}` manage attachment metadata and file bytes for work items.
+- `GET /api/v1/work-items/{workItemId}/activity`, `GET /api/v1/workspaces/{workspaceId}/projects/{projectId}/activity`, and `GET /api/v1/workspaces/{workspaceId}/activity` expose durable activity projections for work-item, project, and workspace streams.
+- `GET /api/v1/workspaces/{workspaceId}/audit-log` exposes admin-only audit log entries for a workspace.
+- `GET /api/v1/workspaces/{workspaceId}/audit-retention-policy` and `PUT /api/v1/workspaces/{workspaceId}/audit-retention-policy` manage configurable workspace audit retention policy metadata.
+- `POST /api/v1/workspaces/{workspaceId}/domain-events/replay` lets workspace admins replay selected domain events through selected durable consumers, defaulting to the activity and audit projection consumers.
 
 Implemented seed data:
 
@@ -197,6 +201,8 @@ Security state:
 - Invitations can grant workspace membership only, or workspace membership plus project-specific membership when `projectId` and `projectRoleId` are included.
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
 - Comment edits/deletes are author-or-admin shaped: authors need `work_item.comment`; users editing/deleting someone else's comment need `work_item.update`. Watcher self-service add/remove requires `work_item.read`; managing watchers for other users requires `work_item.update`.
+- Activity streams use service-layer permission checks for the requested workspace, project, or work item.
+- Audit log, audit retention, and domain event replay APIs are workspace-admin-only through method-level permission checks.
 
 Work item implementation state:
 
@@ -207,6 +213,9 @@ Work item implementation state:
 - Work item collaboration APIs cover comments, links, watchers, labels, attachment metadata, and attachment byte upload/download/delete. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, storage configuration, checksums, and common bad inputs before database constraints are hit.
 - Attachment byte storage is behind a provider-neutral storage interface. The first providers are local filesystem storage for development and S3-compatible object storage selected by workspace attachment storage configuration. Local filesystem roots default from `trasck.attachments.local-root`; uploaded files receive generated storage keys and SHA-256 checksums.
 - Work item and collaboration changes persist rows in `domain_events`, publish in-process Spring events after commit, and remain pending in the durable outbox until static or database-configured consumers complete delivery through `domain_event_deliveries`.
+- Static activity and audit projection consumers are implemented. Activity projection writes idempotent work-item, project, and workspace streams for important product events. Audit projection writes idempotent workspace audit entries for auth, token, user-management, retention-policy, and replay events, with redaction applied before values reach API responses.
+- Workspace audit retention policy metadata is configurable through admin APIs. The current implementation records the policy decision; physical retention pruning/export jobs are still future work.
+- Admin replay can reset and dispatch selected domain event deliveries for the activity/audit projection consumers without invoking paid or external systems.
 
 ## Database Conventions
 
@@ -700,8 +709,12 @@ erDiagram
     USERS ||--o{ WATCHERS : watches
     WORKSPACES ||--o{ ACTIVITY_EVENTS : records
     WORKSPACES ||--o{ AUDIT_LOG_ENTRIES : audits
+    WORKSPACES ||--o{ AUDIT_RETENTION_POLICIES : configures
+    DOMAIN_EVENTS ||--o{ ACTIVITY_EVENTS : projects_to
+    DOMAIN_EVENTS ||--o{ AUDIT_LOG_ENTRIES : projects_to
     USERS ||--o{ ACTIVITY_EVENTS : actor
     USERS ||--o{ AUDIT_LOG_ENTRIES : actor
+    USERS ||--o{ AUDIT_RETENTION_POLICIES : updated_by
 
     CUSTOM_FIELDS {
         uuid id PK
@@ -815,6 +828,7 @@ erDiagram
 
     ACTIVITY_EVENTS {
         uuid id PK
+        uuid domain_event_id
         uuid workspace_id FK
         uuid actor_id FK
         string entity_type
@@ -826,6 +840,7 @@ erDiagram
 
     AUDIT_LOG_ENTRIES {
         uuid id PK
+        uuid domain_event_id
         uuid workspace_id FK
         uuid actor_id FK
         string action
@@ -836,6 +851,16 @@ erDiagram
         string ip_address
         string user_agent
         timestamptz created_at
+    }
+
+    AUDIT_RETENTION_POLICIES {
+        uuid id PK
+        uuid workspace_id FK
+        boolean retention_enabled
+        integer retention_days
+        uuid updated_by_id FK
+        timestamptz created_at
+        timestamptz updated_at
     }
 ```
 
@@ -1288,6 +1313,7 @@ erDiagram
 | `mentions` | Mentions in descriptions/comments. |
 | `activity_events` | User-visible activity feed. |
 | `audit_log_entries` | Compliance/security audit log. |
+| `audit_retention_policies` | Workspace-level audit retention policy metadata. |
 | `domain_events` | Durable outbox events for domain changes and future asynchronous consumers. |
 | `domain_event_deliveries` | Per-consumer durable delivery attempts for outbox events. |
 | `event_consumer_configs` | Database-configured durable event consumers resolved by `consumer_type`. |
@@ -1422,6 +1448,9 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `mentions` | `id`, `source_type`, `source_id`, `mentioned_user_id`, `created_at` |
 | `work_logs` | `id`, `work_item_id`, `user_id`, `minutes_spent`, `work_date`, `started_at`, `description_markdown`, `description_document`, `created_at`, `updated_at`, `deleted_at` |
 | `attachment_storage_configs` | `id`, `workspace_id`, `name`, `provider`, `config`, `active`, `default_config`, `created_at`, `updated_at` |
+| `activity_events` | `id`, `domain_event_id`, `workspace_id`, `actor_id`, `entity_type`, `entity_id`, `event_type`, `metadata`, `created_at` |
+| `audit_log_entries` | `id`, `domain_event_id`, `workspace_id`, `actor_id`, `action`, `target_type`, `target_id`, `before_value`, `after_value`, `ip_address`, `user_agent`, `created_at` |
+| `audit_retention_policies` | `id`, `workspace_id`, `retention_enabled`, `retention_days`, `updated_by_id`, `created_at`, `updated_at` |
 | `domain_events` | `id`, `workspace_id`, `aggregate_type`, `aggregate_id`, `event_type`, `payload`, `processing_status`, `attempts`, `last_error`, `occurred_at`, `published_at` |
 | `domain_event_deliveries` | `id`, `domain_event_id`, `consumer_key`, `delivery_status`, `attempts`, `last_error`, `next_attempt_at`, `delivered_at`, `created_at`, `updated_at` |
 | `event_consumer_configs` | `id`, `workspace_id`, `consumer_key`, `consumer_type`, `display_name`, `event_types`, `config`, `enabled`, `created_at`, `updated_at` |
@@ -1523,6 +1552,10 @@ Event rules:
 - Database-configured consumers are resolved by `consumer_type` to a `ConfiguredDomainEventConsumer` handler. Empty `event_types` or `*` means all events; otherwise event types filter delivery creation.
 - If no durable consumers are configured, events remain pending even though in-process Spring events were already published after commit.
 - The persisted event row is the source of truth for future queued automation, webhook delivery, reporting, notification, and integration dispatch.
+- Activity and audit projections are static durable consumers with stable keys `activity-projection` and `audit-projection`.
+- Projection consumers must be idempotent using `domain_event_id` and their natural stream target keys.
+- Domain event replay is an admin operation that resets selected delivery rows and redispatches matching consumers. It must not execute external paid/provider-specific work unless a future consumer is explicitly selected and authorized for replay.
+- Activity and audit payloads must pass through shared redaction before becoming user-visible.
 
 Customization rules:
 
@@ -1593,6 +1626,7 @@ screen_assignments(project_id, work_item_type_id, operation)
 work_logs(work_item_id, work_date)
 work_logs(user_id, work_date)
 activity_events(workspace_id, created_at)
+activity_events(entity_type, entity_id, created_at)
 audit_log_entries(workspace_id, created_at)
 agent_providers(workspace_id, provider_key)
 agent_profiles(workspace_id, user_id)
@@ -1697,6 +1731,18 @@ POST   /api/v1/work-items/{id}/assign-agent
 POST   /api/v1/work-items/bulk
 ```
 
+Example activity, audit, and event-admin endpoints:
+
+```text
+GET    /api/v1/work-items/{id}/activity
+GET    /api/v1/workspaces/{workspaceId}/projects/{projectId}/activity
+GET    /api/v1/workspaces/{workspaceId}/activity
+GET    /api/v1/workspaces/{workspaceId}/audit-log
+GET    /api/v1/workspaces/{workspaceId}/audit-retention-policy
+PUT    /api/v1/workspaces/{workspaceId}/audit-retention-policy
+POST   /api/v1/workspaces/{workspaceId}/domain-events/replay
+```
+
 Example agent endpoints:
 
 ```text
@@ -1742,6 +1788,13 @@ AgentProviderConfigured
 Activity events are for product UI. Audit log entries are for security/compliance.
 
 Activity and audit rows should be written by durable event consumers fed from `domain_events`, not by duplicating ad hoc writes throughout every command service. Consumers must be idempotent and should record delivery attempts in `domain_event_deliveries`.
+
+Implemented projection consumers:
+
+- `activity-projection` creates work-item, project, and workspace activity rows for work item and selected collaboration/user/security events.
+- `audit-projection` creates workspace audit rows for auth, token, user-management, retention-policy, and replay events.
+- Shared redaction removes secrets, raw tokens, password-like fields, credential fields, assertions, authorization headers, cookies, and hashes before activity/audit values are exposed.
+- Workspace admins can replay selected events for selected consumers through the domain event replay API.
 
 Examples:
 
@@ -2018,7 +2071,7 @@ Recommended order:
 4. Implement work item types, type rules, project type availability, priorities, resolutions, and workspace seed data.
 5. Implement workflows, statuses, transitions, and workflow assignments.
 6. Implement work items, hierarchy validation, closure-table maintenance, ranking, transitions, assignment, archived state, and domain events.
-7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/label/attachment storage slice is implemented; work logs, activity projections, and audit writes remain.
+7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/label/attachment storage slice, activity projections, audit projections, retention policy metadata, and replay wiring are implemented; work logs remain.
 8. Implement boards, columns, iterations, releases, and roadmaps.
 9. Implement custom fields, screens, screen assignments, and field configurations.
 10. Implement reporting history and snapshots.
@@ -2028,7 +2081,7 @@ Recommended order:
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, and authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, attachment metadata, local attachment upload/download/delete cleanup, and domain events.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, and authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, attachment metadata, local attachment upload/download/delete cleanup, and domain events.
 
 Required backend tests:
 
