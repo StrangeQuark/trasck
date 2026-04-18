@@ -9,4 +9,6 @@ public interface DomainEventRepository extends JpaRepository<DomainEvent, UUID> 
     List<DomainEvent> findByAggregateTypeAndAggregateIdOrderByOccurredAtAsc(String aggregateType, UUID aggregateId);
 
     List<DomainEvent> findByProcessingStatusOrderByOccurredAtAsc(String processingStatus, Pageable pageable);
+
+    List<DomainEvent> findByProcessingStatusInOrderByOccurredAtAsc(List<String> processingStatuses, Pageable pageable);
 }

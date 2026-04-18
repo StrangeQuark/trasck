@@ -5,19 +5,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.event.DomainEvent;
+import com.strangequark.trasck.event.DomainEventConsumer;
+import com.strangequark.trasck.event.DomainEventOutboxDispatcher;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -49,6 +56,9 @@ class AuthIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private DomainEventOutboxDispatcher domainEventOutboxDispatcher;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -57,6 +67,7 @@ class AuthIntegrationTest {
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
         registry.add("trasck.security.oauth-assertion-secret", () -> OAUTH_ASSERTION_SECRET);
+        registry.add("trasck.events.outbox.fixed-delay-ms", () -> "600000");
     }
 
     @Test
@@ -66,6 +77,7 @@ class AuthIntegrationTest {
         UUID workspaceId = uuid(setup, "/workspace/id");
         UUID projectId = uuid(setup, "/project/id");
         UUID viewerRoleId = roleId(setup, "viewer");
+        UUID projectAdminRoleId = roleId(setup, "project_admin");
 
         assertThat(get("/api/v1/auth/me", null).statusCode()).isEqualTo(401);
 
@@ -78,6 +90,32 @@ class AuthIntegrationTest {
 
         HttpResponse<String> meByCookie = getWithCookie("/api/v1/auth/me", admin.cookie());
         assertThat(meByCookie.statusCode()).isEqualTo(200);
+
+        HttpResponse<String> unsafeCookiePostWithoutCsrf = postWithCookies(
+                "/api/v1/auth/tokens/personal",
+                objectMapper.createObjectNode().put("name", "Browser token without CSRF"),
+                null,
+                null,
+                admin.cookie()
+        );
+        assertThat(unsafeCookiePostWithoutCsrf.statusCode()).isEqualTo(403);
+
+        HttpResponse<String> csrfResponse = getWithCookie("/api/v1/auth/csrf", admin.cookie());
+        JsonNode csrf = read(csrfResponse);
+        String csrfCookie = csrfResponse.headers().allValues("Set-Cookie").stream()
+                .filter(value -> value.startsWith("XSRF-TOKEN="))
+                .findFirst()
+                .orElseThrow();
+        JsonNode personalToken = read(postWithCookies(
+                "/api/v1/auth/tokens/personal",
+                objectMapper.createObjectNode().put("name", "CLI token"),
+                csrf.at("/headerName").asText(),
+                csrf.at("/token").asText(),
+                admin.cookie(),
+                csrfCookie
+        ));
+        assertThat(personalToken.at("/token").asText()).startsWith("trpat_");
+        assertThat(get("/api/v1/auth/me", personalToken.at("/token").asText()).statusCode()).isEqualTo(200);
 
         HttpResponse<String> openRegister = post("/api/v1/auth/register", objectMapper.createObjectNode()
                 .put("email", "no-invite@example.com")
@@ -99,6 +137,20 @@ class AuthIntegrationTest {
         assertThat(registered.at("/accessToken").asText()).isNotBlank();
         assertThat(countWhere("workspace_memberships", "user_id", uuid(registered, "/user/id"))).isEqualTo(1);
 
+        JsonNode projectInvitation = read(post("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
+                .put("email", "project-invited@example.com")
+                .put("projectId", projectId.toString())
+                .put("projectRoleId", projectAdminRoleId.toString()), admin.accessToken()));
+        assertThat(projectInvitation.at("/projectId").asText()).isEqualTo(projectId.toString());
+
+        JsonNode projectRegistered = read(post("/api/v1/auth/register", objectMapper.createObjectNode()
+                .put("email", "project-invited@example.com")
+                .put("username", "project-invited-user")
+                .put("displayName", "Project Invited User")
+                .put("password", "correct-horse-battery-staple")
+                .put("invitationToken", projectInvitation.at("/token").asText()), null));
+        assertThat(countWhere("project_memberships", "user_id", uuid(projectRegistered, "/user/id"))).isEqualTo(1);
+
         JsonNode viewer = read(post("/api/v1/workspaces/" + workspaceId + "/users", objectMapper.createObjectNode()
                 .put("email", "viewer@example.com")
                 .put("username", "viewer-user")
@@ -114,6 +166,19 @@ class AuthIntegrationTest {
                 .put("title", "Viewer should not create"), viewerSession.accessToken());
         assertThat(forbiddenCreate.statusCode()).isEqualTo(403);
 
+        JsonNode serviceToken = read(post("/api/v1/workspaces/" + workspaceId + "/service-tokens", objectMapper.createObjectNode()
+                .put("name", "Automation reader")
+                .put("username", "automation-reader")
+                .put("displayName", "Automation Reader")
+                .put("roleId", viewerRoleId.toString()), admin.accessToken()));
+        assertThat(serviceToken.at("/token").asText()).startsWith("trsvc_");
+        assertThat(get("/api/v1/projects/" + projectId + "/work-items", serviceToken.at("/token").asText()).statusCode()).isEqualTo(200);
+
+        HttpResponse<String> oauthRedirect = get("/api/v1/auth/oauth2/authorization/github", null);
+        assertThat(oauthRedirect.statusCode()).isBetween(300, 399);
+        assertThat(oauthRedirect.headers().firstValue("Location").orElse(""))
+                .contains("github.com/login/oauth/authorize");
+
         String provider = "github";
         String providerSubject = "github-admin-subject";
         String providerEmail = setup.at("/adminUser/email").asText();
@@ -128,6 +193,10 @@ class AuthIntegrationTest {
         assertThat(uuid(oauthLogin, "/user/id")).isEqualTo(adminUserId);
         assertThat(countWhere("user_auth_identities", "user_id", adminUserId)).isEqualTo(1);
         assertThat(countWhere("domain_events", "event_type", "auth.oauth_identity_linked")).isEqualTo(1);
+        assertThat(countWhere("domain_events", "processing_status", "published")).isEqualTo(0);
+
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(countWhere("domain_event_deliveries", "consumer_key", "auth-integration-test")).isGreaterThan(0);
         assertThat(countWhere("domain_events", "processing_status", "published")).isGreaterThan(0);
     }
 
@@ -182,12 +251,28 @@ class AuthIntegrationTest {
     }
 
     private HttpResponse<String> getWithCookie(String path, String setCookieHeader) throws Exception {
-        String cookie = setCookieHeader.substring(0, setCookieHeader.indexOf(';'));
         HttpRequest request = HttpRequest.newBuilder(uri(path))
-                .header("Cookie", cookie)
+                .header("Cookie", cookieHeader(setCookieHeader))
                 .GET()
                 .build();
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> postWithCookies(
+            String path,
+            JsonNode body,
+            String csrfHeaderName,
+            String csrfToken,
+            String... setCookieHeaders
+    ) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .header("Cookie", cookieHeader(setCookieHeaders))
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        if (csrfHeaderName != null && csrfToken != null) {
+            builder.header(csrfHeaderName, csrfToken);
+        }
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private void authorize(HttpRequest.Builder builder, String accessToken) {
@@ -203,6 +288,12 @@ class AuthIntegrationTest {
 
     private URI uri(String path) {
         return URI.create("http://localhost:" + port + path);
+    }
+
+    private String cookieHeader(String... setCookieHeaders) {
+        return Arrays.stream(setCookieHeaders)
+                .map(setCookieHeader -> setCookieHeader.substring(0, setCookieHeader.indexOf(';')))
+                .collect(Collectors.joining("; "));
     }
 
     private UUID uuid(JsonNode node, String pointer) {
@@ -239,5 +330,22 @@ class AuthIntegrationTest {
     }
 
     private record AuthSession(String accessToken, String cookie) {
+    }
+
+    @TestConfiguration
+    static class DomainEventConsumerConfig {
+        @Bean
+        DomainEventConsumer authIntegrationDomainEventConsumer() {
+            return new DomainEventConsumer() {
+                @Override
+                public String consumerKey() {
+                    return "auth-integration-test";
+                }
+
+                @Override
+                public void handle(DomainEvent event) {
+                }
+            };
+        }
     }
 }

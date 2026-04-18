@@ -22,10 +22,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     public static final String ACCESS_TOKEN_COOKIE = "trasck_access_token";
 
     private final JwtTokenService jwtTokenService;
+    private final ApiTokenService apiTokenService;
     private final TrasckUserDetailsService userDetailsService;
 
-    public JwtAuthenticationFilter(JwtTokenService jwtTokenService, TrasckUserDetailsService userDetailsService) {
+    public JwtAuthenticationFilter(
+            JwtTokenService jwtTokenService,
+            ApiTokenService apiTokenService,
+            TrasckUserDetailsService userDetailsService
+    ) {
         this.jwtTokenService = jwtTokenService;
+        this.apiTokenService = apiTokenService;
         this.userDetailsService = userDetailsService;
     }
 
@@ -35,7 +41,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = resolveToken(request);
         if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                UUID userId = jwtTokenService.parseUserId(token);
+                UUID userId = apiTokenService.supports(token)
+                        ? apiTokenService.authenticateBearerToken(token)
+                        : jwtTokenService.parseUserId(token);
                 TrasckPrincipal principal = userDetailsService.loadUserById(userId);
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         principal,

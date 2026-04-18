@@ -1,10 +1,14 @@
 package com.strangequark.trasck.workitem;
 
+import com.strangequark.trasck.workspace.Workspace;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
@@ -39,6 +43,9 @@ public class Priority {
     @Column(name = "is_default")
     private Boolean isDefault;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "workspace_id", insertable = false, updatable = false)
+    private Workspace workspace;
 
     public UUID getId() {
         return id;
@@ -94,5 +101,9 @@ public class Priority {
 
     public void setIsDefault(Boolean isDefault) {
         this.isDefault = isDefault;
+    }
+
+    public Workspace getWorkspace() {
+        return workspace;
     }
 }

@@ -2,9 +2,12 @@ package com.strangequark.trasck.workflow;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
@@ -42,6 +45,17 @@ public class WorkflowTransition {
     @Column(name = "sort_order")
     private Integer sortOrder;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "workflow_id", insertable = false, updatable = false)
+    private Workflow workflow;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "from_status_id", insertable = false, updatable = false)
+    private WorkflowStatus fromStatus;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "to_status_id", insertable = false, updatable = false)
+    private WorkflowStatus toStatus;
 
     public UUID getId() {
         return id;
@@ -105,5 +119,17 @@ public class WorkflowTransition {
 
     public void setSortOrder(Integer sortOrder) {
         this.sortOrder = sortOrder;
+    }
+
+    public Workflow getWorkflow() {
+        return workflow;
+    }
+
+    public WorkflowStatus getFromStatus() {
+        return fromStatus;
+    }
+
+    public WorkflowStatus getToStatus() {
+        return toStatus;
     }
 }

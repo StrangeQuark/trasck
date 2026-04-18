@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.Role;
 import com.strangequark.trasck.access.RoleRepository;
+import com.strangequark.trasck.access.ProjectMembership;
+import com.strangequark.trasck.access.ProjectMembershipRepository;
 import com.strangequark.trasck.access.WorkspaceMembership;
 import com.strangequark.trasck.access.WorkspaceMembershipRepository;
 import com.strangequark.trasck.event.DomainEventService;
+import com.strangequark.trasck.project.Project;
+import com.strangequark.trasck.project.ProjectRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -36,7 +40,9 @@ public class AuthService {
     private final UserAuthIdentityRepository userAuthIdentityRepository;
     private final UserInvitationRepository userInvitationRepository;
     private final WorkspaceMembershipRepository workspaceMembershipRepository;
+    private final ProjectMembershipRepository projectMembershipRepository;
     private final RoleRepository roleRepository;
+    private final ProjectRepository projectRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService jwtTokenService;
     private final DomainEventService domainEventService;
@@ -48,7 +54,9 @@ public class AuthService {
             UserAuthIdentityRepository userAuthIdentityRepository,
             UserInvitationRepository userInvitationRepository,
             WorkspaceMembershipRepository workspaceMembershipRepository,
+            ProjectMembershipRepository projectMembershipRepository,
             RoleRepository roleRepository,
+            ProjectRepository projectRepository,
             PasswordEncoder passwordEncoder,
             JwtTokenService jwtTokenService,
             DomainEventService domainEventService,
@@ -59,7 +67,9 @@ public class AuthService {
         this.userAuthIdentityRepository = userAuthIdentityRepository;
         this.userInvitationRepository = userInvitationRepository;
         this.workspaceMembershipRepository = workspaceMembershipRepository;
+        this.projectMembershipRepository = projectMembershipRepository;
         this.roleRepository = roleRepository;
+        this.projectRepository = projectRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenService = jwtTokenService;
         this.domainEventService = domainEventService;
@@ -109,6 +119,9 @@ public class AuthService {
                 false
         );
         createWorkspaceMembership(invitation.getWorkspaceId(), user.getId(), invitation.getRoleId());
+        if (invitation.getProjectId() != null) {
+            createProjectMembership(invitation.getProjectId(), user.getId(), invitation.getProjectRoleId());
+        }
         invitation.setStatus("accepted");
         invitation.setAcceptedById(user.getId());
         invitation.setAcceptedAt(now);
@@ -122,11 +135,14 @@ public class AuthService {
         InviteUserRequest invitationRequest = required(request, "request");
         String email = requiredText(invitationRequest.email(), "email").toLowerCase(Locale.ROOT);
         Role role = resolveWorkspaceRole(workspaceId, invitationRequest.roleId());
+        ProjectInviteTarget projectInviteTarget = resolveProjectInviteTarget(workspaceId, invitationRequest.projectId(), invitationRequest.projectRoleId());
         String token = newToken();
         UserInvitation invitation = new UserInvitation();
         invitation.setWorkspaceId(workspaceId);
+        invitation.setProjectId(projectInviteTarget.projectId());
         invitation.setEmail(email);
         invitation.setRoleId(role.getId());
+        invitation.setProjectRoleId(projectInviteTarget.projectRoleId());
         invitation.setTokenHash(hash(token));
         invitation.setStatus("pending");
         invitation.setInvitedById(invitedById);
@@ -165,27 +181,61 @@ public class AuthService {
         }
         String subject = requiredText(oauth.providerSubject(), "providerSubject");
         verifyOAuthAssertion(provider, subject, oauth);
+        return oauthLoginFromVerifiedProfile(new OAuthProviderProfile(
+                provider,
+                subject,
+                oauth.providerEmail(),
+                oauth.emailVerified(),
+                oauth.providerUsername(),
+                oauth.displayName(),
+                oauth.avatarUrl(),
+                oauth.metadata()
+        ));
+    }
+
+    @Transactional
+    public AuthResponse oauthLoginFromProvider(OAuthProviderProfile profile) {
+        OAuthProviderProfile verifiedProfile = required(profile, "profile");
+        String provider = requiredText(verifiedProfile.provider(), "provider").toLowerCase(Locale.ROOT);
+        if (!SUPPORTED_OAUTH_PROVIDERS.contains(provider)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported OAuth provider");
+        }
+        return oauthLoginFromVerifiedProfile(new OAuthProviderProfile(
+                provider,
+                requiredText(verifiedProfile.providerSubject(), "providerSubject"),
+                verifiedProfile.providerEmail(),
+                verifiedProfile.emailVerified(),
+                verifiedProfile.providerUsername(),
+                verifiedProfile.displayName(),
+                verifiedProfile.avatarUrl(),
+                verifiedProfile.metadata()
+        ));
+    }
+
+    private AuthResponse oauthLoginFromVerifiedProfile(OAuthProviderProfile profile) {
+        String provider = profile.provider();
+        String subject = profile.providerSubject();
         User user = userAuthIdentityRepository.findByProviderAndProviderSubject(provider, subject)
                 .map(identity -> activeUser(identity.getUserId()))
-                .orElseGet(() -> linkNewOAuthIdentity(provider, subject, oauth));
+                .orElseGet(() -> linkNewOAuthIdentity(profile));
         return issueAuth(user, "auth.oauth_login", null);
     }
 
-    private User linkNewOAuthIdentity(String provider, String subject, OAuthLoginRequest request) {
-        if (!Boolean.TRUE.equals(request.emailVerified())) {
+    private User linkNewOAuthIdentity(OAuthProviderProfile profile) {
+        if (!Boolean.TRUE.equals(profile.emailVerified())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "A verified provider email is required for automatic OAuth linking");
         }
-        String providerEmail = requiredText(request.providerEmail(), "providerEmail").toLowerCase(Locale.ROOT);
+        String providerEmail = requiredText(profile.providerEmail(), "providerEmail").toLowerCase(Locale.ROOT);
         User user = userRepository.findByEmailIgnoreCase(providerEmail)
-                .orElseGet(() -> createOAuthUser(providerEmail, request));
+                .orElseGet(() -> createOAuthUser(providerEmail, profile));
 
         UserAuthIdentity identity = new UserAuthIdentity();
         identity.setUserId(user.getId());
-        identity.setProvider(provider);
-        identity.setProviderSubject(subject);
-        identity.setProviderUsername(request.providerUsername());
+        identity.setProvider(profile.provider());
+        identity.setProviderSubject(profile.providerSubject());
+        identity.setProviderUsername(profile.providerUsername());
         identity.setProviderEmail(providerEmail);
-        identity.setMetadata(metadataWithVerifiedEmail(request.metadata(), request.emailVerified()));
+        identity.setMetadata(metadataWithVerifiedEmail(profile.metadata(), profile.emailVerified()));
         userAuthIdentityRepository.save(identity);
         recordUserEvent(null, user, "auth.oauth_identity_linked");
         return user;
@@ -204,13 +254,13 @@ public class AuthService {
         return userRepository.save(user);
     }
 
-    private User createOAuthUser(String email, OAuthLoginRequest request) {
-        String username = uniqueUsername(firstText(request.providerUsername(), email.substring(0, email.indexOf('@'))));
+    private User createOAuthUser(String email, OAuthProviderProfile profile) {
+        String username = uniqueUsername(firstText(profile.providerUsername(), email.substring(0, email.indexOf('@'))));
         User user = new User();
         user.setEmail(email);
         user.setUsername(username);
-        user.setDisplayName(firstText(request.displayName(), username));
-        user.setAvatarUrl(request.avatarUrl());
+        user.setDisplayName(firstText(profile.displayName(), username));
+        user.setAvatarUrl(profile.avatarUrl());
         user.setAccountType("human");
         user.setEmailVerified(true);
         user.setActive(true);
@@ -247,6 +297,18 @@ public class AuthService {
         workspaceMembershipRepository.save(membership);
     }
 
+    private void createProjectMembership(UUID projectId, UUID userId, UUID roleId) {
+        if (projectMembershipRepository.existsByProjectIdAndUserIdAndStatusIgnoreCase(projectId, userId, "active")) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "User is already an active project member");
+        }
+        ProjectMembership membership = new ProjectMembership();
+        membership.setProjectId(projectId);
+        membership.setUserId(userId);
+        membership.setRoleId(roleId);
+        membership.setStatus("active");
+        projectMembershipRepository.save(membership);
+    }
+
     private Role resolveWorkspaceRole(UUID workspaceId, UUID roleId) {
         if (roleId != null) {
             return roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
@@ -254,6 +316,23 @@ public class AuthService {
         }
         return roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default workspace member role not found"));
+    }
+
+    private ProjectInviteTarget resolveProjectInviteTarget(UUID workspaceId, UUID projectId, UUID projectRoleId) {
+        if (projectId == null && projectRoleId == null) {
+            return new ProjectInviteTarget(null, null);
+        }
+        if (projectId == null || projectRoleId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "projectId and projectRoleId must be provided together");
+        }
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project not found"));
+        if (!workspaceId.equals(project.getWorkspaceId()) || project.getDeletedAt() != null || !"active".equals(project.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project not found in workspace");
+        }
+        Role projectRole = roleRepository.findByIdAndProjectId(projectRoleId, projectId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project role not found"));
+        return new ProjectInviteTarget(project.getId(), projectRole.getId());
     }
 
     private User activeUser(UUID userId) {
@@ -291,6 +370,12 @@ public class AuthService {
         }
         if (invitation.getRoleId() != null) {
             payload.put("roleId", invitation.getRoleId().toString());
+        }
+        if (invitation.getProjectId() != null) {
+            payload.put("projectId", invitation.getProjectId().toString());
+        }
+        if (invitation.getProjectRoleId() != null) {
+            payload.put("projectRoleId", invitation.getProjectRoleId().toString());
         }
         domainEventService.record(invitation.getWorkspaceId(), "user_invitation", invitation.getId(), eventType, payload);
     }
@@ -380,5 +465,8 @@ public class AuthService {
 
     private String firstText(String preferred, String fallback) {
         return preferred == null || preferred.isBlank() ? fallback : preferred.trim();
+    }
+
+    private record ProjectInviteTarget(UUID projectId, UUID projectRoleId) {
     }
 }

@@ -1,11 +1,17 @@
 package com.strangequark.trasck.workitem;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.strangequark.trasck.project.Project;
+import com.strangequark.trasck.workflow.WorkflowStatus;
+import com.strangequark.trasck.workspace.Workspace;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -115,6 +121,29 @@ public class WorkItem {
     @Column(name = "version")
     private Long version;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "workspace_id", insertable = false, updatable = false)
+    private Workspace workspace;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "project_id", insertable = false, updatable = false)
+    private Project project;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "type_id", insertable = false, updatable = false)
+    private WorkItemType type;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_id", insertable = false, updatable = false)
+    private WorkItem parent;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "status_id", insertable = false, updatable = false)
+    private WorkflowStatus status;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "priority_id", insertable = false, updatable = false)
+    private Priority priority;
 
     public UUID getId() {
         return id;
@@ -354,5 +383,29 @@ public class WorkItem {
 
     public void setVersion(Long version) {
         this.version = version;
+    }
+
+    public Workspace getWorkspace() {
+        return workspace;
+    }
+
+    public Project getProject() {
+        return project;
+    }
+
+    public WorkItemType getType() {
+        return type;
+    }
+
+    public WorkItem getParent() {
+        return parent;
+    }
+
+    public WorkflowStatus getStatus() {
+        return status;
+    }
+
+    public Priority getPriority() {
+        return priority;
     }
 }
