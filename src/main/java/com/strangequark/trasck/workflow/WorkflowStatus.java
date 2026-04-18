@@ -2,9 +2,12 @@ package com.strangequark.trasck.workflow;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
@@ -42,6 +45,9 @@ public class WorkflowStatus {
     @Column(name = "terminal")
     private Boolean terminal;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "workflow_id", insertable = false, updatable = false)
+    private Workflow workflow;
 
     public UUID getId() {
         return id;
@@ -105,5 +111,9 @@ public class WorkflowStatus {
 
     public void setTerminal(Boolean terminal) {
         this.terminal = terminal;
+    }
+
+    public Workflow getWorkflow() {
+        return workflow;
     }
 }

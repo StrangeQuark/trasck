@@ -9,6 +9,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,15 +23,18 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final ApiTokenService apiTokenService;
     private final CurrentUserService currentUserService;
     private final boolean cookieSecure;
 
     public AuthController(
             AuthService authService,
+            ApiTokenService apiTokenService,
             CurrentUserService currentUserService,
             @Value("${trasck.security.cookie-secure:false}") boolean cookieSecure
     ) {
         this.authService = authService;
+        this.apiTokenService = apiTokenService;
         this.currentUserService = currentUserService;
         this.cookieSecure = cookieSecure;
     }
@@ -49,6 +54,11 @@ public class AuthController {
         return authenticated(authService.oauthLogin(request), HttpStatus.OK);
     }
 
+    @GetMapping("/auth/csrf")
+    public CsrfTokenResponse csrf(CsrfToken csrfToken) {
+        return new CsrfTokenResponse(csrfToken.getHeaderName(), csrfToken.getParameterName(), csrfToken.getToken());
+    }
+
     @PostMapping("/auth/logout")
     public ResponseEntity<Void> logout() {
         ResponseCookie cookie = ResponseCookie.from(JwtAuthenticationFilter.ACCESS_TOKEN_COOKIE, "")
@@ -64,6 +74,18 @@ public class AuthController {
     @GetMapping("/auth/me")
     public AuthUserResponse me() {
         return authService.currentUser(currentUserService.requireUserId());
+    }
+
+    @PostMapping("/auth/tokens/personal")
+    public ResponseEntity<ApiTokenResponse> createPersonalToken(@RequestBody CreatePersonalTokenRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(apiTokenService.createPersonalToken(currentUserService.requireUserId(), request));
+    }
+
+    @DeleteMapping("/auth/tokens/{tokenId}")
+    public ResponseEntity<Void> revokePersonalToken(@PathVariable UUID tokenId) {
+        apiTokenService.revokePersonalToken(tokenId, currentUserService.requireUserId());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/workspaces/{workspaceId}/invitations")
@@ -84,6 +106,26 @@ public class AuthController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(authService.createUserInWorkspace(workspaceId, currentUserService.requireUserId(), request));
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/service-tokens")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public ResponseEntity<ApiTokenResponse> createServiceToken(
+            @PathVariable UUID workspaceId,
+            @RequestBody CreateServiceTokenRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(apiTokenService.createServiceToken(workspaceId, currentUserService.requireUserId(), request));
+    }
+
+    @DeleteMapping("/workspaces/{workspaceId}/service-tokens/{tokenId}")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public ResponseEntity<Void> revokeServiceToken(
+            @PathVariable UUID workspaceId,
+            @PathVariable UUID tokenId
+    ) {
+        apiTokenService.revokeServiceToken(workspaceId, tokenId, currentUserService.requireUserId());
+        return ResponseEntity.noContent().build();
     }
 
     private ResponseEntity<AuthResponse> authenticated(AuthResponse response, HttpStatus status) {

@@ -155,10 +155,10 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(101);
+        assertThat(tableCount).isEqualTo(103);
         assertThat(permissionCount).isEqualTo(27);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(98);
-        assertThat(repositories).hasSizeGreaterThanOrEqualTo(98);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(100);
+        assertThat(repositories).hasSizeGreaterThanOrEqualTo(100);
     }
 
     @Test
@@ -203,9 +203,17 @@ class JpaPersistenceTest {
 
         entityManager.clear();
 
-        WorkItem reloaded = workItemRepository.findById(savedItem.getId()).orElseThrow();
+        WorkItem reloaded = workItemRepository.findByIdAndDeletedAtIsNull(savedItem.getId()).orElseThrow();
         assertThat(reloaded.getDescriptionMarkdown()).isEqualTo("Markdown description");
         assertThat(reloaded.getDescriptionDocument().get("content").asText()).isEqualTo("Rich description");
+        assertThat(reloaded.getWorkspace().getKey()).isEqualTo(fixture.workspace.getKey());
+        assertThat(reloaded.getProject().getKey()).isEqualTo(fixture.project.getKey());
+        assertThat(reloaded.getProject().getWorkspace().getId()).isEqualTo(fixture.workspace.getId());
+        assertThat(reloaded.getType().getKey()).isEqualTo(fixture.type.getKey());
+        assertThat(reloaded.getStatus().getKey()).isEqualTo(fixture.status.getKey());
+        Workflow reloadedWorkflow = workflowRepository.findById(fixture.workflow.getId()).orElseThrow();
+        assertThat(reloadedWorkflow.getWorkspace().getId()).isEqualTo(fixture.workspace.getId());
+        assertThat(reloadedWorkflow.getStatuses()).extracting(WorkflowStatus::getKey).contains(fixture.status.getKey());
         assertThat(commentRepository.count()).isEqualTo(1);
         assertThat(workLogRepository.count()).isEqualTo(1);
     }

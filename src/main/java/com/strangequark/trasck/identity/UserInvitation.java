@@ -25,11 +25,17 @@ public class UserInvitation {
     @Column(name = "workspace_id")
     private UUID workspaceId;
 
+    @Column(name = "project_id")
+    private UUID projectId;
+
     @Column(name = "email")
     private String email;
 
     @Column(name = "role_id")
     private UUID roleId;
+
+    @Column(name = "project_role_id")
+    private UUID projectRoleId;
 
     @Column(name = "token_hash")
     private String tokenHash;
@@ -71,6 +77,14 @@ public class UserInvitation {
         this.workspaceId = workspaceId;
     }
 
+    public UUID getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(UUID projectId) {
+        this.projectId = projectId;
+    }
+
     public String getEmail() {
         return email;
     }
@@ -85,6 +99,14 @@ public class UserInvitation {
 
     public void setRoleId(UUID roleId) {
         this.roleId = roleId;
+    }
+
+    public UUID getProjectRoleId() {
+        return projectRoleId;
+    }
+
+    public void setProjectRoleId(UUID projectRoleId) {
+        this.projectRoleId = projectRoleId;
     }
 
     public String getTokenHash() {

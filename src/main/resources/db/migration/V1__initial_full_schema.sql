@@ -182,8 +182,10 @@ create table role_permissions (
 create table user_invitations (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
+    project_id uuid references projects(id) on delete cascade,
     email varchar(320) not null,
     role_id uuid references roles(id) on delete set null,
+    project_role_id uuid references roles(id) on delete set null,
     token_hash text not null unique,
     status varchar(40) not null default 'pending',
     invited_by_id uuid references users(id) on delete set null,
@@ -193,6 +195,26 @@ create table user_invitations (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     constraint ck_user_invitations_status check (status in ('pending', 'accepted', 'revoked', 'expired'))
+);
+
+create table api_tokens (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid references workspaces(id) on delete cascade,
+    user_id uuid not null references users(id) on delete cascade,
+    token_type varchar(40) not null,
+    name varchar(160) not null,
+    token_prefix varchar(24) not null,
+    token_hash text not null unique,
+    role_id uuid references roles(id) on delete set null,
+    scopes jsonb not null default '[]'::jsonb,
+    created_by_id uuid references users(id) on delete set null,
+    expires_at timestamptz,
+    last_used_at timestamptz,
+    revoked_at timestamptz,
+    revoked_by_id uuid references users(id) on delete set null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_api_tokens_type check (token_type in ('personal', 'service'))
 );
 
 create table workspace_memberships (
@@ -741,6 +763,21 @@ create table domain_events (
     last_error text,
     occurred_at timestamptz not null default now(),
     published_at timestamptz
+);
+
+create table domain_event_deliveries (
+    id uuid primary key default gen_random_uuid(),
+    domain_event_id uuid not null references domain_events(id) on delete cascade,
+    consumer_key varchar(160) not null,
+    delivery_status varchar(40) not null default 'pending',
+    attempts integer not null default 0,
+    last_error text,
+    next_attempt_at timestamptz,
+    delivered_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (domain_event_id, consumer_key),
+    constraint ck_domain_event_deliveries_status check (delivery_status in ('pending', 'processing', 'delivered', 'failed'))
 );
 
 create table work_item_status_history (
@@ -1305,6 +1342,7 @@ for each row execute function prevent_work_item_parent_cycle();
 create trigger trg_users_updated_at before update on users for each row execute function set_updated_at();
 create trigger trg_user_auth_identities_updated_at before update on user_auth_identities for each row execute function set_updated_at();
 create trigger trg_user_invitations_updated_at before update on user_invitations for each row execute function set_updated_at();
+create trigger trg_api_tokens_updated_at before update on api_tokens for each row execute function set_updated_at();
 create trigger trg_organizations_updated_at before update on organizations for each row execute function set_updated_at();
 create trigger trg_workspaces_updated_at before update on workspaces for each row execute function set_updated_at();
 create trigger trg_projects_updated_at before update on projects for each row execute function set_updated_at();
@@ -1327,6 +1365,7 @@ create trigger trg_automation_rules_updated_at before update on automation_rules
 create trigger trg_agent_providers_updated_at before update on agent_providers for each row execute function set_updated_at();
 create trigger trg_agent_profiles_updated_at before update on agent_profiles for each row execute function set_updated_at();
 create trigger trg_repository_connections_updated_at before update on repository_connections for each row execute function set_updated_at();
+create trigger trg_domain_event_deliveries_updated_at before update on domain_event_deliveries for each row execute function set_updated_at();
 
 create index ix_users_account_type on users(account_type);
 create index ix_workspaces_organization_key on workspaces(organization_id, key);
@@ -1381,6 +1420,11 @@ create index ix_audit_log_entries_workspace_created_at on audit_log_entries(work
 create index ix_domain_events_workspace_occurred_at on domain_events(workspace_id, occurred_at);
 create index ix_domain_events_aggregate on domain_events(aggregate_type, aggregate_id);
 create index ix_domain_events_status_occurred_at on domain_events(processing_status, occurred_at);
+create index ix_api_tokens_user_type on api_tokens(user_id, token_type);
+create index ix_api_tokens_workspace_type on api_tokens(workspace_id, token_type);
+create index ix_api_tokens_active on api_tokens(token_type, revoked_at, expires_at);
+create index ix_domain_event_deliveries_event on domain_event_deliveries(domain_event_id, delivery_status);
+create index ix_domain_event_deliveries_consumer on domain_event_deliveries(consumer_key, delivery_status);
 create index ix_work_item_status_history_work_item_changed_at on work_item_status_history(work_item_id, changed_at);
 create index ix_work_item_assignment_history_work_item_changed_at on work_item_assignment_history(work_item_id, changed_at);
 create index ix_work_item_estimate_history_work_item_changed_at on work_item_estimate_history(work_item_id, changed_at);
