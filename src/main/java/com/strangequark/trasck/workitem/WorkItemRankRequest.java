@@ -4,7 +4,6 @@ import java.util.UUID;
 
 public record WorkItemRankRequest(
         UUID previousWorkItemId,
-        UUID nextWorkItemId,
-        UUID actorUserId
+        UUID nextWorkItemId
 ) {
 }

@@ -12,7 +12,6 @@ public record WorkItemUpdateRequest(
         Boolean clearParent,
         UUID priorityId,
         String priorityKey,
-        UUID actorUserId,
         String title,
         String descriptionMarkdown,
         JsonNode descriptionDocument,

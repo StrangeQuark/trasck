@@ -37,6 +37,11 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 25. Work items have both project-local sequence numbers for human keys and workspace-wide sequence numbers for cross-project ordering, imports, exports, and reporting.
 26. Workspace Admins may manage agent providers, agent credentials, agent profiles, agent assignment, agent tasks, and repository connections by default.
 27. Seeded field/screen configuration should start with core system fields only; custom field expansion can happen later.
+28. Browser authentication uses an HTTP-only access-token cookie, while direct API callers may also send the same JWT as a Bearer token.
+29. User creation supports both invitation-based registration and direct workspace-admin user creation.
+30. OAuth identity linking supports GitHub, Google, GitLab, and Microsoft provider identities. Automatic email matching is allowed only for verified provider emails; the current provider-neutral endpoint requires a signed assertion until full provider callbacks are implemented.
+31. Permission enforcement uses a combination of broad security filters, method-level annotations for simple administrative routes, and explicit service-layer checks for domain-heavy operations.
+32. Domain events have both immediate in-process publication and durable outbox dispatch that marks published events for future asynchronous consumers.
 
 ## Full Work Hierarchy
 
@@ -136,6 +141,13 @@ The first runnable backend slice is intentionally explicit. Local development do
 Implemented endpoints:
 
 - `POST /api/v1/setup` creates the initial admin user, organization, workspace, project, workspace membership, project membership, and deterministic default configuration. It is first-run-only and returns conflict after bootstrap.
+- `POST /api/v1/auth/login` authenticates username/password users, returns a Bearer JWT, and sets the same token in an HTTP-only cookie.
+- `POST /api/v1/auth/register` creates a username/password user from a valid workspace invitation.
+- `POST /api/v1/auth/oauth/login` links or logs in a verified OAuth identity for GitHub, Google, GitLab, or Microsoft using a signed provider assertion.
+- `POST /api/v1/auth/logout` clears the auth cookie.
+- `GET /api/v1/auth/me` returns the authenticated user.
+- `POST /api/v1/workspaces/{workspaceId}/invitations` creates a workspace invitation for callers with `user.manage`.
+- `POST /api/v1/workspaces/{workspaceId}/users` lets callers with `user.manage` create a user directly in a workspace.
 - `GET /api/v1/public/projects/{projectId}` returns anonymous project metadata only when the workspace has anonymous read enabled, the project is public, and both records are active and not soft-deleted.
 - `POST /api/v1/projects/{projectId}/work-items` creates work items in a seeded project.
 - `GET /api/v1/projects/{projectId}/work-items` lists active project work items in rank order.
@@ -155,8 +167,11 @@ Implemented seed data:
 
 Security state:
 
-- Setup, public project reads, and the first work item endpoints are explicitly permitted in the temporary security configuration until authentication and permission checks are implemented.
-- Other API routes are denied until authentication and permission checks are implemented.
+- Setup, auth login/register/OAuth/login/logout, health, and public project reads are explicitly permitted.
+- Other API routes require a valid JWT from the `Authorization: Bearer` header or `trasck_access_token` HTTP-only cookie.
+- Workspace user-management endpoints use method-level permission checks.
+- Work item endpoints are no longer anonymously accessible; work item service methods enforce project-scoped permissions before reads or writes.
+- The current provider-neutral OAuth login endpoint requires `TRASCK_OAUTH_ASSERTION_SECRET` and a signed assertion. It is a verified-identity callback foundation, not a substitute for provider-specific OAuth token verification.
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
 
 Work item implementation state:
@@ -165,7 +180,7 @@ Work item implementation state:
 - Parent changes rebuild `work_item_closure` transactionally for the project.
 - Sequence allocation uses durable project and workspace sequence counter tables.
 - Work item rank uses fixed-width sortable strings.
-- Work item changes persist rows in `domain_events` and publish in-process Spring events after commit.
+- Work item changes persist rows in `domain_events`, publish in-process Spring events after commit, and are marked by the outbox dispatcher.
 
 ## Database Conventions
 
@@ -192,6 +207,8 @@ erDiagram
     ORGANIZATIONS ||--o{ WORKSPACES : owns
     USERS ||--o{ ORGANIZATIONS : created_by
     USERS ||--o{ USER_AUTH_IDENTITIES : authenticates_with
+    WORKSPACES ||--o{ USER_INVITATIONS : issues
+    USERS ||--o{ USER_INVITATIONS : invited_by
     WORKSPACES ||--o{ WORKSPACE_MEMBERSHIPS : has
     USERS ||--o{ WORKSPACE_MEMBERSHIPS : joins
     WORKSPACES ||--o{ ROLES : defines
@@ -261,6 +278,21 @@ erDiagram
         string provider_username
         string provider_email
         jsonb metadata
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    USER_INVITATIONS {
+        uuid id PK
+        uuid workspace_id FK
+        string email
+        uuid role_id FK
+        string token_hash
+        string status
+        uuid invited_by_id FK
+        uuid accepted_by_id FK
+        timestamptz expires_at
+        timestamptz accepted_at
         timestamptz created_at
         timestamptz updated_at
     }
@@ -1075,6 +1107,7 @@ erDiagram
 | `workspaces` | Configuration boundary inside an organization. |
 | `users` | Global human, agent, or service identity. |
 | `user_auth_identities` | Password/OAuth identity mappings for global users. |
+| `user_invitations` | Workspace invitations used for invitation-based registration. |
 | `workspace_memberships` | User membership and role inside a workspace. |
 | `project_memberships` | Optional project-specific access override. |
 | `roles` | Named permission bundle scoped to workspace or project. |
@@ -1231,6 +1264,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 |---|---|
 | `users` | `id`, `email`, `username`, `display_name`, `account_type`, `avatar_url`, `password_hash`, `email_verified`, `active`, `last_login_at`, `created_at`, `updated_at`, `deleted_at` |
 | `user_auth_identities` | `id`, `user_id`, `provider`, `provider_subject`, `provider_username`, `provider_email`, `metadata`, `created_at`, `updated_at` |
+| `user_invitations` | `id`, `workspace_id`, `email`, `role_id`, `token_hash`, `status`, `invited_by_id`, `accepted_by_id`, `expires_at`, `accepted_at`, `created_at`, `updated_at` |
 | `roles` | `id`, `workspace_id`, `name`, `key`, `scope`, `description`, `system_role`, `created_at`, `updated_at` |
 | `permissions` | `id`, `key`, `name`, `description`, `category` |
 | `role_permissions` | `role_id`, `permission_id`, `created_at` |
@@ -1372,12 +1406,19 @@ Access rules:
 - Workspace membership is required for all workspace data.
 - Project membership may further restrict project access when a project is private.
 - Permissions are checked through roles and explicit project membership.
+- Authenticated API access accepts either the HTTP-only `trasck_access_token` cookie or an `Authorization: Bearer` JWT.
+- Invitation-based registration must consume a pending, unexpired `user_invitations` row and create workspace membership from the invitation role.
+- Workspace-admin direct user creation requires `user.manage`.
+- Work item operations must derive the actor from the authenticated principal, not from client-provided actor fields.
+- Automatic OAuth email linking must require a verified provider email. The current provider-neutral endpoint also requires a signed assertion until provider-specific OAuth callback verification is implemented.
 - Audit log writes should not be user-editable.
 
 Event rules:
 
 - Work item changes must write durable `domain_events` rows in the same transaction as the domain change.
 - Work item changes must also publish in-process Spring events after commit for immediate same-service consumers.
+- Auth and user-management events should write durable `domain_events` rows for login, registration, invitation, user creation, and OAuth identity linking.
+- The outbox dispatcher marks published in-process events and can poll pending rows for later delivery if an event was recorded but not dispatched.
 - The persisted event row is the source of truth for future queued automation, webhook delivery, reporting, notification, and integration dispatch.
 
 Customization rules:
@@ -1465,6 +1506,7 @@ Use versioned REST APIs initially:
 
 ```text
 /api/v1/organizations
+/api/v1/auth
 /api/v1/workspaces
 /api/v1/projects
 /api/v1/teams
@@ -1492,6 +1534,18 @@ Guidelines:
 - Return work item keys and IDs in API responses.
 - Prefer explicit command endpoints for workflow transitions, moving/ranking work, and bulk changes.
 - Use idempotency keys for imports, webhooks, agent callbacks, and bulk operations where appropriate.
+
+Example auth endpoints:
+
+```text
+POST   /api/v1/auth/login
+POST   /api/v1/auth/register
+POST   /api/v1/auth/oauth/login
+POST   /api/v1/auth/logout
+GET    /api/v1/auth/me
+POST   /api/v1/workspaces/{workspaceId}/invitations
+POST   /api/v1/workspaces/{workspaceId}/users
+```
 
 Example work item endpoints:
 
@@ -1825,7 +1879,7 @@ Although this is not an MVP schema, implementation should still be sequenced so 
 Recommended order:
 
 1. Add migration framework and database conventions.
-2. Implement identity, organizations, workspaces, users, roles, and memberships.
+2. Implement identity, authentication, organizations, workspaces, users, roles, invitations, and memberships.
 3. Implement projects, teams, and project/team memberships.
 4. Implement work item types, type rules, project type availability, priorities, resolutions, and workspace seed data.
 5. Implement workflows, statuses, transitions, and workflow assignments.
@@ -1840,14 +1894,14 @@ Recommended order:
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, and the initial work item API flow with hierarchy validation, ranking, transitions, assignment history, closure rows, and domain events.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, invitation registration, workspace-admin user creation, signed OAuth identity linking, permission denial, and the initial authenticated work item API flow with hierarchy validation, ranking, transitions, assignment history, closure rows, and domain events.
 
 Required backend tests:
 
 - Entity/repository tests for core constraints.
 - Service tests for work item hierarchy validation.
 - Service tests for workflow transitions.
-- Service tests for permission checks.
+- Service and integration tests for permission checks.
 - Integration tests for create/update/list APIs.
 - Migration tests when schema grows.
 - Import job tests for idempotency and partial failure handling.

@@ -179,6 +179,22 @@ create table role_permissions (
     primary key (role_id, permission_id)
 );
 
+create table user_invitations (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    email varchar(320) not null,
+    role_id uuid references roles(id) on delete set null,
+    token_hash text not null unique,
+    status varchar(40) not null default 'pending',
+    invited_by_id uuid references users(id) on delete set null,
+    accepted_by_id uuid references users(id) on delete set null,
+    expires_at timestamptz not null,
+    accepted_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_user_invitations_status check (status in ('pending', 'accepted', 'revoked', 'expired'))
+);
+
 create table workspace_memberships (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
@@ -1170,6 +1186,7 @@ create table recent_items (
 insert into permissions (key, name, description, category) values
     ('workspace.admin', 'Administer workspace', 'Manage workspace settings, roles, and configuration.', 'workspace'),
     ('workspace.read', 'Read workspace', 'View workspace-level data.', 'workspace'),
+    ('user.manage', 'Manage users', 'Invite users, create users, and manage workspace membership.', 'identity'),
     ('project.create', 'Create projects', 'Create projects in a workspace.', 'project'),
     ('project.admin', 'Administer project', 'Manage project settings and membership.', 'project'),
     ('project.read', 'Read project', 'View project data.', 'project'),
@@ -1287,6 +1304,7 @@ for each row execute function prevent_work_item_parent_cycle();
 
 create trigger trg_users_updated_at before update on users for each row execute function set_updated_at();
 create trigger trg_user_auth_identities_updated_at before update on user_auth_identities for each row execute function set_updated_at();
+create trigger trg_user_invitations_updated_at before update on user_invitations for each row execute function set_updated_at();
 create trigger trg_organizations_updated_at before update on organizations for each row execute function set_updated_at();
 create trigger trg_workspaces_updated_at before update on workspaces for each row execute function set_updated_at();
 create trigger trg_projects_updated_at before update on projects for each row execute function set_updated_at();

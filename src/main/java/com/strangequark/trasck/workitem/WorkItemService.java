@@ -2,7 +2,9 @@ package com.strangequark.trasck.workitem;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
+import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistory;
@@ -46,6 +48,8 @@ public class WorkItemService {
     private final WorkItemSequenceService workItemSequenceService;
     private final WorkItemRankService workItemRankService;
     private final DomainEventService domainEventService;
+    private final CurrentUserService currentUserService;
+    private final PermissionService permissionService;
     private final JdbcTemplate jdbcTemplate;
 
     public WorkItemService(
@@ -66,6 +70,8 @@ public class WorkItemService {
             WorkItemSequenceService workItemSequenceService,
             WorkItemRankService workItemRankService,
             DomainEventService domainEventService,
+            CurrentUserService currentUserService,
+            PermissionService permissionService,
             JdbcTemplate jdbcTemplate
     ) {
         this.objectMapper = objectMapper;
@@ -85,13 +91,17 @@ public class WorkItemService {
         this.workItemSequenceService = workItemSequenceService;
         this.workItemRankService = workItemRankService;
         this.domainEventService = domainEventService;
+        this.currentUserService = currentUserService;
+        this.permissionService = permissionService;
         this.jdbcTemplate = jdbcTemplate;
     }
 
     @Transactional
     public WorkItemResponse create(UUID projectId, WorkItemCreateRequest request) {
         WorkItemCreateRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
         Project project = activeProject(projectId);
+        permissionService.requireProjectPermission(actorId, project.getId(), "work_item.create");
         WorkItemType type = resolveType(project.getWorkspaceId(), createRequest.typeId(), createRequest.typeKey());
         assertTypeEnabledForProject(project.getId(), type.getId());
         WorkItem parent = resolveParent(project, createRequest.parentId());
@@ -101,7 +111,7 @@ public class WorkItemService {
 
         long projectSequence = workItemSequenceService.nextProjectSequence(project.getWorkspaceId(), project.getId());
         long workspaceSequence = workItemSequenceService.nextWorkspaceSequence(project.getWorkspaceId());
-        UUID actorId = firstNonNull(createRequest.actorUserId(), createRequest.reporterId());
+        UUID reporterId = firstNonNull(createRequest.reporterId(), actorId);
 
         WorkItem item = new WorkItem();
         item.setWorkspaceId(project.getWorkspaceId());
@@ -111,7 +121,7 @@ public class WorkItemService {
         item.setStatusId(status.getId());
         item.setPriorityId(resolvePriorityId(project.getWorkspaceId(), createRequest.priorityId(), createRequest.priorityKey()));
         item.setAssigneeId(createRequest.assigneeId());
-        item.setReporterId(createRequest.reporterId());
+        item.setReporterId(reporterId);
         item.setCreatedById(actorId);
         item.setUpdatedById(actorId);
         item.setKey(project.getKey() + "-" + projectSequence);
@@ -139,7 +149,9 @@ public class WorkItemService {
 
     @Transactional(readOnly = true)
     public List<WorkItemResponse> listByProject(UUID projectId) {
+        UUID actorId = currentUserService.requireUserId();
         activeProject(projectId);
+        permissionService.requireProjectPermission(actorId, projectId, "work_item.read");
         return workItemRepository.findByProjectIdAndDeletedAtIsNullOrderByRankAsc(projectId).stream()
                 .map(WorkItemResponse::from)
                 .toList();
@@ -147,15 +159,19 @@ public class WorkItemService {
 
     @Transactional(readOnly = true)
     public WorkItemResponse get(UUID workItemId) {
-        return WorkItemResponse.from(activeWorkItem(workItemId));
+        UUID actorId = currentUserService.requireUserId();
+        WorkItem item = activeWorkItem(workItemId);
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.read");
+        return WorkItemResponse.from(item);
     }
 
     @Transactional
     public WorkItemResponse update(UUID workItemId, WorkItemUpdateRequest request) {
         WorkItemUpdateRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
         WorkItem item = activeWorkItem(workItemId);
         Project project = activeProject(item.getProjectId());
-        UUID actorId = updateRequest.actorUserId();
+        permissionService.requireProjectPermission(actorId, project.getId(), "work_item.update");
         UUID oldParentId = item.getParentId();
         UUID oldTypeId = item.getTypeId();
 
@@ -224,40 +240,46 @@ public class WorkItemService {
     @Transactional
     public WorkItemResponse assign(UUID workItemId, WorkItemAssignRequest request) {
         WorkItemAssignRequest assignRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
         WorkItem item = activeWorkItem(workItemId);
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.update");
         UUID previousAssignee = item.getAssigneeId();
         if (same(previousAssignee, assignRequest.assigneeId())) {
             return WorkItemResponse.from(item);
         }
         item.setAssigneeId(assignRequest.assigneeId());
-        item.setUpdatedById(assignRequest.actorUserId());
+        item.setUpdatedById(actorId);
         WorkItem saved = workItemRepository.saveAndFlush(item);
-        writeAssignmentHistory(saved.getId(), previousAssignee, saved.getAssigneeId(), assignRequest.actorUserId());
-        recordEvent(saved, "work_item.assigned", assignRequest.actorUserId());
+        writeAssignmentHistory(saved.getId(), previousAssignee, saved.getAssigneeId(), actorId);
+        recordEvent(saved, "work_item.assigned", actorId);
         return WorkItemResponse.from(saved);
     }
 
     @Transactional
     public WorkItemResponse rank(UUID workItemId, WorkItemRankRequest request) {
         WorkItemRankRequest rankRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
         WorkItem item = activeWorkItem(workItemId);
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.update");
         WorkItem previous = rankRequest.previousWorkItemId() == null ? null : activeWorkItemInProject(rankRequest.previousWorkItemId(), item.getProjectId());
         WorkItem next = rankRequest.nextWorkItemId() == null ? null : activeWorkItemInProject(rankRequest.nextWorkItemId(), item.getProjectId());
         if (previous != null && same(previous.getId(), item.getId()) || next != null && same(next.getId(), item.getId())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A work item cannot be ranked relative to itself");
         }
         item.setRank(workItemRankService.between(previous == null ? null : previous.getRank(), next == null ? null : next.getRank()));
-        item.setUpdatedById(rankRequest.actorUserId());
+        item.setUpdatedById(actorId);
         WorkItem saved = workItemRepository.saveAndFlush(item);
-        recordEvent(saved, "work_item.rank_changed", rankRequest.actorUserId());
+        recordEvent(saved, "work_item.rank_changed", actorId);
         return WorkItemResponse.from(saved);
     }
 
     @Transactional
     public WorkItemResponse transition(UUID workItemId, WorkItemTransitionRequest request) {
         WorkItemTransitionRequest transitionRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
         String transitionKey = requiredText(transitionRequest.transitionKey(), "transitionKey");
         WorkItem item = activeWorkItem(workItemId);
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.transition");
         WorkflowAssignment assignment = workflowAssignment(item.getProjectId(), item.getTypeId());
         WorkflowTransition transition = workflowTransitionRepository.findAllowedTransition(assignment.getWorkflowId(), transitionKey, item.getStatusId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Workflow transition is not allowed from the current status"));
@@ -265,25 +287,27 @@ public class WorkItemService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Transition target status not found"));
         UUID fromStatusId = item.getStatusId();
         item.setStatusId(toStatus.getId());
-        item.setUpdatedById(transitionRequest.actorUserId());
+        item.setUpdatedById(actorId);
         applyTransitionActions(item, transition.getId());
         if (Boolean.TRUE.equals(toStatus.getTerminal())) {
             item.setResolvedAt(OffsetDateTime.now());
         }
         WorkItem saved = workItemRepository.saveAndFlush(item);
-        writeStatusHistory(saved.getId(), fromStatusId, saved.getStatusId(), transitionRequest.actorUserId());
-        recordEvent(saved, "work_item.status_changed", transitionRequest.actorUserId());
+        writeStatusHistory(saved.getId(), fromStatusId, saved.getStatusId(), actorId);
+        recordEvent(saved, "work_item.status_changed", actorId);
         return WorkItemResponse.from(saved);
     }
 
     @Transactional
-    public void archive(UUID workItemId, UUID actorUserId) {
+    public void archive(UUID workItemId) {
+        UUID actorId = currentUserService.requireUserId();
         WorkItem item = activeWorkItem(workItemId);
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.delete");
         item.setDeletedAt(OffsetDateTime.now());
-        item.setUpdatedById(actorUserId);
+        item.setUpdatedById(actorId);
         WorkItem saved = workItemRepository.saveAndFlush(item);
         rebuildClosure(saved.getProjectId());
-        recordEvent(saved, "work_item.archived", actorUserId);
+        recordEvent(saved, "work_item.archived", actorId);
     }
 
     private Project activeProject(UUID projectId) {
