@@ -224,7 +224,10 @@ public class AgentService {
         UUID actorId = currentUserService.requireUserId();
         permissionService.requireWorkspacePermission(actorId, provider.getWorkspaceId(), "agent.provider.credential.manage");
         String credentialType = normalizeKey(requiredText(createRequest.credentialType(), "credentialType"));
-        agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(providerId, credentialType)
+        JsonNode metadata = credentialMetadata(credentialType, createRequest.metadata());
+        String workerId = "worker_token".equals(credentialType) ? workerIdFromMetadata(metadata) : null;
+        agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(providerId, credentialType).stream()
+                .filter(existing -> workerId == null || workerId.equals(workerIdFromMetadata(existing.getMetadata())))
                 .forEach(existing -> {
                     existing.setActive(false);
                     existing.setRotatedAt(OffsetDateTime.now());
@@ -233,7 +236,7 @@ public class AgentService {
         credential.setProviderId(providerId);
         credential.setCredentialType(credentialType);
         credential.setEncryptedSecret(secretCipherService.encrypt(requiredText(createRequest.secret(), "secret")));
-        credential.setMetadata(toJson(createRequest.metadata()));
+        credential.setMetadata(metadata);
         credential.setActive(true);
         AgentProviderCredential saved = agentProviderCredentialRepository.save(credential);
         ObjectNode payload = payloadForProvider(provider, actorId)
@@ -625,7 +628,8 @@ public class AgentService {
 
     @Transactional
     public Optional<AgentWorkerTaskResponse> claimWorkerTask(UUID workspaceId, String providerKey, String workerToken, AgentWorkerClaimRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, request == null ? null : request.workerId());
+        AgentProvider provider = worker.provider();
         Optional<AgentTask> task = agentTaskRepository.findFirstByWorkspaceIdAndProviderIdAndStatusInOrderByQueuedAtAsc(
                 workspaceId,
                 provider.getId(),
@@ -635,7 +639,7 @@ public class AgentService {
             return Optional.empty();
         }
         AgentTask claimed = task.get();
-        appendTaskEvent(claimed, "worker_claimed", "info", "Worker claimed agent task.", workerMetadata(request == null ? null : request.workerId(), request == null ? null : request.metadata()));
+        appendTaskEvent(claimed, "worker_claimed", "info", "Worker claimed agent task.", workerMetadata(worker.workerId(), request == null ? null : request.metadata()));
         AgentProfile profile = activeProfile(claimed.getWorkspaceId(), claimed.getAgentProfileId());
         return Optional.of(workerTaskResponse(claimed, provider, profile, "polling"));
     }
@@ -656,9 +660,10 @@ public class AgentService {
 
     @Transactional
     public AgentTaskResponse workerHeartbeat(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerHeartbeatRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
-        AgentTask task = workerTask(provider, taskId);
         AgentWorkerHeartbeatRequest heartbeat = required(request, "request");
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, heartbeat.workerId());
+        AgentProvider provider = worker.provider();
+        AgentTask task = workerTask(provider, taskId);
         if (hasText(heartbeat.status())) {
             String status = normalizeCallbackStatus(heartbeat.status());
             if (!List.of("running", "waiting_for_input").contains(status)) {
@@ -670,56 +675,60 @@ public class AgentService {
             }
         }
         AgentTask saved = agentTaskRepository.save(task);
-        appendTaskEvent(saved, "worker_heartbeat", "info", firstText(heartbeat.message(), "Worker heartbeat received."), workerMetadata(heartbeat.workerId(), heartbeat.metadata()));
+        appendTaskEvent(saved, "worker_heartbeat", "info", firstText(heartbeat.message(), "Worker heartbeat received."), workerMetadata(worker.workerId(), heartbeat.metadata()));
         return response(saved, null);
     }
 
     @Transactional
     public AgentTaskResponse workerLog(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
-        AgentTask task = workerTask(provider, taskId);
         AgentWorkerEventRequest eventRequest = required(request, "request");
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId());
+        AgentProvider provider = worker.provider();
+        AgentTask task = workerTask(provider, taskId);
         appendTaskEvent(
                 task,
                 normalizeKey(firstText(eventRequest.eventType(), "worker_log")),
                 normalizeSeverity(eventRequest.severity()),
                 eventRequest.message(),
-                workerMetadata(eventRequest.workerId(), eventRequest.metadata())
+                workerMetadata(worker.workerId(), eventRequest.metadata())
         );
         return response(task, null);
     }
 
     @Transactional
     public AgentTaskResponse workerMessage(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentTaskCallbackMessageRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, null);
+        AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         AgentProfile profile = activeProfile(task.getWorkspaceId(), task.getAgentProfileId());
         AgentTaskCallbackMessageRequest messageRequest = required(request, "request");
         saveAgentMessage(task, profile, normalizeSenderType(messageRequest.senderType()), requiredText(messageRequest.bodyMarkdown(), "bodyMarkdown"), messageRequest.bodyDocument());
-        appendTaskEvent(task, "worker_message_added", "info", "Worker message added.", objectMapper.createObjectNode());
+        appendTaskEvent(task, "worker_message_added", "info", "Worker message added.", workerMetadata(worker.workerId(), null));
         return response(task, null);
     }
 
     @Transactional
     public AgentTaskResponse workerArtifact(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentTaskCallbackArtifactRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, null);
+        AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         saveArtifact(task, required(request, "request"));
-        appendTaskEvent(task, "worker_artifact_added", "info", "Worker artifact added.", objectMapper.createObjectNode());
+        appendTaskEvent(task, "worker_artifact_added", "info", "Worker artifact added.", workerMetadata(worker.workerId(), null));
         return response(task, null);
     }
 
     @Transactional
     public AgentTaskResponse workerCancel(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
-        AgentTask task = workerTask(provider, taskId);
         AgentWorkerEventRequest eventRequest = request == null ? new AgentWorkerEventRequest(null, null, null, null, null) : request;
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId());
+        AgentProvider provider = worker.provider();
+        AgentTask task = workerTask(provider, taskId);
         if (!isTerminal(task.getStatus())) {
             task.setStatus("canceled");
             task.setCanceledAt(OffsetDateTime.now());
         }
         AgentTask saved = agentTaskRepository.save(task);
-        appendTaskEvent(saved, "worker_cancel_acknowledged", "warning", firstText(eventRequest.message(), "Worker acknowledged cancellation."), workerMetadata(eventRequest.workerId(), eventRequest.metadata()));
+        appendTaskEvent(saved, "worker_cancel_acknowledged", "warning", firstText(eventRequest.message(), "Worker acknowledged cancellation."), workerMetadata(worker.workerId(), eventRequest.metadata()));
         WorkItem item = activeWorkItem(saved.getWorkItemId());
         AgentProfile profile = activeProfile(saved.getWorkspaceId(), saved.getAgentProfileId());
         recordAgentTaskEvent(saved, item, provider, profile, "agent.task.canceled", profile.getUserId(), eventRequest.message());
@@ -728,7 +737,9 @@ public class AgentService {
 
     @Transactional
     public AgentWorkerTaskResponse workerRetry(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request) {
-        AgentProvider provider = authenticatedWorkerProvider(workspaceId, providerKey, workerToken);
+        AgentWorkerEventRequest eventRequest = request == null ? new AgentWorkerEventRequest(null, null, null, null, null) : request;
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId());
+        AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         if (List.of("failed", "canceled").contains(task.getStatus())) {
             task.setStatus("running");
@@ -739,8 +750,7 @@ public class AgentService {
             task.setResultPayload(null);
         }
         AgentTask saved = agentTaskRepository.save(task);
-        AgentWorkerEventRequest eventRequest = request == null ? new AgentWorkerEventRequest(null, null, null, null, null) : request;
-        appendTaskEvent(saved, "worker_retry_started", "info", firstText(eventRequest.message(), "Worker retry started."), workerMetadata(eventRequest.workerId(), eventRequest.metadata()));
+        appendTaskEvent(saved, "worker_retry_started", "info", firstText(eventRequest.message(), "Worker retry started."), workerMetadata(worker.workerId(), eventRequest.metadata()));
         AgentProfile profile = activeProfile(saved.getWorkspaceId(), saved.getAgentProfileId());
         return workerTaskResponse(saved, provider, profile, "polling");
     }
@@ -1153,7 +1163,7 @@ public class AgentService {
         return provider;
     }
 
-    private AgentProvider authenticatedWorkerProvider(UUID workspaceId, String providerKey, String workerToken) {
+    private AuthenticatedWorker authenticatedWorker(UUID workspaceId, String providerKey, String workerToken, String providedWorkerId) {
         AgentProvider provider = agentProviderRepository.findByWorkspaceIdAndProviderKey(workspaceId, normalizeKey(providerKey))
                 .orElseThrow(() -> notFound("Agent provider not found"));
         if (!Boolean.TRUE.equals(provider.getEnabled())) {
@@ -1165,12 +1175,42 @@ public class AgentService {
         if (!hasText(workerToken)) {
             throw unauthorized("Missing worker token");
         }
-        boolean matches = agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(provider.getId(), "worker_token").stream()
-                .anyMatch(credential -> workerToken.equals(secretCipherService.decrypt(credential.getEncryptedSecret())));
-        if (!matches) {
-            throw unauthorized("Invalid worker token");
+        for (AgentProviderCredential credential : agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(provider.getId(), "worker_token")) {
+            if (!workerToken.equals(secretCipherService.decrypt(credential.getEncryptedSecret()))) {
+                continue;
+            }
+            String credentialWorkerId = workerIdFromMetadata(credential.getMetadata());
+            if (!hasText(credentialWorkerId)) {
+                throw unauthorized("Invalid worker token");
+            }
+            if (hasText(providedWorkerId) && !credentialWorkerId.equals(providedWorkerId.trim())) {
+                throw unauthorized("Worker token does not match the requested worker");
+            }
+            return new AuthenticatedWorker(provider, credentialWorkerId);
         }
-        return provider;
+        throw unauthorized("Invalid worker token");
+    }
+
+    private record AuthenticatedWorker(AgentProvider provider, String workerId) {
+    }
+
+    private JsonNode credentialMetadata(String credentialType, Object metadata) {
+        JsonNode normalized = toJson(metadata);
+        if (!"worker_token".equals(credentialType)) {
+            return normalized;
+        }
+        String workerId = workerIdFromMetadata(normalized);
+        if (!hasText(workerId)) {
+            throw badRequest("worker_token metadata.workerId is required");
+        }
+        return normalized;
+    }
+
+    private String workerIdFromMetadata(JsonNode metadata) {
+        if (metadata == null || !metadata.isObject() || !hasText(metadata.path("workerId").asText(null))) {
+            return null;
+        }
+        return metadata.path("workerId").asText().trim();
     }
 
     private AgentTask workerTask(AgentProvider provider, UUID taskId) {

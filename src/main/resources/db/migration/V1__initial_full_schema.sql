@@ -383,6 +383,7 @@ create table work_items (
     status_id uuid not null references workflow_statuses(id) on delete restrict,
     priority_id uuid references priorities(id) on delete set null,
     resolution_id uuid references resolutions(id) on delete set null,
+    team_id uuid references teams(id) on delete set null,
     assignee_id uuid references users(id) on delete set null,
     reporter_id uuid references users(id) on delete set null,
     key varchar(80) not null,
@@ -1430,6 +1431,7 @@ create index ix_work_items_workspace_sequence on work_items(workspace_id, worksp
 create index ix_work_items_project_type on work_items(project_id, type_id);
 create index ix_work_items_parent on work_items(parent_id);
 create index ix_work_items_resolution on work_items(resolution_id);
+create index ix_work_items_team on work_items(team_id);
 create index ix_work_items_status on work_items(status_id);
 create index ix_work_items_assignee on work_items(assignee_id);
 create index ix_work_items_reporter on work_items(reporter_id);

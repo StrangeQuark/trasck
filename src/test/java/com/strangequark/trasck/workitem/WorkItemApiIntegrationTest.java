@@ -102,6 +102,7 @@ class WorkItemApiIntegrationTest {
         UUID firstEpicId = uuid(firstEpic, "/id");
         JsonNode story = createWorkItem(projectId, actorId, "story", firstEpicId, "Implement story", null);
         UUID storyId = uuid(story, "/id");
+        ReportingScopeSeed reportingScope = seedReportingScope(workspaceId, projectId, actorId, storyId);
 
         assertThat(story.at("/key").asText()).endsWith("-2");
         assertThat(story.at("/sequenceNumber").asLong()).isEqualTo(2);
@@ -114,8 +115,10 @@ class WorkItemApiIntegrationTest {
         JsonNode estimatedStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
                 .put("estimatePoints", 5.0)
                 .put("estimateMinutes", 480)
-                .put("remainingMinutes", 300));
+                .put("remainingMinutes", 300)
+                .put("teamId", reportingScope.teamId().toString()));
         assertThat(estimatedStory.at("/estimatePoints").decimalValue()).isEqualByComparingTo("5.0");
+        assertThat(uuid(estimatedStory, "/teamId")).isEqualTo(reportingScope.teamId());
         assertThat(countWhere("work_item_estimate_history", "work_item_id", storyId)).isEqualTo(3);
 
         HttpResponse<String> invalidChildResponse = post(
@@ -262,6 +265,25 @@ class WorkItemApiIntegrationTest {
         assertThat(workLogSummary.at("/entryCount").asInt()).isEqualTo(2);
         assertThat(workLogSummary.at("/totalMinutes").asLong()).isEqualTo(90);
         accessToken = adminAccessToken;
+
+        JsonNode projectSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
+        assertThat(projectSummary.at("/scope/scopeType").asText()).isEqualTo("project");
+        assertThat(projectSummary.at("/from").asText()).isEqualTo("2026-04-18T00:00:00Z");
+        assertThat(projectSummary.at("/to").asText()).isEqualTo("2026-04-20T00:00:00Z");
+        assertThat(projectSummary.at("/workItems/total").asLong()).isEqualTo(3);
+        assertThat(projectSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
+        assertThat(projectSummary.at("/estimateAndTime/workLogDeletedBehavior").asText()).isEqualTo("soft_deleted_excluded");
+        assertThat(projectSummary.at("/byStatus")).isNotEmpty();
+        assertThat(projectSummary.at("/widgets")).hasSize(8);
+
+        JsonNode teamIterationSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z&teamId=" + reportingScope.teamId() + "&iterationId=" + reportingScope.iterationId());
+        assertThat(teamIterationSummary.at("/scope/scopeType").asText()).isEqualTo("iteration");
+        assertThat(uuid(teamIterationSummary, "/scope/teamId")).isEqualTo(reportingScope.teamId());
+        assertThat(uuid(teamIterationSummary, "/scope/iterationId")).isEqualTo(reportingScope.iterationId());
+        assertThat(teamIterationSummary.at("/scope/teamResolutionMode").asText()).isEqualTo("explicit_work_item_team_then_membership_snapshot");
+        assertThat(teamIterationSummary.at("/workItems/total").asLong()).isEqualTo(1);
+        assertThat(teamIterationSummary.at("/estimateAndTime/estimatePoints").decimalValue()).isEqualByComparingTo("5.0");
+        assertThat(teamIterationSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
 
         JsonNode statusHistory = getJson("/api/v1/reports/work-items/" + storyId + "/status-history");
         assertThat(statusHistory).hasSize(2);
@@ -443,6 +465,56 @@ class WorkItemApiIntegrationTest {
         return body;
     }
 
+    private ReportingScopeSeed seedReportingScope(UUID workspaceId, UUID projectId, UUID userId, UUID workItemId) {
+        UUID teamId = UUID.randomUUID();
+        UUID iterationId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "insert into teams (id, workspace_id, name, description, lead_user_id, default_capacity, status) values (?, ?, ?, ?, ?, ?, ?)",
+                teamId,
+                workspaceId,
+                "Delivery Team " + teamId.toString().substring(0, 8),
+                "Reporting integration team",
+                userId,
+                100,
+                "active"
+        );
+        jdbcTemplate.update(
+                "insert into project_teams (project_id, team_id, role) values (?, ?, ?)",
+                projectId,
+                teamId,
+                "delivery"
+        );
+        jdbcTemplate.update(
+                "insert into team_memberships (id, team_id, user_id, role, capacity_percent, joined_at) values (?, ?, ?, ?, ?, ?)",
+                UUID.randomUUID(),
+                teamId,
+                userId,
+                "member",
+                100,
+                java.time.OffsetDateTime.parse("2026-04-01T00:00:00Z")
+        );
+        jdbcTemplate.update(
+                "insert into iterations (id, workspace_id, project_id, team_id, name, start_date, end_date, status, committed_points, completed_points) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                iterationId,
+                workspaceId,
+                projectId,
+                teamId,
+                "Sprint 1",
+                java.time.LocalDate.parse("2026-04-18"),
+                java.time.LocalDate.parse("2026-04-25"),
+                "active",
+                5.0,
+                0.0
+        );
+        jdbcTemplate.update(
+                "insert into iteration_work_items (iteration_id, work_item_id, added_by_id) values (?, ?, ?)",
+                iterationId,
+                workItemId,
+                userId
+        );
+        return new ReportingScopeSeed(teamId, iterationId);
+    }
+
     private JsonNode postJson(String path, JsonNode body) throws Exception {
         HttpResponse<String> response = post(path, body);
         assertThat(response.statusCode()).isBetween(200, 299);
@@ -604,6 +676,9 @@ class WorkItemApiIntegrationTest {
                 descendantId
         );
         return count == null ? 0 : count;
+    }
+
+    private record ReportingScopeSeed(UUID teamId, UUID iterationId) {
     }
 
     @TestConfiguration

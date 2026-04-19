@@ -10,6 +10,8 @@ public record WorkItemUpdateRequest(
         Boolean clearParent,
         UUID priorityId,
         String priorityKey,
+        UUID teamId,
+        Boolean clearTeam,
         String title,
         String descriptionMarkdown,
         Object descriptionDocument,

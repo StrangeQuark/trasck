@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -35,5 +36,16 @@ public class ReportingController {
     @GetMapping("/work-items/{workItemId}/work-log-summary")
     public WorkLogSummaryResponse workLogSummary(@PathVariable UUID workItemId) {
         return reportingService.workLogSummary(workItemId);
+    }
+
+    @GetMapping("/projects/{projectId}/dashboard-summary")
+    public ProjectReportSummaryResponse projectDashboardSummary(
+            @PathVariable UUID projectId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) UUID teamId,
+            @RequestParam(required = false) UUID iterationId
+    ) {
+        return reportingService.projectDashboardSummary(projectId, from, to, teamId, iterationId);
     }
 }

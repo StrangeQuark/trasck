@@ -11,6 +11,7 @@ public record WorkItemCreateRequest(
         String statusKey,
         UUID priorityId,
         String priorityKey,
+        UUID teamId,
         UUID assigneeId,
         UUID reporterId,
         String title,
