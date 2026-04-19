@@ -50,4 +50,27 @@ public class AgentProviderController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(agentService.createCredential(providerId, request));
     }
+
+    @GetMapping("/agent-providers/{providerId}/credentials")
+    public List<AgentProviderCredentialResponse> listCredentials(@PathVariable UUID providerId) {
+        return agentService.listCredentials(providerId);
+    }
+
+    @PostMapping("/agent-providers/{providerId}/credentials/{credentialId}/deactivate")
+    public AgentProviderCredentialResponse deactivateCredential(
+            @PathVariable UUID providerId,
+            @PathVariable UUID credentialId
+    ) {
+        return agentService.deactivateCredential(providerId, credentialId);
+    }
+
+    @PostMapping("/agent-providers/{providerId}/credentials/reencrypt")
+    public List<AgentProviderCredentialResponse> reencryptCredentials(@PathVariable UUID providerId) {
+        return agentService.reencryptCredentials(providerId);
+    }
+
+    @PostMapping("/agent-providers/{providerId}/callback-keys/rotate")
+    public AgentProviderResponse rotateCallbackKey(@PathVariable UUID providerId) {
+        return agentService.rotateCallbackKey(providerId);
+    }
 }

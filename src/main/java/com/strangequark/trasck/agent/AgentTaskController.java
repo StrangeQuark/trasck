@@ -49,6 +49,27 @@ public class AgentTaskController {
         return agentService.acceptResult(taskId);
     }
 
+    @PostMapping("/agent-tasks/{taskId}/messages")
+    public AgentTaskResponse addHumanMessage(
+            @PathVariable UUID taskId,
+            @RequestBody AgentTaskHumanMessageRequest request
+    ) {
+        return agentService.addHumanMessage(taskId, request);
+    }
+
+    @PostMapping("/agent-tasks/{taskId}/request-changes")
+    public AgentTaskResponse requestChanges(
+            @PathVariable UUID taskId,
+            @RequestBody AgentTaskRequestChangesRequest request
+    ) {
+        return agentService.requestChanges(taskId, request);
+    }
+
+    @PostMapping("/agent-tasks/{taskId}/worker-dispatch")
+    public AgentWorkerTaskResponse workerDispatch(@PathVariable UUID taskId) {
+        return agentService.workerDispatch(taskId);
+    }
+
     @PostMapping("/agent-callbacks/{providerKey}")
     public AgentTaskResponse callback(
             @PathVariable String providerKey,

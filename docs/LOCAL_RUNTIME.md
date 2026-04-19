@@ -64,5 +64,6 @@ Trasck accepts these API authentication shapes:
 - Direct Bearer JWT: use the `accessToken` returned from login as `Authorization: Bearer <jwt>`. CSRF is not required for Bearer-header calls.
 - Personal/service API token: create a token through the auth token endpoints and use it as `Authorization: Bearer <api-token>`. Token scopes are enforced in addition to role permissions.
 - Agent callback JWT: agent callbacks use `X-Trasck-Agent-Callback-Jwt`, scoped to provider/workspace/profile/task.
+- Generic worker token: worker protocol calls use `X-Trasck-Worker-Token`, matched against an active encrypted `worker_token` credential on a `generic_worker` provider.
 
 See `docs/http/trasck-api-examples.http` for runnable request examples.

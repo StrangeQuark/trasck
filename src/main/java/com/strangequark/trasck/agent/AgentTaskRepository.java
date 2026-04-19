@@ -10,5 +10,7 @@ public interface AgentTaskRepository extends JpaRepository<AgentTask, UUID> {
 
     Optional<AgentTask> findByIdAndWorkspaceId(UUID id, UUID workspaceId);
 
+    Optional<AgentTask> findFirstByWorkspaceIdAndProviderIdAndStatusInOrderByQueuedAtAsc(UUID workspaceId, UUID providerId, List<String> statuses);
+
     long countByAgentProfileIdAndStatusIn(UUID agentProfileId, List<String> statuses);
 }

@@ -91,6 +91,7 @@ class WorkItemApiIntegrationTest {
         UUID actorId = uuid(setup, "/adminUser/id");
         UUID workspaceId = uuid(setup, "/workspace/id");
         UUID projectId = uuid(setup, "/project/id");
+        UUID memberRoleId = roleId(setup, "member");
         UUID viewerRoleId = roleId(setup, "viewer");
 
         assertThat(get("/api/v1/projects/" + projectId + "/work-items").statusCode()).isEqualTo(401);
@@ -226,19 +227,37 @@ class WorkItemApiIntegrationTest {
                 .put("roleId", viewerRoleId.toString())
                 .put("emailVerified", true));
         UUID viewerId = uuid(viewer, "/id");
+        String memberEmail = "time-member-" + UUID.randomUUID() + "@example.com";
+        String memberPassword = "member-password";
+        JsonNode member = postJson("/api/v1/workspaces/" + workspaceId + "/users", objectMapper.createObjectNode()
+                .put("email", memberEmail)
+                .put("username", "time-member-" + UUID.randomUUID())
+                .put("displayName", "Time Member")
+                .put("password", memberPassword)
+                .put("roleId", memberRoleId.toString())
+                .put("emailVerified", true));
+        UUID memberId = uuid(member, "/id");
+
         accessToken = login(viewerEmail, viewerPassword);
-        JsonNode viewerWorkLog = postJson("/api/v1/work-items/" + storyId + "/work-logs", objectMapper.createObjectNode()
+        assertThat(post("/api/v1/work-items/" + storyId + "/work-logs", objectMapper.createObjectNode()
                 .put("userId", viewerId.toString())
                 .put("minutesSpent", 20)
                 .put("workDate", "2026-04-18")
-                .put("descriptionMarkdown", "Logged my own time with read permission."));
-        UUID viewerWorkLogId = uuid(viewerWorkLog, "/id");
-        JsonNode updatedViewerWorkLog = patch("/api/v1/work-items/" + storyId + "/work-logs/" + viewerWorkLogId, objectMapper.createObjectNode()
-                .put("minutesSpent", 30));
-        assertThat(updatedViewerWorkLog.at("/minutesSpent").asInt()).isEqualTo(30);
+                .put("descriptionMarkdown", "Attempted to log time with read permission.")).statusCode()).isEqualTo(403);
         assertThat(patchResponse("/api/v1/work-items/" + storyId + "/work-logs/" + workLogId, objectMapper.createObjectNode()
                 .put("minutesSpent", 75)).statusCode()).isEqualTo(403);
         assertThat(delete("/api/v1/work-items/" + storyId + "/work-logs/" + workLogId).statusCode()).isEqualTo(403);
+
+        accessToken = login(memberEmail, memberPassword);
+        JsonNode memberWorkLog = postJson("/api/v1/work-items/" + storyId + "/work-logs", objectMapper.createObjectNode()
+                .put("userId", memberId.toString())
+                .put("minutesSpent", 20)
+                .put("workDate", "2026-04-18")
+                .put("descriptionMarkdown", "Logged my own time with work-log permission."));
+        UUID memberWorkLogId = uuid(memberWorkLog, "/id");
+        JsonNode updatedMemberWorkLog = patch("/api/v1/work-items/" + storyId + "/work-logs/" + memberWorkLogId, objectMapper.createObjectNode()
+                .put("minutesSpent", 30));
+        assertThat(updatedMemberWorkLog.at("/minutesSpent").asInt()).isEqualTo(30);
         JsonNode workLogSummary = getJson("/api/v1/reports/work-items/" + storyId + "/work-log-summary");
         assertThat(workLogSummary.at("/entryCount").asInt()).isEqualTo(2);
         assertThat(workLogSummary.at("/totalMinutes").asLong()).isEqualTo(90);
@@ -299,10 +318,10 @@ class WorkItemApiIntegrationTest {
         assertThat(delete("/api/v1/work-items/" + storyId + "/watchers/" + actorId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/watchers")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/work-logs/" + workLogId).statusCode()).isEqualTo(204);
-        assertThat(delete("/api/v1/work-items/" + storyId + "/work-logs/" + viewerWorkLogId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/work-items/" + storyId + "/work-logs/" + memberWorkLogId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/work-logs")).isEmpty();
         assertThat(softDeleted("work_logs", workLogId)).isTrue();
-        assertThat(softDeleted("work_logs", viewerWorkLogId)).isTrue();
+        assertThat(softDeleted("work_logs", memberWorkLogId)).isTrue();
         assertThat(delete("/api/v1/work-items/" + storyId + "/links/" + linkId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/links")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + commentId).statusCode()).isEqualTo(204);
