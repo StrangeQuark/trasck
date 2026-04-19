@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -33,6 +34,11 @@ public class ReportingController {
         return reportingService.estimateHistory(workItemId);
     }
 
+    @GetMapping("/work-items/{workItemId}/team-history")
+    public List<WorkItemTeamHistoryResponse> teamHistory(@PathVariable UUID workItemId) {
+        return reportingService.teamHistory(workItemId);
+    }
+
     @GetMapping("/work-items/{workItemId}/work-log-summary")
     public WorkLogSummaryResponse workLogSummary(@PathVariable UUID workItemId) {
         return reportingService.workLogSummary(workItemId);
@@ -47,5 +53,13 @@ public class ReportingController {
             @RequestParam(required = false) UUID iterationId
     ) {
         return reportingService.projectDashboardSummary(projectId, from, to, teamId, iterationId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/snapshots/run")
+    public ReportingSnapshotRunResponse runWorkspaceSnapshots(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String date
+    ) {
+        return reportingService.runWorkspaceSnapshots(workspaceId, date);
     }
 }

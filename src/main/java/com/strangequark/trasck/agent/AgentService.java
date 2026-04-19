@@ -11,6 +11,8 @@ import com.strangequark.trasck.access.WorkspaceMembershipRepository;
 import com.strangequark.trasck.activity.Comment;
 import com.strangequark.trasck.activity.CommentRepository;
 import com.strangequark.trasck.event.DomainEventService;
+import com.strangequark.trasck.event.EventConsumerConfig;
+import com.strangequark.trasck.event.EventConsumerConfigRepository;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
@@ -62,6 +64,7 @@ public class AgentService {
     private final AgentMessageRepository agentMessageRepository;
     private final AgentArtifactRepository agentArtifactRepository;
     private final AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
+    private final EventConsumerConfigRepository eventConsumerConfigRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final WorkItemRepository workItemRepository;
@@ -94,6 +97,7 @@ public class AgentService {
             AgentMessageRepository agentMessageRepository,
             AgentArtifactRepository agentArtifactRepository,
             AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository,
+            EventConsumerConfigRepository eventConsumerConfigRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             WorkItemRepository workItemRepository,
@@ -125,6 +129,7 @@ public class AgentService {
         this.agentMessageRepository = agentMessageRepository;
         this.agentArtifactRepository = agentArtifactRepository;
         this.agentTaskRepositoryLinkRepository = agentTaskRepositoryLinkRepository;
+        this.eventConsumerConfigRepository = eventConsumerConfigRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.workItemRepository = workItemRepository;
@@ -182,6 +187,7 @@ public class AgentService {
         saved.setConfig(callbackJwtService.ensureProviderKeyPair(saved));
         adapter(saved.getProviderType()).validateProvider(saved);
         saved = agentProviderRepository.save(saved);
+        syncWorkerWebhookConsumer(saved);
         recordWorkspaceEvent(workspaceId, "agent_provider", saved.getId(), "agent.provider.created", actorId, payloadForProvider(saved, actorId));
         return AgentProviderResponse.from(saved);
     }
@@ -213,8 +219,40 @@ public class AgentService {
         }
         adapter(provider.getProviderType()).validateProvider(provider);
         AgentProvider saved = agentProviderRepository.save(provider);
+        syncWorkerWebhookConsumer(saved);
         recordWorkspaceEvent(saved.getWorkspaceId(), "agent_provider", saved.getId(), "agent.provider.updated", actorId, payloadForProvider(saved, actorId));
         return AgentProviderResponse.from(saved);
+    }
+
+    private void syncWorkerWebhookConsumer(AgentProvider provider) {
+        if (!"generic_worker".equals(provider.getProviderType())) {
+            return;
+        }
+        String consumerKey = workerWebhookConsumerKey(provider);
+        EventConsumerConfig config = eventConsumerConfigRepository.findByConsumerKey(consumerKey)
+                .orElseGet(EventConsumerConfig::new);
+        config.setWorkspaceId(provider.getWorkspaceId());
+        config.setConsumerKey(consumerKey);
+        config.setConsumerType("agent_worker_webhook");
+        config.setDisplayName(truncate(provider.getDisplayName() + " Worker Webhook Dispatch", 160));
+        config.setEventTypes(objectMapper.createArrayNode().add("agent.worker.dispatch_requested"));
+        config.setConfig(objectMapper.createObjectNode()
+                .put("providerId", provider.getId().toString())
+                .put("providerKey", provider.getProviderKey())
+                .put("callbackUrl", firstText(provider.getCallbackUrl(), "")));
+        config.setEnabled(shouldPublishWorkerWebhookDispatch(provider));
+        eventConsumerConfigRepository.save(config);
+    }
+
+    private String workerWebhookConsumerKey(AgentProvider provider) {
+        return "agent-worker-webhook-" + provider.getId();
+    }
+
+    private boolean shouldPublishWorkerWebhookDispatch(AgentProvider provider) {
+        return "generic_worker".equals(provider.getProviderType())
+                && "webhook_push".equals(provider.getDispatchMode())
+                && Boolean.TRUE.equals(provider.getEnabled())
+                && hasText(provider.getCallbackUrl());
     }
 
     @Transactional
@@ -238,6 +276,7 @@ public class AgentService {
         credential.setEncryptedSecret(secretCipherService.encrypt(requiredText(createRequest.secret(), "secret")));
         credential.setMetadata(metadata);
         credential.setActive(true);
+        credential.setExpiresAt(createRequest.expiresAt());
         AgentProviderCredential saved = agentProviderCredentialRepository.save(credential);
         ObjectNode payload = payloadForProvider(provider, actorId)
                 .put("credentialId", saved.getId().toString())
@@ -784,7 +823,11 @@ public class AgentService {
         AgentTask saved = agentTaskRepository.save(task);
         appendTaskEvent(saved, "running", "info", "Agent task dispatched.", result.dispatchPayload());
         recordAgentTaskEvent(saved, item, provider, profile, "agent.task.dispatched", actorId, null);
-        return callbackJwtService.issue(saved, provider, profile);
+        String callbackToken = callbackJwtService.issue(saved, provider, profile);
+        if (shouldPublishWorkerWebhookDispatch(provider)) {
+            recordWorkerWebhookDispatchRequested(saved, item, provider, profile, result.dispatchPayload(), actorId, retry);
+        }
+        return callbackToken;
     }
 
     private void linkRepositories(AgentTask task, WorkItem item, List<UUID> repositoryConnectionIds) {
@@ -970,6 +1013,31 @@ public class AgentService {
             payload.put("message", message);
         }
         domainEventService.record(task.getWorkspaceId(), "agent_task", task.getId(), eventType, payload);
+    }
+
+    private void recordWorkerWebhookDispatchRequested(
+            AgentTask task,
+            WorkItem item,
+            AgentProvider provider,
+            AgentProfile profile,
+            JsonNode adapterDispatchPayload,
+            UUID actorId,
+            boolean retry
+    ) {
+        ObjectNode payload = workItemPayload(item, actorId)
+                .put("agentTaskId", task.getId().toString())
+                .put("agentProfileId", profile.getId().toString())
+                .put("agentUserId", profile.getUserId().toString())
+                .put("providerId", provider.getId().toString())
+                .put("providerKey", provider.getProviderKey())
+                .put("dispatchMode", task.getDispatchMode())
+                .put("callbackUrl", provider.getCallbackUrl())
+                .put("retry", retry);
+        payload.set("adapterDispatchPayload", adapterDispatchPayload == null ? objectMapper.createObjectNode() : adapterDispatchPayload);
+        domainEventService.record(task.getWorkspaceId(), "agent_task", task.getId(), "agent.worker.dispatch_requested", payload);
+        appendTaskEvent(task, "worker_webhook_queued", "info", "Worker webhook dispatch queued.", objectMapper.createObjectNode()
+                .put("callbackUrl", provider.getCallbackUrl())
+                .put("retry", retry));
     }
 
     private void recordWorkItemAgentEvent(WorkItem item, String eventType, UUID actorId, AgentTask task, AgentProfile profile) {
@@ -1176,6 +1244,9 @@ public class AgentService {
             throw unauthorized("Missing worker token");
         }
         for (AgentProviderCredential credential : agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(provider.getId(), "worker_token")) {
+            if (credential.getExpiresAt() != null && !credential.getExpiresAt().isAfter(OffsetDateTime.now())) {
+                continue;
+            }
             if (!workerToken.equals(secretCipherService.decrypt(credential.getEncryptedSecret()))) {
                 continue;
             }
@@ -1377,6 +1448,13 @@ public class AgentService {
 
     private String firstText(String preferred, String fallback) {
         return hasText(preferred) ? preferred.trim() : fallback;
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private ObjectNode workerMetadata(String workerId, Object metadata) {

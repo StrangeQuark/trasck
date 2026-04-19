@@ -6,16 +6,23 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.event.DomainEventOutboxDispatcher;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -43,6 +50,9 @@ class AgentIntegrationTest {
     @Autowired
     private DomainEventOutboxDispatcher domainEventOutboxDispatcher;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -63,6 +73,7 @@ class AgentIntegrationTest {
         UUID viewerRoleId = roleId(setup, "viewer");
         assertThat(roleId(setup, "agent_manager")).isNotNull();
         String accessToken = login(setup);
+        WorkerWebhookCapture workerWebhook = startWorkerWebhook();
 
         JsonNode provider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
                 .put("providerKey", "sim-codex")
@@ -91,7 +102,8 @@ class AgentIntegrationTest {
                 .put("providerKey", "worker-main")
                 .put("providerType", "generic_worker")
                 .put("displayName", "Generic Worker")
-                .put("dispatchMode", "polling"), accessToken));
+                .put("dispatchMode", "webhook_push")
+                .put("callbackUrl", workerWebhook.url()), accessToken));
         UUID workerProviderId = uuid(workerProvider, "/id");
         assertThat(workerProvider.at("/providerType").asText()).isEqualTo("generic_worker");
         assertThat(workerProvider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
@@ -119,11 +131,19 @@ class AgentIntegrationTest {
                         .put("workerId", "worker-2")
                         .put("purpose", "worker-auth")), accessToken));
         assertThat(secondWorkerCredential.toString()).doesNotContain("worker-two-secret").doesNotContain("encryptedSecret");
+        JsonNode expiredWorkerCredential = read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "worker_token")
+                .put("secret", "expired-worker-secret")
+                .put("expiresAt", "2000-01-01T00:00:00Z")
+                .set("metadata", objectMapper.createObjectNode()
+                        .put("workerId", "worker-expired")
+                        .put("purpose", "worker-auth")), accessToken));
+        assertThat(expiredWorkerCredential.at("/expiresAt").asText()).isEqualTo("2000-01-01T00:00:00Z");
         JsonNode temporaryCredential = read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials", objectMapper.createObjectNode()
                 .put("credentialType", "temporary_api_token")
                 .put("secret", "temporary-secret"), accessToken));
-        assertThat(read(get("/api/v1/agent-providers/" + workerProviderId + "/credentials", accessToken))).hasSizeGreaterThanOrEqualTo(4);
-        assertThat(read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials/reencrypt", objectMapper.createObjectNode(), accessToken))).hasSizeGreaterThanOrEqualTo(4);
+        assertThat(read(get("/api/v1/agent-providers/" + workerProviderId + "/credentials", accessToken))).hasSizeGreaterThanOrEqualTo(5);
+        assertThat(read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials/reencrypt", objectMapper.createObjectNode(), accessToken))).hasSizeGreaterThanOrEqualTo(5);
         assertThat(read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials/" + uuid(temporaryCredential, "/id") + "/deactivate", objectMapper.createObjectNode(), accessToken))
                 .at("/active").asBoolean()).isFalse();
         JsonNode rotatedWorkerProvider = read(post("/api/v1/agent-providers/" + workerProviderId + "/callback-keys/rotate", objectMapper.createObjectNode(), accessToken));
@@ -228,6 +248,14 @@ class AgentIntegrationTest {
         JsonNode workerTask = read(post("/api/v1/work-items/" + workerWorkItemId + "/assign-agent", workerAssignRequest, accessToken));
         UUID workerTaskId = uuid(workerTask, "/id");
         assertThat(workerTask.at("/status").asText()).isEqualTo("running");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(workerWebhook.deliveries()).hasSize(1);
+        JsonNode durablePushDispatch = workerWebhook.deliveries().get(0);
+        assertThat(durablePushDispatch.at("/protocolVersion").asText()).isEqualTo("trasck.worker.v1");
+        assertThat(durablePushDispatch.at("/transport").asText()).isEqualTo("webhook_push");
+        assertThat(durablePushDispatch.at("/callbackToken").asText()).isNotBlank();
+        assertThat(deliveryCount("agent-worker-webhook-" + workerProviderId, "delivered")).isGreaterThanOrEqualTo(1);
+        workerWebhook.stop();
         JsonNode pushDispatch = read(post("/api/v1/agent-tasks/" + workerTaskId + "/worker-dispatch", objectMapper.createObjectNode(), accessToken));
         assertThat(pushDispatch.at("/protocolVersion").asText()).isEqualTo("trasck.worker.v1");
         assertThat(pushDispatch.at("/transport").asText()).isEqualTo("webhook_push");
@@ -236,6 +264,8 @@ class AgentIntegrationTest {
                 .put("workerId", "worker-1"), "bad-secret").statusCode()).isEqualTo(401);
         assertThat(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
                 .put("workerId", "worker-2"), "worker-secret").statusCode()).isEqualTo(401);
+        assertThat(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
+                .put("workerId", "worker-expired"), "expired-worker-secret").statusCode()).isEqualTo(401);
         JsonNode claimedTask = read(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
                 .put("workerId", "worker-1"), "worker-secret"));
         assertThat(uuid(claimedTask, "/taskId")).isEqualTo(workerTaskId);
@@ -405,6 +435,34 @@ class AgentIntegrationTest {
         return URI.create("http://localhost:" + port + path);
     }
 
+    private WorkerWebhookCapture startWorkerWebhook() throws Exception {
+        List<JsonNode> deliveries = new CopyOnWriteArrayList<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/worker-dispatch", exchange -> handleWorkerWebhook(exchange, deliveries));
+        server.start();
+        return new WorkerWebhookCapture(server, deliveries, "http://127.0.0.1:" + server.getAddress().getPort() + "/worker-dispatch");
+    }
+
+    private void handleWorkerWebhook(HttpExchange exchange, List<JsonNode> deliveries) throws IOException {
+        try {
+            byte[] body = exchange.getRequestBody().readAllBytes();
+            deliveries.add(objectMapper.readTree(body));
+            exchange.sendResponseHeaders(202, -1);
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private int deliveryCount(String consumerKey, String deliveryStatus) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from domain_event_deliveries where consumer_key = ? and delivery_status = ?",
+                Integer.class,
+                consumerKey,
+                deliveryStatus
+        );
+        return count == null ? 0 : count;
+    }
+
     private UUID uuid(JsonNode node, String pointer) {
         return UUID.fromString(node.at(pointer).asText());
     }
@@ -437,5 +495,11 @@ class AgentIntegrationTest {
             eventTypes[i] = entries.get(i).at("/" + fieldName).asText();
         }
         return eventTypes;
+    }
+
+    private record WorkerWebhookCapture(HttpServer server, List<JsonNode> deliveries, String url) {
+        void stop() {
+            server.stop(0);
+        }
     }
 }

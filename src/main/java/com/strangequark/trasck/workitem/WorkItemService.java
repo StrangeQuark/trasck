@@ -14,6 +14,8 @@ import com.strangequark.trasck.reporting.WorkItemEstimateHistory;
 import com.strangequark.trasck.reporting.WorkItemEstimateHistoryRepository;
 import com.strangequark.trasck.reporting.WorkItemStatusHistory;
 import com.strangequark.trasck.reporting.WorkItemStatusHistoryRepository;
+import com.strangequark.trasck.reporting.WorkItemTeamHistory;
+import com.strangequark.trasck.reporting.WorkItemTeamHistoryRepository;
 import com.strangequark.trasck.team.ProjectTeamRepository;
 import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
@@ -55,6 +57,7 @@ public class WorkItemService {
     private final WorkItemStatusHistoryRepository workItemStatusHistoryRepository;
     private final WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository;
     private final WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository;
+    private final WorkItemTeamHistoryRepository workItemTeamHistoryRepository;
     private final WorkItemSequenceService workItemSequenceService;
     private final WorkItemRankService workItemRankService;
     private final DomainEventService domainEventService;
@@ -80,6 +83,7 @@ public class WorkItemService {
             WorkItemStatusHistoryRepository workItemStatusHistoryRepository,
             WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository,
             WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository,
+            WorkItemTeamHistoryRepository workItemTeamHistoryRepository,
             WorkItemSequenceService workItemSequenceService,
             WorkItemRankService workItemRankService,
             DomainEventService domainEventService,
@@ -104,6 +108,7 @@ public class WorkItemService {
         this.workItemStatusHistoryRepository = workItemStatusHistoryRepository;
         this.workItemAssignmentHistoryRepository = workItemAssignmentHistoryRepository;
         this.workItemEstimateHistoryRepository = workItemEstimateHistoryRepository;
+        this.workItemTeamHistoryRepository = workItemTeamHistoryRepository;
         this.workItemSequenceService = workItemSequenceService;
         this.workItemRankService = workItemRankService;
         this.domainEventService = domainEventService;
@@ -160,6 +165,10 @@ public class WorkItemService {
         if (saved.getAssigneeId() != null) {
             writeAssignmentHistory(saved.getId(), null, saved.getAssigneeId(), actorId);
         }
+        if (saved.getTeamId() != null) {
+            writeTeamHistory(saved.getId(), null, saved.getTeamId(), actorId);
+            recordTeamChangedEvent(saved, null, saved.getTeamId(), actorId);
+        }
         writeInitialEstimateHistory(saved, actorId);
         recordEvent(saved, "work_item.created", actorId);
         return WorkItemResponse.from(saved);
@@ -195,6 +204,7 @@ public class WorkItemService {
         BigDecimal oldEstimatePoints = item.getEstimatePoints();
         Integer oldEstimateMinutes = item.getEstimateMinutes();
         Integer oldRemainingMinutes = item.getRemainingMinutes();
+        UUID oldTeamId = item.getTeamId();
 
         if (updateRequest.typeId() != null || hasText(updateRequest.typeKey())) {
             WorkItemType type = resolveType(project.getWorkspaceId(), updateRequest.typeId(), updateRequest.typeKey());
@@ -259,10 +269,39 @@ public class WorkItemService {
         if (!same(oldTypeId, saved.getTypeId())) {
             recordEvent(saved, "work_item.type_changed", actorId);
         }
+        if (!same(oldTeamId, saved.getTeamId())) {
+            writeTeamHistory(saved.getId(), oldTeamId, saved.getTeamId(), actorId);
+            recordTeamChangedEvent(saved, oldTeamId, saved.getTeamId(), actorId);
+        }
         writeEstimateHistoryIfChanged(saved.getId(), "points", oldEstimatePoints, saved.getEstimatePoints(), actorId);
         writeEstimateHistoryIfChanged(saved.getId(), "minutes", toBigDecimal(oldEstimateMinutes), toBigDecimal(saved.getEstimateMinutes()), actorId);
         writeEstimateHistoryIfChanged(saved.getId(), "remaining_minutes", toBigDecimal(oldRemainingMinutes), toBigDecimal(saved.getRemainingMinutes()), actorId);
         recordEvent(saved, "work_item.updated", actorId);
+        return WorkItemResponse.from(saved);
+    }
+
+    @Transactional
+    public WorkItemResponse setTeam(UUID workItemId, WorkItemTeamRequest request) {
+        WorkItemTeamRequest teamRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        WorkItem item = activeWorkItem(workItemId);
+        Project project = activeProject(item.getProjectId());
+        permissionService.requireProjectPermission(actorId, project.getId(), "work_item.update");
+        UUID previousTeamId = item.getTeamId();
+        if (!Boolean.TRUE.equals(teamRequest.clearTeam()) && teamRequest.teamId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "teamId or clearTeam is required");
+        }
+        UUID targetTeamId = Boolean.TRUE.equals(teamRequest.clearTeam())
+                ? null
+                : resolveTeamId(project, teamRequest.teamId());
+        if (same(previousTeamId, targetTeamId)) {
+            return WorkItemResponse.from(item);
+        }
+        item.setTeamId(targetTeamId);
+        item.setUpdatedById(actorId);
+        WorkItem saved = workItemRepository.saveAndFlush(item);
+        writeTeamHistory(saved.getId(), previousTeamId, saved.getTeamId(), actorId);
+        recordTeamChangedEvent(saved, previousTeamId, saved.getTeamId(), actorId);
         return WorkItemResponse.from(saved);
     }
 
@@ -496,6 +535,15 @@ public class WorkItemService {
         workItemAssignmentHistoryRepository.save(history);
     }
 
+    private void writeTeamHistory(UUID workItemId, UUID fromTeamId, UUID toTeamId, UUID actorId) {
+        WorkItemTeamHistory history = new WorkItemTeamHistory();
+        history.setWorkItemId(workItemId);
+        history.setFromTeamId(fromTeamId);
+        history.setToTeamId(toTeamId);
+        history.setChangedById(actorId);
+        workItemTeamHistoryRepository.save(history);
+    }
+
     private void writeInitialEstimateHistory(WorkItem item, UUID actorId) {
         if (item.getEstimatePoints() != null) {
             writeEstimateHistory(item.getId(), "points", null, item.getEstimatePoints(), actorId);
@@ -560,6 +608,23 @@ public class WorkItemService {
             payload.put("actorUserId", actorId.toString());
         }
         domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), eventType, payload);
+    }
+
+    private void recordTeamChangedEvent(WorkItem item, UUID fromTeamId, UUID toTeamId, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workItemId", item.getId().toString())
+                .put("workItemKey", item.getKey())
+                .put("projectId", item.getProjectId().toString());
+        if (fromTeamId != null) {
+            payload.put("fromTeamId", fromTeamId.toString());
+        }
+        if (toTeamId != null) {
+            payload.put("toTeamId", toTeamId.toString());
+        }
+        if (actorId != null) {
+            payload.put("actorUserId", actorId.toString());
+        }
+        domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), "work_item.team_changed", payload);
     }
 
     private JsonNode toJsonNode(Object value) {

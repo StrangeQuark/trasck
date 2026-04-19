@@ -828,6 +828,15 @@ create table work_item_assignment_history (
     changed_at timestamptz not null default now()
 );
 
+create table work_item_team_history (
+    id uuid primary key default gen_random_uuid(),
+    work_item_id uuid not null references work_items(id) on delete cascade,
+    from_team_id uuid references teams(id) on delete set null,
+    to_team_id uuid references teams(id) on delete set null,
+    changed_by_id uuid references users(id) on delete set null,
+    changed_at timestamptz not null default now()
+);
+
 create table work_item_estimate_history (
     id uuid primary key default gen_random_uuid(),
     work_item_id uuid not null references work_items(id) on delete cascade,
@@ -1014,6 +1023,7 @@ create table agent_provider_credentials (
     encrypted_secret text not null,
     metadata jsonb not null default '{}'::jsonb,
     active boolean not null default true,
+    expires_at timestamptz,
     created_at timestamptz not null default now(),
     rotated_at timestamptz
 );
@@ -1473,6 +1483,7 @@ create index ix_event_consumer_configs_workspace_type on event_consumer_configs(
 create index ix_event_consumer_configs_enabled on event_consumer_configs(enabled, consumer_type);
 create index ix_work_item_status_history_work_item_changed_at on work_item_status_history(work_item_id, changed_at);
 create index ix_work_item_assignment_history_work_item_changed_at on work_item_assignment_history(work_item_id, changed_at);
+create index ix_work_item_team_history_work_item_changed_at on work_item_team_history(work_item_id, changed_at);
 create index ix_work_item_estimate_history_work_item_changed_at on work_item_estimate_history(work_item_id, changed_at);
 create index ix_notifications_user_created_at on notifications(user_id, created_at);
 create index ix_automation_execution_jobs_status_next on automation_execution_jobs(status, next_attempt_at);

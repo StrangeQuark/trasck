@@ -115,11 +115,13 @@ class WorkItemApiIntegrationTest {
         JsonNode estimatedStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
                 .put("estimatePoints", 5.0)
                 .put("estimateMinutes", 480)
-                .put("remainingMinutes", 300)
-                .put("teamId", reportingScope.teamId().toString()));
+                .put("remainingMinutes", 300));
         assertThat(estimatedStory.at("/estimatePoints").decimalValue()).isEqualByComparingTo("5.0");
-        assertThat(uuid(estimatedStory, "/teamId")).isEqualTo(reportingScope.teamId());
         assertThat(countWhere("work_item_estimate_history", "work_item_id", storyId)).isEqualTo(3);
+        JsonNode teamedStory = postJson("/api/v1/work-items/" + storyId + "/team", objectMapper.createObjectNode()
+                .put("teamId", reportingScope.teamId().toString()));
+        assertThat(uuid(teamedStory, "/teamId")).isEqualTo(reportingScope.teamId());
+        assertThat(countWhere("work_item_team_history", "work_item_id", storyId)).isEqualTo(1);
 
         HttpResponse<String> invalidChildResponse = post(
                 "/api/v1/projects/" + projectId + "/work-items",
@@ -163,6 +165,16 @@ class WorkItemApiIntegrationTest {
         HttpResponse<String> invalidTransition = post("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
                 .put("transitionKey", "approval_to_done"));
         assertThat(invalidTransition.statusCode()).isEqualTo(400);
+        postJson("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "ready_to_in_progress"));
+        postJson("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "in_progress_to_in_review"));
+        postJson("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "in_review_to_approval"));
+        JsonNode doneStory = postJson("/api/v1/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "approval_to_done"));
+        assertThat(uuid(doneStory, "/statusId")).isEqualTo(statusId(setup, "done"));
+        assertThat(countWhere("work_item_status_history", "work_item_id", storyId)).isEqualTo(6);
 
         JsonNode projectWorkItems = getJson("/api/v1/projects/" + projectId + "/work-items");
         assertThat(projectWorkItems).hasSize(3);
@@ -265,6 +277,11 @@ class WorkItemApiIntegrationTest {
         assertThat(workLogSummary.at("/entryCount").asInt()).isEqualTo(2);
         assertThat(workLogSummary.at("/totalMinutes").asLong()).isEqualTo(90);
         accessToken = adminAccessToken;
+        JsonNode snapshotRun = postJson("/api/v1/reports/workspaces/" + workspaceId + "/snapshots/run?date=2026-04-19", objectMapper.createObjectNode());
+        assertThat(snapshotRun.at("/cycleTimeRecords").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(snapshotRun.at("/iterationSnapshots").asInt()).isEqualTo(1);
+        assertThat(snapshotRun.at("/velocitySnapshots").asInt()).isEqualTo(1);
+        assertThat(snapshotRun.at("/cumulativeFlowSnapshots").asInt()).isGreaterThanOrEqualTo(1);
 
         JsonNode projectSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
         assertThat(projectSummary.at("/scope/scopeType").asText()).isEqualTo("project");
@@ -273,6 +290,7 @@ class WorkItemApiIntegrationTest {
         assertThat(projectSummary.at("/workItems/total").asLong()).isEqualTo(3);
         assertThat(projectSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
         assertThat(projectSummary.at("/estimateAndTime/workLogDeletedBehavior").asText()).isEqualTo("soft_deleted_excluded");
+        assertThat(projectSummary.at("/cycleTime/completedWorkItems").asLong()).isGreaterThanOrEqualTo(1);
         assertThat(projectSummary.at("/byStatus")).isNotEmpty();
         assertThat(projectSummary.at("/widgets")).hasSize(8);
 
@@ -286,9 +304,11 @@ class WorkItemApiIntegrationTest {
         assertThat(teamIterationSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
 
         JsonNode statusHistory = getJson("/api/v1/reports/work-items/" + storyId + "/status-history");
-        assertThat(statusHistory).hasSize(2);
+        assertThat(statusHistory).hasSize(6);
         JsonNode assignmentHistory = getJson("/api/v1/reports/work-items/" + storyId + "/assignment-history");
         assertThat(assignmentHistory).hasSize(1);
+        JsonNode teamHistory = getJson("/api/v1/reports/work-items/" + storyId + "/team-history");
+        assertThat(teamHistory).hasSize(1);
         JsonNode estimateHistory = getJson("/api/v1/reports/work-items/" + storyId + "/estimate-history");
         assertThat(estimateHistory).hasSize(3);
 
@@ -378,6 +398,7 @@ class WorkItemApiIntegrationTest {
                 "work_item.created",
                 "work_item.parent_changed",
                 "work_item.updated",
+                "work_item.team_changed",
                 "work_item.assigned",
                 "work_item.rank_changed",
                 "work_item.status_changed",
@@ -631,6 +652,15 @@ class WorkItemApiIntegrationTest {
             }
         }
         throw new IllegalStateException("Role not found: " + key);
+    }
+
+    private UUID statusId(JsonNode setup, String key) {
+        for (JsonNode status : setup.at("/seedData/workflow/statuses")) {
+            if (key.equals(status.at("/key").asText())) {
+                return UUID.fromString(status.at("/id").asText());
+            }
+        }
+        throw new IllegalStateException("Status not found: " + key);
     }
 
     private List<String> eventTypes(JsonNode events) {
