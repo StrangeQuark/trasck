@@ -46,6 +46,13 @@ public class ActivityProjectionConsumer implements DomainEventConsumer {
             createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
             return;
         }
+        if ("agent_task".equals(event.getAggregateType())) {
+            createIfMissing(event, actorId, "agent_task", event.getAggregateId(), metadata);
+            createIfMissing(event, actorId, "work_item", uuid(event.getPayload(), "workItemId"), metadata);
+            createIfMissing(event, actorId, "project", uuid(event.getPayload(), "projectId"), metadata);
+            createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
+            return;
+        }
         createIfMissing(event, actorId, event.getAggregateType(), event.getAggregateId(), metadata);
         createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
     }
@@ -58,7 +65,12 @@ public class ActivityProjectionConsumer implements DomainEventConsumer {
                 || eventType.equals("auth.service_token_created")
                 || eventType.equals("auth.service_token_revoked")
                 || eventType.equals("audit.retention_policy_updated")
-                || eventType.equals("event.replay_requested");
+                || eventType.equals("event.replay_requested")
+                || eventType.startsWith("agent.task.")
+                || eventType.startsWith("work_item.agent_")
+                || eventType.startsWith("agent.profile.")
+                || eventType.startsWith("agent.provider.")
+                || eventType.startsWith("repository_connection.");
     }
 
     private void createIfMissing(DomainEvent event, UUID actorId, String entityType, UUID entityId, JsonNode metadata) {

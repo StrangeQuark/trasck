@@ -61,7 +61,11 @@ public class AuditProjectionConsumer implements DomainEventConsumer {
                 || eventType.equals("auth.service_token_created")
                 || eventType.equals("auth.service_token_revoked")
                 || eventType.equals("audit.retention_policy_updated")
-                || eventType.equals("event.replay_requested");
+                || eventType.equals("event.replay_requested")
+                || eventType.startsWith("agent.provider.")
+                || eventType.startsWith("agent.profile.")
+                || eventType.startsWith("agent.task.")
+                || eventType.startsWith("repository_connection.");
     }
 
     private Set<UUID> auditWorkspaces(DomainEvent event) {
