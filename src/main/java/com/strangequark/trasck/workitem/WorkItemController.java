@@ -47,9 +47,11 @@ public class WorkItemController {
     public CursorPageResponse<WorkItemResponse> listByProject(
             @PathVariable UUID projectId,
             @RequestParam(required = false) Integer limit,
-            @RequestParam(required = false) String cursor
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) String customFieldKey,
+            @RequestParam(required = false) String customFieldValue
     ) {
-        return workItemService.listByProject(projectId, limit, cursor);
+        return workItemService.listByProject(projectId, limit, cursor, customFieldKey, customFieldValue);
     }
 
     @GetMapping("/work-items/{workItemId}")

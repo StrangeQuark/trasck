@@ -185,6 +185,46 @@ class WorkItemApiIntegrationTest {
         assertThat(nextProjectWorkItems.at("/items")).hasSize(1);
         assertThat(nextProjectWorkItems.at("/hasMore").asBoolean()).isFalse();
 
+        JsonNode customerField = postJson("/api/v1/workspaces/" + workspaceId + "/custom-fields", objectMapper.createObjectNode()
+                .put("name", "Customer")
+                .put("key", "customer")
+                .put("fieldType", "text")
+                .put("searchable", true));
+        UUID customerFieldId = uuid(customerField, "/id");
+        JsonNode customerContext = postJson("/api/v1/custom-fields/" + customerFieldId + "/contexts", objectMapper.createObjectNode()
+                .put("projectId", projectId.toString())
+                .put("workItemTypeId", uuid(story, "/typeId").toString())
+                .put("required", false));
+        assertThat(uuid(customerContext, "/projectId")).isEqualTo(projectId);
+        JsonNode customerValue = putJson("/api/v1/work-items/" + storyId + "/custom-fields/" + customerFieldId, objectMapper.createObjectNode()
+                .put("value", "Acme"));
+        assertThat(customerValue.at("/fieldKey").asText()).isEqualTo("customer");
+        assertThat(customerValue.at("/value").asText()).isEqualTo("Acme");
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/custom-fields")).hasSize(1);
+        JsonNode filteredByCustomer = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=customer&customFieldValue=Acme");
+        assertThat(filteredByCustomer.at("/items")).hasSize(1);
+        assertThat(uuid(filteredByCustomer, "/items/0/id")).isEqualTo(storyId);
+        assertThat(get("/api/v1/projects/" + projectId + "/work-items?customFieldKey=customer").statusCode()).isEqualTo(400);
+
+        JsonNode editScreen = postJson("/api/v1/workspaces/" + workspaceId + "/screens", objectMapper.createObjectNode()
+                .put("name", "Story Edit Screen")
+                .put("screenType", "work_item"));
+        UUID editScreenId = uuid(editScreen, "/id");
+        JsonNode screenField = postJson("/api/v1/screens/" + editScreenId + "/fields", objectMapper.createObjectNode()
+                .put("customFieldId", customerFieldId.toString())
+                .put("position", 10)
+                .put("required", false));
+        assertThat(uuid(screenField, "/customFieldId")).isEqualTo(customerFieldId);
+        JsonNode screenAssignment = postJson("/api/v1/screens/" + editScreenId + "/assignments", objectMapper.createObjectNode()
+                .put("projectId", projectId.toString())
+                .put("workItemTypeId", uuid(story, "/typeId").toString())
+                .put("operation", "edit")
+                .put("priority", 10));
+        assertThat(screenAssignment.at("/operation").asText()).isEqualTo("edit");
+        JsonNode fetchedScreen = getJson("/api/v1/screens/" + editScreenId);
+        assertThat(fetchedScreen.at("/fields")).hasSize(1);
+        assertThat(fetchedScreen.at("/assignments")).hasSize(1);
+
         ObjectNode commentBody = objectMapper.createObjectNode()
                 .put("bodyMarkdown", "This story needs collaboration coverage.")
                 .put("visibility", "workspace");
@@ -415,6 +455,27 @@ class WorkItemApiIntegrationTest {
         UUID savedFilterId = uuid(savedFilter, "/id");
         assertThat(savedFilter.at("/visibility").asText()).isEqualTo("project");
         assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/saved-filters")).isNotEmpty();
+        JsonNode savedView = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/views", objectMapper.createObjectNode()
+                .put("name", "My project work")
+                .put("viewType", "work_items")
+                .put("visibility", "private")
+                .set("config", objectMapper.createObjectNode().put("projectId", projectId.toString())));
+        UUID savedViewId = uuid(savedView, "/id");
+        assertThat(savedView.at("/visibility").asText()).isEqualTo("private");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/personalization/views")).isNotEmpty();
+        JsonNode updatedSavedView = patch("/api/v1/personalization/views/" + savedViewId, objectMapper.createObjectNode()
+                .put("name", "My current project work"));
+        assertThat(updatedSavedView.at("/name").asText()).isEqualTo("My current project work");
+        JsonNode favorite = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/favorites", objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("entityId", storyId.toString()));
+        UUID favoriteId = uuid(favorite, "/id");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/personalization/favorites")).hasSize(1);
+        JsonNode recentItem = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/recent-items", objectMapper.createObjectNode()
+                .put("entityType", "project")
+                .put("entityId", projectId.toString()));
+        UUID recentItemId = uuid(recentItem, "/id");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/personalization/recent-items")).hasSize(1);
         ObjectNode reportQueryRequest = objectMapper.createObjectNode()
                 .put("queryKey", "committed-team-work")
                 .put("name", "Committed team work query")
@@ -539,6 +600,9 @@ class WorkItemApiIntegrationTest {
         assertThat(delete("/api/v1/dashboards/" + strictDashboardId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/report-query-catalog/" + strictReportQueryId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/personalization/recent-items/" + recentItemId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/personalization/favorites/" + favoriteId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/personalization/views/" + savedViewId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(204);
 

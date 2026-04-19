@@ -29,6 +29,24 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
     );
 
     @Query(value = """
+            select wi.*
+            from work_items wi
+            join custom_field_values cfv on cfv.work_item_id = wi.id
+            where wi.project_id = :projectId
+              and wi.deleted_at is null
+              and cfv.custom_field_id = :customFieldId
+              and coalesce(cfv.value #>> '{}', '') = :customFieldValue
+            order by wi.rank asc, wi.id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<WorkItem> findProjectFirstCursorPageByCustomField(
+            @Param("projectId") UUID projectId,
+            @Param("customFieldId") UUID customFieldId,
+            @Param("customFieldValue") String customFieldValue,
+            @Param("limit") int limit
+    );
+
+    @Query(value = """
             select *
             from work_items
             where project_id = :projectId
@@ -42,6 +60,30 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
             """, nativeQuery = true)
     List<WorkItem> findProjectCursorPageAfter(
             @Param("projectId") UUID projectId,
+            @Param("cursorRank") String cursorRank,
+            @Param("cursorId") String cursorId,
+            @Param("limit") int limit
+    );
+
+    @Query(value = """
+            select wi.*
+            from work_items wi
+            join custom_field_values cfv on cfv.work_item_id = wi.id
+            where wi.project_id = :projectId
+              and wi.deleted_at is null
+              and cfv.custom_field_id = :customFieldId
+              and coalesce(cfv.value #>> '{}', '') = :customFieldValue
+              and (
+                  wi.rank > :cursorRank
+                  or (wi.rank = :cursorRank and wi.id::text > :cursorId)
+              )
+            order by wi.rank asc, wi.id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<WorkItem> findProjectCursorPageAfterByCustomField(
+            @Param("projectId") UUID projectId,
+            @Param("customFieldId") UUID customFieldId,
+            @Param("customFieldValue") String customFieldValue,
             @Param("cursorRank") String cursorRank,
             @Param("cursorId") String cursorId,
             @Param("limit") int limit
