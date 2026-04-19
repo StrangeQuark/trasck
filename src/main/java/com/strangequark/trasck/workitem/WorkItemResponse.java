@@ -36,7 +36,7 @@ public record WorkItemResponse(
         OffsetDateTime updatedAt,
         OffsetDateTime deletedAt
 ) {
-    static WorkItemResponse from(WorkItem item) {
+    public static WorkItemResponse from(WorkItem item) {
         return new WorkItemResponse(
                 item.getId(),
                 item.getWorkspaceId(),

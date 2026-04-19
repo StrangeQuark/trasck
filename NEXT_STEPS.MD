@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should saved-filter/query-builder execution return cursor-paged work items through a dedicated execution endpoint, or should project work-item lists accept a `savedFilterId` query parameter?
-    - Answer: Use a dedicated saved-filter execution endpoint, while keeping project work-item list params for simple direct filtering
-2. Should the next frontend slice prioritize team/planning screens, saved filter/view/dashboard builder screens, or agent provider/profile setup screens?
-    - Answer: Implement them all
-3. Should the frontend keep Bearer-token local storage for development only, or should the next auth UI pass move browser sessions to cookie plus CSRF flows before broader manual testing?
-    - Answer: Move to cookie plus CSRF
-4. Should frontend API services add normalized toast/error handling now, or keep panel-local errors until navigation and routing are added?
-    - Answer: Add toast/error handling now
+1. Should the frontend cookie/CSRF auth pass remove access-token local storage entirely for browser sessions, or keep a clearly labeled development override for manual API-token testing?
+    - Answer: Remove access-token local storage entirely for the browser sessions and build better admin/API-token tooling now
+2. Should the frontend domain expansion introduce full route-based navigation immediately, or keep a single console shell with tabs until the screens stabilize?
+    - Answer: Build full route-based navigation immediately
+3. Should the saved-filter builder UI expose only structured predicate controls first, or include an expert JSON editor for the backend query shape from the beginning?
+    - Answer: Include an expert JSON editor
+4. Should saved-filter execution add more sort fields such as `createdAt`, `updatedAt`, `dueDate`, and `priority` before the frontend query builder, or is `workspaceSequenceNumber`/single-project `rank` enough for the first UI?
+    - Answer: Add more sort fields
 
 ## Current State
 
@@ -27,7 +27,7 @@ Team and planning APIs are implemented. Workspace admins can create/update/archi
 
 Reporting foundations include status, assignment, team, and estimate history writes plus dedicated read APIs for work item status history, assignment history, team history, estimate history, and work-log summaries. Project, workspace/project-set, and program dashboard summaries are implemented. Persisted snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`, with manual run/backfill/reconcile controls, raw snapshot read APIs, report-shaped time-series DTOs, and live/snapshot iteration report APIs. Configurable snapshot retention policies, dedicated cycle-time/iteration/velocity/cumulative-flow rollup tables, a generic experimental rollup table, manual rollup/backfill controls, archive-run metadata, and additive `rollupSeries` project snapshot output are implemented.
 
-Saved dashboard CRUD, widget CRUD, and render APIs are implemented for private, team, project, workspace, and public visibility. Saved filter CRUD, saved view CRUD, favorites, recent items, and the governed report query catalog are implemented. Workspace, project, and team scoped list endpoints exist for dashboards, saved filters, saved views, and report query catalog entries. Widget configs can reference saved filters or catalog entries while recursively rejecting raw SQL keys. Report query catalog `parametersSchema` is enforced at dashboard render time, and permission coverage includes project-only, team-member, non-team, and token-scope users for dashboard/filter/catalog/view sharing behavior.
+Saved dashboard CRUD, widget CRUD, and render APIs are implemented for private, team, project, workspace, and public visibility. Saved filter CRUD, saved-filter work item execution, saved view CRUD, favorites, recent items, and the governed report query catalog are implemented. Workspace, project, and team scoped list endpoints exist for dashboards, saved filters, saved views, and report query catalog entries. Saved-filter execution uses a dedicated cursor-paged endpoint with boolean groups, multiple system/custom-field predicates, typed operator validation, and project-scoped permission coverage. Widget configs can reference saved filters or catalog entries while recursively rejecting raw SQL keys. Report query catalog `parametersSchema` is enforced at dashboard render time, and permission coverage includes project-only, team-member, non-team, and token-scope users for dashboard/filter/catalog/view sharing behavior.
 
 Product configuration APIs are implemented for the first backend pass. Workspace admins can manage custom field definitions and contexts, work item editors can set/delete validated custom field values, project work-item lists can use typed searchable custom-field filters, and workspace admins can manage screen metadata, fields, and project/type/operation assignments. Screen assignments enforce required system/custom fields during work item create/update, and command endpoints that mutate required system fields now run targeted checks for the field they changed. Field configuration CRUD remains. Export jobs intentionally remain list/get/download until a second export type exists; generic create/cancel/retry should be added at that point.
 
@@ -35,42 +35,28 @@ Activity and audit foundations are implemented. Static and configured durable co
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON, a generated `TrasckApiClient`, feature-specific API service wrappers, local API-base configuration, and first setup/login/current-user/project work item/dashboard render/agent task flows.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client including saved-filter execution, feature-specific API service wrappers, local API-base configuration, and first setup/login/current-user/project work item/dashboard render/agent task flows.
 
 ## Primary Next Steps
 
-### 1. Saved Filter Query Builder And Multi-Predicate Execution
+### 1. Frontend Auth, Toasts, And Domain Expansion
 
-Goal: make saved filters executable instead of only stored JSON metadata, while keeping direct project work-item list filtering simple.
-
-Planned work:
-
-- Define the saved filter query JSON shape for work item predicates, boolean groups, sorting, and cursor pagination.
-- Implement the chosen execution API shape from the question above.
-- Translate typed custom-field predicates into validated SQL/JPA query clauses without accepting raw SQL.
-- Keep the existing project work-item list single custom-field predicate until the query-builder execution path proves stable.
-- Add integration tests for multiple system-field and custom-field predicates, invalid operators, scoped saved-filter permissions, and cursor pagination.
-
-Done when:
-
-- A saved filter can return cursor-paged work items using multiple predicates through a governed backend execution path.
-
-### 2. Frontend Domain Expansion
-
-Goal: expand the first console into the next product workflow while keeping feature services around the generated API client.
+Goal: move the browser frontend to the chosen cookie/CSRF session shape, add normalized user-facing error handling, and expand the console into the selected product workflows.
 
 Planned work:
 
-- Add the next screen group selected from the question above.
-- Add routing and shared shell navigation once there are multiple durable frontend surfaces.
-- Add typed service helpers for any new backend endpoints used by the screen group.
-- Keep both generated `openapi.json` and `trasckApi.ts` committed as the reviewed frontend contract snapshot.
+- Switch normal browser auth to HTTP-only cookie sessions plus `GET /api/v1/auth/csrf` for unsafe methods.
+- Add normalized API error mapping and global toast/error presentation instead of only panel-local errors.
+- Add navigation/routing or a tabbed shell based on the question above.
+- Build frontend flows for team/planning configuration, saved filter/view/dashboard builder screens, and agent provider/profile setup.
+- Keep feature-specific frontend API services as the boundary around the generated `TrasckApiClient`.
+- Keep both generated `openapi.json` and `trasckApi.ts` committed when the backend contract changes.
 
 Done when:
 
-- The selected workflow can be exercised end to end from the Vite React app without raw generated-client calls in components.
+- The selected frontend workflows can be exercised end to end from the Vite React app with cookie/CSRF auth and consistent user-facing errors.
 
-### 3. Remaining Backend Configuration Hardening
+### 2. Remaining Backend Configuration Hardening
 
 Goal: close the remaining backend configuration gaps that are better finished after the first frontend/API contract pass exposes real usage.
 
@@ -84,7 +70,7 @@ Done when:
 
 - The remaining backend configuration APIs have service-layer permission checks, targeted integration coverage, and a clear contract for frontend screens.
 
-### 4. Backend Reliability And Permission Hardening
+### 3. Backend Reliability And Permission Hardening
 
 Goal: keep the growing backend safe enough for manual product testing.
 
@@ -119,7 +105,7 @@ The following work should be completed before the application is ready for a mea
 ### Product Configuration Readiness
 
 - Decide which remaining configuration after core system fields is globally seeded, workspace-seeded, or project-seeded.
-- Keep multi-predicate custom-field filtering in the saved-filter/query-builder execution plan unless product usage proves direct list query params need it too.
+- Keep multi-predicate custom-field filtering behind saved-filter/query-builder execution unless product usage proves direct project list query params need it too.
 - Continue expanding targeted screen required-field checks only for command endpoints that can invalidate a required field.
 
 ### Test Readiness
@@ -136,6 +122,8 @@ The following work should be completed before the application is ready for a mea
 
 ### Frontend Readiness
 
+- Move normal browser auth to cookie plus CSRF and keep Bearer access tokens only for API-tool/development use if that remains useful.
+- Add normalized frontend toast/error handling before broader manual testing.
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
 - Build frontend flows for team/planning configuration, dashboard construction, saved filters/views, and agent provider/profile setup.
