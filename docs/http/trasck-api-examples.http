@@ -264,6 +264,48 @@ Authorization: Bearer {{accessToken}}
 GET {{baseUrl}}/api/v1/reports/projects/{{projectId}}/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z&teamId={{teamId}}&iterationId={{iterationId}}
 Authorization: Bearer {{accessToken}}
 
+### Reporting: Run Workspace Snapshots
+POST {{baseUrl}}/api/v1/reports/workspaces/{{workspaceId}}/snapshots/run?date=2026-04-19
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Reporting: Backfill Workspace Snapshots
+POST {{baseUrl}}/api/v1/reports/workspaces/{{workspaceId}}/snapshots/backfill?fromDate=2026-04-19&toDate=2026-04-25
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Reporting: Get Snapshot Retention Policy
+GET {{baseUrl}}/api/v1/reports/workspaces/{{workspaceId}}/snapshot-retention-policy
+Authorization: Bearer {{accessToken}}
+
+### Reporting: Update Snapshot Retention Policy
+PUT {{baseUrl}}/api/v1/reports/workspaces/{{workspaceId}}/snapshot-retention-policy
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "rawRetentionDays": 730,
+  "weeklyRollupAfterDays": 90,
+  "monthlyRollupAfterDays": 365,
+  "archiveAfterDays": 1825,
+  "destructivePruningEnabled": false
+}
+
+### Reporting: Backfill Snapshot Rollups
+POST {{baseUrl}}/api/v1/reports/workspaces/{{workspaceId}}/snapshots/rollups/backfill?fromDate=2026-04-19&toDate=2026-04-25&granularity=daily
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Reporting: Project Snapshot Series
+GET {{baseUrl}}/api/v1/reports/projects/{{projectId}}/snapshots?fromDate=2026-04-19&toDate=2026-04-25
+Authorization: Bearer {{accessToken}}
+
 ### Create Project Saved Filter
 POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/saved-filters
 Authorization: Bearer {{accessToken}}

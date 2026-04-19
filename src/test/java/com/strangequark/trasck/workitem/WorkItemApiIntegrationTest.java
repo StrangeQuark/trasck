@@ -290,11 +290,32 @@ class WorkItemApiIntegrationTest {
         assertThat(snapshotRun.at("/cumulativeFlowSnapshots").asInt()).isGreaterThanOrEqualTo(1);
         JsonNode snapshotBackfill = postJson("/api/v1/reports/workspaces/" + workspaceId + "/snapshots/backfill?fromDate=2026-04-19&toDate=2026-04-19", objectMapper.createObjectNode());
         assertThat(snapshotBackfill.at("/daysProcessed").asInt()).isEqualTo(1);
+        JsonNode defaultRetentionPolicy = getJson("/api/v1/reports/workspaces/" + workspaceId + "/snapshot-retention-policy");
+        assertThat(defaultRetentionPolicy.at("/rawRetentionDays").asInt()).isEqualTo(730);
+        assertThat(defaultRetentionPolicy.at("/weeklyRollupAfterDays").asInt()).isEqualTo(90);
+        JsonNode retentionPolicy = putJson("/api/v1/reports/workspaces/" + workspaceId + "/snapshot-retention-policy", objectMapper.createObjectNode()
+                .put("rawRetentionDays", 400)
+                .put("weeklyRollupAfterDays", 30)
+                .put("monthlyRollupAfterDays", 120)
+                .put("archiveAfterDays", 800)
+                .put("destructivePruningEnabled", false));
+        assertThat(retentionPolicy.at("/rawRetentionDays").asInt()).isEqualTo(400);
+        assertThat(retentionPolicy.at("/monthlyRollupAfterDays").asInt()).isEqualTo(120);
+        assertThat(countWhere("reporting_retention_policies", "workspace_id", workspaceId)).isEqualTo(1);
+        JsonNode rollupBackfill = postJson("/api/v1/reports/workspaces/" + workspaceId + "/snapshots/rollups/backfill?fromDate=2026-04-19&toDate=2026-04-25&granularity=daily", objectMapper.createObjectNode());
+        assertThat(rollupBackfill.at("/action").asText()).isEqualTo("rollup_backfill");
+        assertThat(rollupBackfill.at("/granularity").asText()).isEqualTo("daily");
+        assertThat(rollupBackfill.at("/cycleTimeRollups").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(rollupBackfill.at("/iterationRollups").asInt()).isEqualTo(1);
+        assertThat(rollupBackfill.at("/velocityRollups").asInt()).isEqualTo(1);
+        assertThat(rollupBackfill.at("/cumulativeFlowRollups").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(countWhere("reporting_snapshot_archive_runs", "id", uuid(rollupBackfill, "/archiveRunId"))).isEqualTo(1);
         JsonNode persistedSnapshots = getJson("/api/v1/reports/projects/" + projectId + "/snapshots?fromDate=2026-04-19&toDate=2026-04-19");
         assertThat(persistedSnapshots.at("/iterationSnapshots")).hasSize(1);
         assertThat(persistedSnapshots.at("/velocitySnapshots")).hasSize(1);
         assertThat(persistedSnapshots.at("/cumulativeFlowSnapshots")).isNotEmpty();
         assertThat(persistedSnapshots.at("/series")).isNotEmpty();
+        assertThat(persistedSnapshots.at("/rollupSeries")).isNotEmpty();
         JsonNode iterationReport = getJson("/api/v1/reports/iterations/" + reportingScope.iterationId() + "/report?source=both");
         assertThat(iterationReport.at("/source").asText()).isEqualTo("both");
         assertThat(iterationReport.at("/live/scopedWorkItems").asLong()).isEqualTo(1);
@@ -797,6 +818,12 @@ class WorkItemApiIntegrationTest {
         return objectMapper.readTree(response.body());
     }
 
+    private JsonNode putJson(String path, JsonNode body) throws Exception {
+        HttpResponse<String> response = put(path, body);
+        assertThat(response.statusCode()).isBetween(200, 299);
+        return objectMapper.readTree(response.body());
+    }
+
     private JsonNode patch(String path, JsonNode body) throws Exception {
         HttpResponse<String> response = patchResponse(path, body);
         assertThat(response.statusCode()).isBetween(200, 299);
@@ -821,6 +848,14 @@ class WorkItemApiIntegrationTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> put(String path, JsonNode body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
         authorize(builder);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }

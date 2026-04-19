@@ -168,6 +168,56 @@ export interface ReportQueryCatalogEntry {
   updatedAt: ISODateTime;
 }
 
+export interface ReportingSnapshotSeriesPoint {
+  date: ISODate;
+  metricKey: string;
+  entityId?: UUID;
+  label: string;
+  value: number;
+}
+
+export interface ProjectReportingSnapshots {
+  projectId: UUID;
+  workspaceId: UUID;
+  fromDate: ISODate;
+  toDate: ISODate;
+  cycleTimeRecords: unknown[];
+  iterationSnapshots: unknown[];
+  velocitySnapshots: unknown[];
+  cumulativeFlowSnapshots: unknown[];
+  series: ReportingSnapshotSeriesPoint[];
+  rollupSeries: ReportingSnapshotSeriesPoint[];
+}
+
+export interface ReportingRetentionPolicy {
+  id?: UUID;
+  workspaceId: UUID;
+  rawRetentionDays: number;
+  weeklyRollupAfterDays: number;
+  monthlyRollupAfterDays: number;
+  archiveAfterDays: number;
+  destructivePruningEnabled: boolean;
+  createdById?: UUID;
+  updatedById?: UUID;
+  createdAt?: ISODateTime;
+  updatedAt?: ISODateTime;
+}
+
+export interface ReportingRollupRun {
+  workspaceId: UUID;
+  archiveRunId: UUID;
+  action: "rollup_run" | "rollup_backfill";
+  granularity: "daily" | "weekly" | "monthly";
+  fromDate: ISODate;
+  toDate: ISODate;
+  cycleTimeRollups: number;
+  iterationRollups: number;
+  velocityRollups: number;
+  cumulativeFlowRollups: number;
+  genericRollups: number;
+  rawRowsPruned: number;
+}
+
 export interface AuditLogEntry {
   id: UUID;
   domainEventId: UUID;
@@ -261,6 +311,7 @@ export interface AgentTask {
 5. Dashboard builder: create a saved filter, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
 6. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
 7. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
+8. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
 
 ## Endpoint Coverage
 
@@ -268,7 +319,7 @@ export interface AgentTask {
 - Auth: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation.
 - Work items: project list/create, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
 - Teams/planning: team CRUD, memberships, project-team assignment, iteration CRUD, scope, commit, close, carryover.
-- Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, raw snapshots, iteration reports.
+- Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.

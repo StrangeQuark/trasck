@@ -5,6 +5,8 @@ import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -98,6 +100,39 @@ public class ReportingController {
             @RequestParam(required = false) String toDate
     ) {
         return reportingService.backfillWorkspaceSnapshots(workspaceId, fromDate, toDate, "reconcile");
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/snapshot-retention-policy")
+    public ReportingRetentionPolicyResponse getSnapshotRetentionPolicy(@PathVariable UUID workspaceId) {
+        return reportingService.getSnapshotRetentionPolicy(workspaceId);
+    }
+
+    @PutMapping("/workspaces/{workspaceId}/snapshot-retention-policy")
+    public ReportingRetentionPolicyResponse updateSnapshotRetentionPolicy(
+            @PathVariable UUID workspaceId,
+            @RequestBody ReportingRetentionPolicyRequest request
+    ) {
+        return reportingService.updateSnapshotRetentionPolicy(workspaceId, request);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/snapshots/rollups/run")
+    public ReportingRollupRunResponse runWorkspaceRollups(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate,
+            @RequestParam(required = false) String granularity
+    ) {
+        return reportingService.runWorkspaceRollups(workspaceId, fromDate, toDate, granularity);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/snapshots/rollups/backfill")
+    public ReportingRollupRunResponse backfillWorkspaceRollups(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate,
+            @RequestParam(required = false) String granularity
+    ) {
+        return reportingService.backfillWorkspaceRollups(workspaceId, fromDate, toDate, granularity);
     }
 
     @GetMapping("/projects/{projectId}/snapshots")

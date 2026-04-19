@@ -61,6 +61,7 @@ public class ReportingService {
     private final WorkLogRepository workLogRepository;
     private final IterationSnapshotRepository iterationSnapshotRepository;
     private final VelocitySnapshotRepository velocitySnapshotRepository;
+    private final ReportingRetentionPolicyRepository reportingRetentionPolicyRepository;
     private final WorkspaceRepository workspaceRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
@@ -82,6 +83,7 @@ public class ReportingService {
             WorkLogRepository workLogRepository,
             IterationSnapshotRepository iterationSnapshotRepository,
             VelocitySnapshotRepository velocitySnapshotRepository,
+            ReportingRetentionPolicyRepository reportingRetentionPolicyRepository,
             WorkspaceRepository workspaceRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
@@ -102,6 +104,7 @@ public class ReportingService {
         this.workLogRepository = workLogRepository;
         this.iterationSnapshotRepository = iterationSnapshotRepository;
         this.velocitySnapshotRepository = velocitySnapshotRepository;
+        this.reportingRetentionPolicyRepository = reportingRetentionPolicyRepository;
         this.workspaceRepository = workspaceRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
@@ -295,6 +298,114 @@ public class ReportingService {
     }
 
     @Transactional(readOnly = true)
+    public ReportingRetentionPolicyResponse getSnapshotRetentionPolicy(UUID workspaceId) {
+        Workspace workspace = reportableWorkspace(workspaceId);
+        requireWorkspaceReportManage(workspace.getId());
+        return reportingRetentionPolicyRepository.findByWorkspaceId(workspace.getId())
+                .map(ReportingRetentionPolicyResponse::from)
+                .orElseGet(() -> ReportingRetentionPolicyResponse.defaults(workspace.getId()));
+    }
+
+    @Transactional
+    public ReportingRetentionPolicyResponse updateSnapshotRetentionPolicy(UUID workspaceId, ReportingRetentionPolicyRequest request) {
+        Workspace workspace = reportableWorkspace(workspaceId);
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, workspace.getId(), "report.manage");
+        ReportingRetentionPolicyRequest update = required(request, "request");
+        ReportingRetentionPolicy existing = reportingRetentionPolicyRepository.findByWorkspaceId(workspace.getId())
+                .orElse(null);
+        int rawRetentionDays = positiveOrExisting(
+                update.rawRetentionDays(),
+                existing == null ? null : existing.getRawRetentionDays(),
+                ReportingSnapshotService.DEFAULT_RAW_RETENTION_DAYS,
+                "rawRetentionDays"
+        );
+        int weeklyRollupAfterDays = positiveOrExisting(
+                update.weeklyRollupAfterDays(),
+                existing == null ? null : existing.getWeeklyRollupAfterDays(),
+                ReportingSnapshotService.DEFAULT_WEEKLY_ROLLUP_AFTER_DAYS,
+                "weeklyRollupAfterDays"
+        );
+        int monthlyRollupAfterDays = positiveOrExisting(
+                update.monthlyRollupAfterDays(),
+                existing == null ? null : existing.getMonthlyRollupAfterDays(),
+                ReportingSnapshotService.DEFAULT_MONTHLY_ROLLUP_AFTER_DAYS,
+                "monthlyRollupAfterDays"
+        );
+        int archiveAfterDays = positiveOrExisting(
+                update.archiveAfterDays(),
+                existing == null ? null : existing.getArchiveAfterDays(),
+                ReportingSnapshotService.DEFAULT_ARCHIVE_AFTER_DAYS,
+                "archiveAfterDays"
+        );
+        validateRetentionWindows(rawRetentionDays, weeklyRollupAfterDays, monthlyRollupAfterDays, archiveAfterDays);
+        ReportingRetentionPolicy policy = existing == null ? new ReportingRetentionPolicy() : existing;
+        if (policy.getWorkspaceId() == null) {
+            policy.setWorkspaceId(workspace.getId());
+            policy.setCreatedById(actorId);
+        }
+        policy.setRawRetentionDays(rawRetentionDays);
+        policy.setWeeklyRollupAfterDays(weeklyRollupAfterDays);
+        policy.setMonthlyRollupAfterDays(monthlyRollupAfterDays);
+        policy.setArchiveAfterDays(archiveAfterDays);
+        policy.setDestructivePruningEnabled(update.destructivePruningEnabled() == null
+                ? Boolean.TRUE.equals(policy.getDestructivePruningEnabled())
+                : Boolean.TRUE.equals(update.destructivePruningEnabled()));
+        policy.setUpdatedById(actorId);
+        policy.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        return ReportingRetentionPolicyResponse.from(reportingRetentionPolicyRepository.save(policy));
+    }
+
+    @Transactional
+    public ReportingRollupRunResponse runWorkspaceRollups(
+            UUID workspaceId,
+            String fromDate,
+            String toDate,
+            String granularity
+    ) {
+        return runWorkspaceRollups(workspaceId, fromDate, toDate, granularity, "rollup_run");
+    }
+
+    @Transactional
+    public ReportingRollupRunResponse backfillWorkspaceRollups(
+            UUID workspaceId,
+            String fromDate,
+            String toDate,
+            String granularity
+    ) {
+        return runWorkspaceRollups(workspaceId, fromDate, toDate, granularity, "rollup_backfill");
+    }
+
+    private ReportingRollupRunResponse runWorkspaceRollups(
+            UUID workspaceId,
+            String fromDate,
+            String toDate,
+            String granularity,
+            String action
+    ) {
+        Workspace workspace = reportableWorkspace(workspaceId);
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, workspace.getId(), "report.manage");
+        ReportingRetentionPolicy policy = reportingRetentionPolicyRepository.findByWorkspaceId(workspace.getId()).orElse(null);
+        String effectiveGranularity = normalizeRollupGranularity(granularity);
+        SnapshotWindow window = rollupWindow(policy, effectiveGranularity, fromDate, toDate);
+        long days = ChronoUnit.DAYS.between(window.fromDate(), window.toDate()) + 1;
+        int maxWindowDays = valueOrDefault(policy == null ? null : policy.getArchiveAfterDays(), ReportingSnapshotService.DEFAULT_ARCHIVE_AFTER_DAYS);
+        if (days > maxWindowDays) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "rollup backfill is limited to " + maxWindowDays + " days per request");
+        }
+        return reportingSnapshotService.runWorkspaceRollups(
+                workspace.getId(),
+                policy,
+                actorId,
+                window.fromDate(),
+                window.toDate(),
+                effectiveGranularity,
+                action
+        );
+    }
+
+    @Transactional(readOnly = true)
     public ProjectReportingSnapshotsResponse projectSnapshots(UUID projectId, String fromDate, String toDate) {
         Project project = reportableProject(projectId);
         requireReportRead(project);
@@ -405,7 +516,8 @@ public class ReportingService {
                 iterationSnapshots,
                 velocitySnapshots,
                 cumulativeFlowSnapshots,
-                snapshotSeries(cycleTimeRecords, iterationSnapshots, velocitySnapshots, cumulativeFlowSnapshots)
+                snapshotSeries(cycleTimeRecords, iterationSnapshots, velocitySnapshots, cumulativeFlowSnapshots),
+                rollupSeries(project.getId(), window)
         );
     }
 
@@ -572,6 +684,228 @@ public class ReportingService {
         return series;
     }
 
+    private List<ReportingSnapshotSeriesPointResponse> rollupSeries(UUID projectId, SnapshotWindow window) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("projectId", projectId)
+                .addValue("fromDate", window.fromDate())
+                .addValue("toDate", window.toDate());
+        return namedJdbcTemplate.query("""
+                select point_date,
+                       metric_key,
+                       entity_id,
+                       label,
+                       value
+                from (
+                    select bucket_start_date as point_date,
+                           ('cycle_time.rollup.' || granularity || '.lead_time_minutes_avg')::varchar as metric_key,
+                           project_id as entity_id,
+                           ('Lead time average (' || granularity || ')')::varchar as label,
+                           lead_time_minutes_avg as value
+                    from reporting_cycle_time_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('cycle_time.rollup.' || granularity || '.cycle_time_minutes_avg')::varchar,
+                           project_id,
+                           ('Cycle time average (' || granularity || ')')::varchar,
+                           cycle_time_minutes_avg
+                    from reporting_cycle_time_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('iteration.rollup.' || granularity || '.committed_points')::varchar,
+                           coalesce(team_id, project_id),
+                           ('Committed points (' || granularity || ')')::varchar,
+                           committed_points
+                    from reporting_iteration_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('iteration.rollup.' || granularity || '.completed_points')::varchar,
+                           coalesce(team_id, project_id),
+                           ('Completed points (' || granularity || ')')::varchar,
+                           completed_points
+                    from reporting_iteration_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('iteration.rollup.' || granularity || '.remaining_points')::varchar,
+                           coalesce(team_id, project_id),
+                           ('Remaining points (' || granularity || ')')::varchar,
+                           remaining_points
+                    from reporting_iteration_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('iteration.rollup.' || granularity || '.scope_added_points')::varchar,
+                           coalesce(team_id, project_id),
+                           ('Scope added points (' || granularity || ')')::varchar,
+                           scope_added_points
+                    from reporting_iteration_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('iteration.rollup.' || granularity || '.scope_removed_points')::varchar,
+                           coalesce(team_id, project_id),
+                           ('Scope removed points (' || granularity || ')')::varchar,
+                           scope_removed_points
+                    from reporting_iteration_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('velocity.rollup.' || granularity || '.committed_points')::varchar,
+                           team_id,
+                           ('Committed points (' || granularity || ')')::varchar,
+                           committed_points
+                    from reporting_velocity_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('velocity.rollup.' || granularity || '.completed_points')::varchar,
+                           team_id,
+                           ('Completed points (' || granularity || ')')::varchar,
+                           completed_points
+                    from reporting_velocity_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('velocity.rollup.' || granularity || '.carried_over_points')::varchar,
+                           team_id,
+                           ('Carried-over points (' || granularity || ')')::varchar,
+                           carried_over_points
+                    from reporting_velocity_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('cumulative_flow.rollup.' || granularity || '.work_item_count_avg')::varchar,
+                           status_id,
+                           ('Work item count average (' || granularity || ')')::varchar,
+                           work_item_count_avg
+                    from reporting_cumulative_flow_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                    union all
+                    select bucket_start_date,
+                           ('cumulative_flow.rollup.' || granularity || '.total_points_avg')::varchar,
+                           status_id,
+                           ('Total points average (' || granularity || ')')::varchar,
+                           total_points_avg
+                    from reporting_cumulative_flow_rollups
+                    where project_id = :projectId
+                      and bucket_start_date <= :toDate
+                      and bucket_end_date >= :fromDate
+                ) points
+                order by point_date asc, metric_key asc, entity_id asc
+                """, params, (rs, rowNum) -> new ReportingSnapshotSeriesPointResponse(
+                rs.getObject("point_date", LocalDate.class),
+                rs.getString("metric_key"),
+                (UUID) rs.getObject("entity_id"),
+                rs.getString("label"),
+                decimal(rs.getBigDecimal("value"))
+        ));
+    }
+
+    private SnapshotWindow rollupWindow(ReportingRetentionPolicy policy, String granularity, String fromDate, String toDate) {
+        if (hasText(fromDate) || hasText(toDate)) {
+            LocalDate effectiveTo = hasText(toDate) ? parseDate(toDate, "toDate") : parseDate(fromDate, "fromDate");
+            LocalDate effectiveFrom = hasText(fromDate) ? parseDate(fromDate, "fromDate") : effectiveTo;
+            if (effectiveFrom.isAfter(effectiveTo)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fromDate must be on or before toDate");
+            }
+            return new SnapshotWindow(effectiveFrom, effectiveTo);
+        }
+
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        int rawRetentionDays = valueOrDefault(policy == null ? null : policy.getRawRetentionDays(), ReportingSnapshotService.DEFAULT_RAW_RETENTION_DAYS);
+        int weeklyRollupAfterDays = valueOrDefault(policy == null ? null : policy.getWeeklyRollupAfterDays(), ReportingSnapshotService.DEFAULT_WEEKLY_ROLLUP_AFTER_DAYS);
+        int monthlyRollupAfterDays = valueOrDefault(policy == null ? null : policy.getMonthlyRollupAfterDays(), ReportingSnapshotService.DEFAULT_MONTHLY_ROLLUP_AFTER_DAYS);
+        LocalDate effectiveFrom;
+        LocalDate effectiveTo;
+        switch (granularity) {
+            case "daily" -> {
+                effectiveFrom = today.minusDays(weeklyRollupAfterDays - 1L);
+                effectiveTo = today;
+            }
+            case "weekly" -> {
+                effectiveFrom = today.minusDays(monthlyRollupAfterDays - 1L);
+                effectiveTo = today.minusDays(weeklyRollupAfterDays);
+            }
+            case "monthly" -> {
+                effectiveFrom = today.minusDays(rawRetentionDays - 1L);
+                effectiveTo = today.minusDays(monthlyRollupAfterDays);
+            }
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "granularity must be daily, weekly, or monthly");
+        }
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            effectiveFrom = effectiveTo;
+        }
+        return new SnapshotWindow(effectiveFrom, effectiveTo);
+    }
+
+    private String normalizeRollupGranularity(String granularity) {
+        if (!hasText(granularity)) {
+            return "weekly";
+        }
+        String normalized = granularity.trim().toLowerCase();
+        if (!List.of("daily", "weekly", "monthly").contains(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "granularity must be daily, weekly, or monthly");
+        }
+        return normalized;
+    }
+
+    private void validateRetentionWindows(int rawRetentionDays, int weeklyRollupAfterDays, int monthlyRollupAfterDays, int archiveAfterDays) {
+        if (weeklyRollupAfterDays > monthlyRollupAfterDays) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "weeklyRollupAfterDays must be less than or equal to monthlyRollupAfterDays");
+        }
+        if (monthlyRollupAfterDays > rawRetentionDays) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "monthlyRollupAfterDays must be less than or equal to rawRetentionDays");
+        }
+        if (rawRetentionDays > archiveAfterDays) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "rawRetentionDays must be less than or equal to archiveAfterDays");
+        }
+    }
+
+    private int positiveOrExisting(Integer requested, Integer existing, int fallback, String fieldName) {
+        Integer value = requested == null ? existing : requested;
+        int effectiveValue = valueOrDefault(value, fallback);
+        if (effectiveValue <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " must be greater than zero");
+        }
+        return effectiveValue;
+    }
+
+    private int valueOrDefault(Integer value, int fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private <T> T required(T value, String fieldName) {
+        if (value == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " is required");
+        }
+        return value;
+    }
+
     private Integer integer(ResultSet rs, String columnName) throws SQLException {
         int value = rs.getInt(columnName);
         return rs.wasNull() ? null : value;
@@ -613,6 +947,11 @@ public class ReportingService {
     private void requireWorkspaceReportRead(UUID workspaceId) {
         UUID actorId = currentUserService.requireUserId();
         permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
+    }
+
+    private void requireWorkspaceReportManage(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.manage");
     }
 
     private ReportWindow reportWindow(String from, String to) {

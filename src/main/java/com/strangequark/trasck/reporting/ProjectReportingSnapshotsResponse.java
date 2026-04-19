@@ -13,6 +13,7 @@ public record ProjectReportingSnapshotsResponse(
         List<IterationSnapshotResponse> iterationSnapshots,
         List<VelocitySnapshotResponse> velocitySnapshots,
         List<CumulativeFlowSnapshotResponse> cumulativeFlowSnapshots,
-        List<ReportingSnapshotSeriesPointResponse> series
+        List<ReportingSnapshotSeriesPointResponse> series,
+        List<ReportingSnapshotSeriesPointResponse> rollupSeries
 ) {
 }

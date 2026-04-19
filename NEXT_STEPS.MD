@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should reporting rollup tables be added to Flyway now with fixed daily/weekly/monthly families, or should the first pass add only service/query abstractions and wait to create rollup tables until retention windows are configurable?
-    - Answer: Add configurable retention windows now, and then create the rollup tables
-2. Should the generated frontend API client be checked into the Vite React repo, generated during frontend builds, or generated manually from `/v3/api-docs` only when the backend contract changes?
-    - Answer: Check them into the Vite React repo, but don't do it yet, as we will continue hardening the backend repo before we start frontend work. Add a note near the bottom of the next_steps file to remind us to do this before we start frontend development
-3. Should export jobs become the first generic admin import/export surface now, or remain backend-only until import APIs and additional export types exist?
-    - Answer: Make them the first generic surface now
-4. Should the next backend hardening pass prioritize custom fields/screens or saved views/favorites/recent items?
-    - Answer: Both
+1. Should custom field and screen APIs start with custom field definitions, contexts, and value CRUD first, or should they start with screen layout/screen assignment APIs first?
+    - Answer: Start with custom field definitions, contexts, and value CRUD first
+2. Should custom field values become searchable/filterable in the first custom-field API pass, or should search integration wait until the field definition and value APIs are stable?
+    - Answer: Implement search/filter now
+3. Should saved views, favorites, and recent items share one personalization API/package, or should each be implemented as a separate feature surface?
+    - Answer: Share one API/package
+4. Should export jobs add generic create/cancel/retry admin endpoints before import APIs exist, or should they remain list/get/download while export-type-specific APIs create jobs?
+    - Answer: Remain list/get/download for now, but make a note in the NEXT_STEPS.MD file to expand this in the future
 
 ## Current State
 
@@ -25,7 +25,7 @@ The first work item API slices are implemented. Authenticated users with project
 
 Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, and keep a single role value per project-team assignment. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/cancel iterations, add/remove scoped work items, commit iteration points from current scope, close iterations, and carry incomplete work into a target iteration.
 
-Reporting foundations include status, assignment, team, and estimate history writes plus dedicated read APIs for work item status history, assignment history, team history, estimate history, and work-log summaries. Project, workspace/project-set, and program dashboard summaries are implemented. Persisted snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`, with manual run/backfill/reconcile controls, raw snapshot read APIs, report-shaped time-series DTOs, and live/snapshot iteration report APIs.
+Reporting foundations include status, assignment, team, and estimate history writes plus dedicated read APIs for work item status history, assignment history, team history, estimate history, and work-log summaries. Project, workspace/project-set, and program dashboard summaries are implemented. Persisted snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`, with manual run/backfill/reconcile controls, raw snapshot read APIs, report-shaped time-series DTOs, and live/snapshot iteration report APIs. Configurable snapshot retention policies, dedicated cycle-time/iteration/velocity/cumulative-flow rollup tables, a generic experimental rollup table, manual rollup/backfill controls, archive-run metadata, and additive `rollupSeries` project snapshot output are implemented.
 
 Saved dashboard CRUD, widget CRUD, and render APIs are implemented for private, team, project, workspace, and public visibility. Saved filter CRUD and the governed report query catalog are implemented. Workspace, project, and team scoped list endpoints exist for dashboards, saved filters, and report query catalog entries. Widget configs can reference saved filters or catalog entries while recursively rejecting raw SQL keys. Report query catalog `parametersSchema` is enforced at dashboard render time, and permission coverage includes project-only, team-member, non-team, and token-scope users for dashboard/filter/catalog sharing behavior.
 
@@ -37,30 +37,44 @@ Local runtime and contract polish is in place. The backend has checked-in HTTP e
 
 ## Primary Next Steps
 
-### 1. Reporting Rollups And Snapshot Retention
+### 1. Product Configuration Expansion
 
-Goal: preserve long-lived dashboard history before destructive snapshot retention is enabled.
+Goal: fill the remaining Jira/Rally-style configuration and personalization surfaces before broad manual testing.
 
 Planned work:
 
-- Add dedicated aggregate table designs for core report families such as cycle time, iteration scope, velocity, and cumulative flow.
-- Reserve a generic JSON-backed rollup table only for experimental/custom report families.
-- Define daily raw retention, weekly/monthly rollup windows, and archive metadata.
-- Add manual rollup/backfill controls before automatic destructive retention.
-- Keep existing raw snapshot APIs stable while adding rollup-backed series.
+- Add custom field definitions, field contexts/configurations, custom field value APIs, screen layouts, screen tabs/fields, and screen assignment APIs.
+- Add saved views, favorites, and recent item APIs with permission checks and tests.
+- Keep custom fields compatible with current work item create/update/detail/list, dashboard, saved filter, report query, and agent context surfaces.
+- Decide how soon custom fields become searchable/filterable in work item lists and saved filters.
 
 Done when:
 
-- Long-lived dashboards have a tested retention design that preserves useful history after raw snapshot rows age out.
+- Custom fields/screens and saved views/favorites/recent items can be created, listed, updated, deleted or archived, permission-tested, and referenced from relevant work item or reporting APIs.
 
-### 2. OpenAPI Client Generation And Contract Stabilization
+### 2. Generic Admin Import/Export Surface
+
+Goal: make export jobs the first generic admin data movement surface while keeping existing audit export/prune flows stable.
+
+Planned work:
+
+- Add generic export-job admin affordances around existing `export_jobs` records.
+- Decide whether create/cancel/retry should be generic now or remain type-specific until import APIs exist.
+- Keep audit retention export/prune behavior intact and reuse the stored attachment/object artifact download path.
+- Prepare import job APIs to share the same admin status, artifact, and failure-report patterns.
+
+Done when:
+
+- Workspace admins have a coherent generic export-job surface beyond audit-specific entry points, without weakening retention/prune safety.
+
+### 3. OpenAPI Client Generation And Contract Stabilization
 
 Goal: make the frontend consume the backend through a generated, reviewed contract instead of duplicated handwritten types.
 
 Planned work:
 
-- Decide how the Vite React repo should generate and store the API client.
 - Add generation tooling against backend `/v3/api-docs`.
+- Check the generated TypeScript API client into the Vite React repo when frontend work begins.
 - Normalize generated client auth, CSRF, binary download, and cursor-page helpers.
 - Keep `docs/api/FRONTEND_API_CONTRACT.md` as the human-readable guide alongside generated types.
 
@@ -68,7 +82,7 @@ Done when:
 
 - The frontend has a repeatable way to regenerate typed API calls from the backend OpenAPI document.
 
-### 3. Frontend First Flows
+### 4. Frontend First Flows
 
 Goal: connect the Vite React shell to the backend through typed calls.
 
@@ -83,24 +97,10 @@ Done when:
 
 - The frontend can authenticate, show a project work-item list, open a work-item detail page, and call at least one reporting/dashboard endpoint through typed API functions.
 
-### 4. Product Configuration Expansion
-
-Goal: fill the remaining Jira/Rally-style configuration surface before broad manual testing.
-
-Planned work:
-
-- Decide whether custom fields/screens or saved views/favorites/recent items come next.
-- Add migrations, JPA, permission checks, APIs, and tests for the selected configuration slice.
-- Keep new configuration data compatible with current work item, dashboard, reporting, and agent surfaces.
-
-Done when:
-
-- The next configuration slice can be created, listed, updated, deleted or archived, permission-tested, and referenced from the relevant work item or reporting APIs.
-
 ## Remaining Dashboard/Report APIs
 
 - Time and estimate reporting by user/project/work item, remaining-time trends, and estimate-vs-actual summaries.
-- Snapshot retention, rollup, and archival policy.
+- Automatic destructive snapshot pruning after manual rollup behavior is reviewed.
 - Saved views, favorites, and recent item APIs.
 
 ## Before Full User Testing
@@ -109,11 +109,11 @@ The following work should be completed before the application is ready for a mea
 
 ### Backend Readiness
 
-- Decide and implement reporting snapshot rollups before enabling automatic destructive snapshot retention.
+- Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, and agent endpoints as more APIs are exposed.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, and external callback failures as those flows are added.
-- Add custom fields/screens or saved views/favorites/recent items, depending on the next configuration decision.
+- Add custom fields/screens plus saved views/favorites/recent items.
 
 ### Product Configuration Readiness
 
@@ -134,6 +134,6 @@ The following work should be completed before the application is ready for a mea
 
 ### Frontend Readiness
 
-- Generate or wire the typed API client from backend OpenAPI.
+- Before frontend development starts, generate the TypeScript API client from backend `/v3/api-docs`, check the generated client into the Vite React repo, and regenerate only when the backend contract changes.
 - Add a local environment configuration for backend base URL.
 - Build first frontend flows for setup/login, project work item list/detail, team/planning configuration, dashboard rendering, saved filters, and agent assignment/review.
