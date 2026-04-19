@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
@@ -30,6 +31,9 @@ public class Dashboard {
     @Column(name = "owner_id")
     private UUID ownerId;
 
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @Column(name = "name")
     private String name;
 
@@ -40,6 +44,11 @@ public class Dashboard {
     @Column(name = "layout")
     private JsonNode layout;
 
+    @Column(name = "created_at")
+    private OffsetDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private OffsetDateTime updatedAt;
 
     public UUID getId() {
         return id;
@@ -65,6 +74,14 @@ public class Dashboard {
         this.ownerId = ownerId;
     }
 
+    public UUID getTeamId() {
+        return teamId;
+    }
+
+    public void setTeamId(UUID teamId) {
+        this.teamId = teamId;
+    }
+
     public String getName() {
         return name;
     }
@@ -87,5 +104,21 @@ public class Dashboard {
 
     public void setLayout(JsonNode layout) {
         this.layout = layout;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(OffsetDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public OffsetDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(OffsetDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

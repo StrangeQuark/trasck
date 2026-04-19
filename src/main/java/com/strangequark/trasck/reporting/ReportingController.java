@@ -55,6 +55,25 @@ public class ReportingController {
         return reportingService.projectDashboardSummary(projectId, from, to, teamId, iterationId);
     }
 
+    @GetMapping("/workspaces/{workspaceId}/dashboard-summary")
+    public PortfolioReportSummaryResponse workspaceDashboardSummary(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) List<UUID> projectIds
+    ) {
+        return reportingService.workspaceDashboardSummary(workspaceId, from, to, projectIds);
+    }
+
+    @GetMapping("/programs/{programId}/dashboard-summary")
+    public PortfolioReportSummaryResponse programDashboardSummary(
+            @PathVariable UUID programId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to
+    ) {
+        return reportingService.programDashboardSummary(programId, from, to);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/snapshots/run")
     public ReportingSnapshotRunResponse runWorkspaceSnapshots(
             @PathVariable UUID workspaceId,

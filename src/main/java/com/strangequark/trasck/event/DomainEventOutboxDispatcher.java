@@ -89,6 +89,7 @@ public class DomainEventOutboxDispatcher {
                 List.of("pending", "failed")
         ).stream()
                 .filter(delivery -> selectedConsumerKeys == null || selectedConsumerKeys.contains(delivery.getConsumerKey()))
+                .filter(this::readyForAttempt)
                 .toList();
         for (DomainEventDelivery delivery : deliveries) {
             deliver(event, delivery, configs);
@@ -155,9 +156,14 @@ public class DomainEventOutboxDispatcher {
             delivery.setLastError(null);
             delivery.setNextAttemptAt(null);
         } catch (RuntimeException ex) {
-            delivery.setDeliveryStatus("failed");
             delivery.setLastError(ex.getMessage());
-            delivery.setNextAttemptAt(OffsetDateTime.now().plusMinutes(1));
+            if (shouldDeadLetter(delivery, config)) {
+                delivery.setDeliveryStatus("dead_lettered");
+                delivery.setNextAttemptAt(null);
+            } else {
+                delivery.setDeliveryStatus("failed");
+                delivery.setNextAttemptAt(OffsetDateTime.now().plusMinutes(1));
+            }
         }
     }
 
@@ -167,6 +173,11 @@ public class DomainEventOutboxDispatcher {
             event.setProcessingStatus("published");
             event.setPublishedAt(OffsetDateTime.now());
             event.setLastError(null);
+            return;
+        }
+        if (domainEventDeliveryRepository.existsByDomainEventIdAndDeliveryStatus(event.getId(), "dead_lettered")) {
+            event.setProcessingStatus("dead_lettered");
+            event.setLastError("One or more event consumers were dead-lettered");
             return;
         }
         if (domainEventDeliveryRepository.existsByDomainEventIdAndDeliveryStatus(event.getId(), "failed")) {
@@ -228,6 +239,28 @@ public class DomainEventOutboxDispatcher {
                 .filter(consumer -> consumer.consumerType().equals(config.getConsumerType()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("No configured event consumer handler for type " + config.getConsumerType()));
+    }
+
+    private boolean readyForAttempt(DomainEventDelivery delivery) {
+        return delivery.getNextAttemptAt() == null || !delivery.getNextAttemptAt().isAfter(OffsetDateTime.now());
+    }
+
+    private boolean shouldDeadLetter(DomainEventDelivery delivery, EventConsumerConfig config) {
+        int maxAttempts = maxAttempts(config);
+        return maxAttempts > 0 && attempts(delivery) >= maxAttempts && deadLetterOnExhaustion(config);
+    }
+
+    private int maxAttempts(EventConsumerConfig config) {
+        if (config == null || config.getConfig() == null || !config.getConfig().hasNonNull("maxAttempts")) {
+            return 0;
+        }
+        return Math.max(0, config.getConfig().path("maxAttempts").asInt(0));
+    }
+
+    private boolean deadLetterOnExhaustion(EventConsumerConfig config) {
+        return config != null
+                && config.getConfig() != null
+                && config.getConfig().path("deadLetterOnExhaustion").asBoolean(false);
     }
 
     private int attempts(DomainEvent event) {

@@ -6,6 +6,10 @@ import com.strangequark.trasck.activity.WorkLogRepository;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.planning.Iteration;
 import com.strangequark.trasck.planning.IterationRepository;
+import com.strangequark.trasck.project.Program;
+import com.strangequark.trasck.project.ProgramProject;
+import com.strangequark.trasck.project.ProgramProjectRepository;
+import com.strangequark.trasck.project.ProgramRepository;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.team.ProjectTeamRepository;
@@ -44,6 +48,8 @@ public class ReportingService {
 
     private final WorkItemRepository workItemRepository;
     private final ProjectRepository projectRepository;
+    private final ProgramRepository programRepository;
+    private final ProgramProjectRepository programProjectRepository;
     private final IterationRepository iterationRepository;
     private final TeamRepository teamRepository;
     private final ProjectTeamRepository projectTeamRepository;
@@ -61,6 +67,8 @@ public class ReportingService {
     public ReportingService(
             WorkItemRepository workItemRepository,
             ProjectRepository projectRepository,
+            ProgramRepository programRepository,
+            ProgramProjectRepository programProjectRepository,
             IterationRepository iterationRepository,
             TeamRepository teamRepository,
             ProjectTeamRepository projectTeamRepository,
@@ -77,6 +85,8 @@ public class ReportingService {
     ) {
         this.workItemRepository = workItemRepository;
         this.projectRepository = projectRepository;
+        this.programRepository = programRepository;
+        this.programProjectRepository = programProjectRepository;
         this.iterationRepository = iterationRepository;
         this.teamRepository = teamRepository;
         this.projectTeamRepository = projectTeamRepository;
@@ -201,15 +211,36 @@ public class ReportingService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public PortfolioReportSummaryResponse workspaceDashboardSummary(UUID workspaceId, String from, String to, List<UUID> projectIds) {
+        Workspace workspace = reportableWorkspace(workspaceId);
+        requireWorkspaceReportRead(workspace.getId());
+        ReportWindow window = reportWindow(from, to);
+        List<UUID> scopedProjectIds = validatedProjectIds(workspace.getId(), projectIds);
+        return portfolioSummary(new PortfolioReportScope(workspace.getId(), "workspace", null, scopedProjectIds), window);
+    }
+
+    @Transactional(readOnly = true)
+    public PortfolioReportSummaryResponse programDashboardSummary(UUID programId, String from, String to) {
+        Program program = programRepository.findById(programId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Program not found"));
+        if (!"active".equals(program.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Program not found");
+        }
+        reportableWorkspace(program.getWorkspaceId());
+        requireWorkspaceReportRead(program.getWorkspaceId());
+        ReportWindow window = reportWindow(from, to);
+        List<UUID> projectIds = programProjectRepository.findByIdProgramIdOrderByPositionAscCreatedAtAsc(program.getId()).stream()
+                .map(ProgramProject::getId)
+                .map(com.strangequark.trasck.project.ProgramProjectId::getProjectId)
+                .toList();
+        return portfolioSummary(new PortfolioReportScope(program.getWorkspaceId(), "program", program.getId(), projectIds), window);
+    }
+
     @Transactional
     public ReportingSnapshotRunResponse runWorkspaceSnapshots(UUID workspaceId, String snapshotDate) {
-        Workspace workspace = workspaceRepository.findById(workspaceId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
-        if (workspace.getDeletedAt() != null || !"active".equals(workspace.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found");
-        }
-        UUID actorId = currentUserService.requireUserId();
-        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
+        Workspace workspace = reportableWorkspace(workspaceId);
+        requireWorkspaceReportRead(workspace.getId());
         LocalDate effectiveSnapshotDate = hasText(snapshotDate)
                 ? parseDate(snapshotDate, "date")
                 : LocalDate.now(ZoneOffset.UTC);
@@ -230,6 +261,15 @@ public class ReportingService {
         return project;
     }
 
+    private Workspace reportableWorkspace(UUID workspaceId) {
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
+        if (workspace.getDeletedAt() != null || !"active".equals(workspace.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found");
+        }
+        return workspace;
+    }
+
     private void requireReportRead(WorkItem item) {
         UUID actorId = currentUserService.requireUserId();
         permissionService.requireProjectPermission(actorId, item.getProjectId(), "report.read");
@@ -238,6 +278,11 @@ public class ReportingService {
     private void requireReportRead(Project project) {
         UUID actorId = currentUserService.requireUserId();
         permissionService.requireProjectPermission(actorId, project.getId(), "report.read");
+    }
+
+    private void requireWorkspaceReportRead(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
     }
 
     private ReportWindow reportWindow(String from, String to) {
@@ -376,6 +421,99 @@ public class ReportingService {
         }
         cte.append(")\n");
         return new ScopedReportQuery(cte.toString(), params);
+    }
+
+    private PortfolioReportSummaryResponse portfolioSummary(PortfolioReportScope scope, ReportWindow window) {
+        ScopedReportQuery scoped = portfolioScopedReportQuery(scope, window);
+        ProjectReportSummaryResponse.WorkItemMetricsResponse workItems = workItemMetrics(scoped);
+        ProjectReportSummaryResponse.ThroughputMetricsResponse throughput = throughputMetrics(scoped);
+        ProjectReportSummaryResponse.EstimateTimeMetricsResponse estimateAndTime = estimateAndTimeMetrics(scoped);
+        ProjectReportSummaryResponse.CycleTimeMetricsResponse cycleTime = cycleTimeMetrics(scoped);
+        List<ProjectReportSummaryResponse.DimensionCountResponse> byProject = portfolioProjectCounts(scoped);
+        List<ProjectReportSummaryResponse.DimensionCountResponse> byTeam = portfolioTeamCounts(scoped);
+        List<ProjectReportSummaryResponse.DimensionCountResponse> byType = dimensionCounts(scoped, "type");
+        List<ProjectReportSummaryResponse.ReportWidgetResponse> widgets = List.of(
+                new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_work_item_summary", workItems),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_throughput", throughput),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_estimate_time_summary", estimateAndTime),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_cycle_time_inputs", cycleTime),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_project", byProject),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_team", byTeam),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_type", byType)
+        );
+        return new PortfolioReportSummaryResponse(
+                scope.workspaceId(),
+                new PortfolioReportSummaryResponse.PortfolioScopeResponse(scope.scopeType(), scope.programId(), scope.projectIds()),
+                window.from(),
+                window.to(),
+                workItems,
+                throughput,
+                estimateAndTime,
+                cycleTime,
+                byProject,
+                byTeam,
+                byType,
+                widgets
+        );
+    }
+
+    private ScopedReportQuery portfolioScopedReportQuery(PortfolioReportScope scope, ReportWindow window) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("workspaceId", scope.workspaceId())
+                .addValue("from", window.from())
+                .addValue("to", window.to())
+                .addValue("fromDate", window.fromDate())
+                .addValue("toDateExclusive", window.toDateExclusive())
+                .addValue("staleDays", STALE_OPEN_WORK_DAYS);
+        StringBuilder cte = new StringBuilder("""
+                with scoped_projects as (
+                    select p.*
+                    from projects p
+                    where p.workspace_id = :workspaceId
+                      and p.deleted_at is null
+                      and p.status = 'active'
+                """);
+        if (scope.programId() != null) {
+            params.addValue("programId", scope.programId());
+            cte.append("""
+                      and exists (
+                          select 1
+                          from program_projects pp
+                          where pp.program_id = :programId
+                            and pp.project_id = p.id
+                      )
+                    """);
+        }
+        if (scope.projectIds() != null && !scope.projectIds().isEmpty()) {
+            params.addValue("projectIds", scope.projectIds());
+            cte.append("""
+                      and p.id in (:projectIds)
+                    """);
+        }
+        cte.append("""
+                ),
+                scoped_work_items as (
+                    select wi.*
+                    from work_items wi
+                    join scoped_projects sp on sp.id = wi.project_id
+                    where wi.deleted_at is null
+                )
+                """);
+        return new ScopedReportQuery(cte.toString(), params);
+    }
+
+    private List<UUID> validatedProjectIds(UUID workspaceId, List<UUID> projectIds) {
+        if (projectIds == null || projectIds.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> distinctIds = projectIds.stream().distinct().toList();
+        for (UUID projectId : distinctIds) {
+            Project project = reportableProject(projectId);
+            if (!workspaceId.equals(project.getWorkspaceId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project does not belong to this workspace");
+            }
+        }
+        return distinctIds;
     }
 
     private ProjectReportSummaryResponse.WorkItemMetricsResponse workItemMetrics(ScopedReportQuery query) {
@@ -563,6 +701,42 @@ public class ReportingService {
         };
     }
 
+    private List<ProjectReportSummaryResponse.DimensionCountResponse> portfolioProjectCounts(ScopedReportQuery query) {
+        return namedJdbcTemplate.query(query.cte() + """
+                select sp.id,
+                       sp.key,
+                       sp.name,
+                       sp.status as category,
+                       count(wi.id) as count,
+                       coalesce(sum(wi.estimate_points), 0) as estimate_points,
+                       coalesce(sum(wi.estimate_minutes), 0) as estimate_minutes,
+                       coalesce(sum(wi.remaining_minutes), 0) as remaining_minutes,
+                       min(wi.workspace_sequence_number) as first_workspace_sequence
+                from scoped_projects sp
+                left join scoped_work_items wi on wi.project_id = sp.id
+                group by sp.id, sp.key, sp.name, sp.status
+                order by first_workspace_sequence asc nulls last, sp.key asc
+                """, query.params(), this::dimensionCount);
+    }
+
+    private List<ProjectReportSummaryResponse.DimensionCountResponse> portfolioTeamCounts(ScopedReportQuery query) {
+        return namedJdbcTemplate.query(query.cte() + """
+                select t.id,
+                       null::varchar as key,
+                       coalesce(t.name, 'Unassigned') as name,
+                       coalesce(t.status, 'unassigned') as category,
+                       count(wi.id) as count,
+                       coalesce(sum(wi.estimate_points), 0) as estimate_points,
+                       coalesce(sum(wi.estimate_minutes), 0) as estimate_minutes,
+                       coalesce(sum(wi.remaining_minutes), 0) as remaining_minutes,
+                       min(wi.workspace_sequence_number) as first_workspace_sequence
+                from scoped_work_items wi
+                left join teams t on t.id = wi.team_id
+                group by t.id, t.name, t.status
+                order by first_workspace_sequence asc nulls last, name asc
+                """, query.params(), this::dimensionCount);
+    }
+
     private ProjectReportSummaryResponse.DimensionCountResponse dimensionCount(ResultSet rs, int rowNum) throws SQLException {
         return new ProjectReportSummaryResponse.DimensionCountResponse(
                 (UUID) rs.getObject("id"),
@@ -599,6 +773,9 @@ public class ReportingService {
     }
 
     private record ScopedReportQuery(String cte, MapSqlParameterSource params) {
+    }
+
+    private record PortfolioReportScope(UUID workspaceId, String scopeType, UUID programId, List<UUID> projectIds) {
     }
 
     private static class UserWorkLogAccumulator {

@@ -98,12 +98,17 @@ class AgentIntegrationTest {
                 .put("displayName", "Claude Code")
                 .put("dispatchMode", "managed"), accessToken));
         assertThat(claudeProvider.at("/providerType").asText()).isEqualTo("claude_code");
+        ObjectNode workerProviderConfig = objectMapper.createObjectNode();
+        workerProviderConfig.set("workerWebhook", objectMapper.createObjectNode()
+                .put("maxAttempts", 1)
+                .put("deadLetterOnExhaustion", true));
         JsonNode workerProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
                 .put("providerKey", "worker-main")
                 .put("providerType", "generic_worker")
                 .put("displayName", "Generic Worker")
                 .put("dispatchMode", "webhook_push")
-                .put("callbackUrl", workerWebhook.url()), accessToken));
+                .put("callbackUrl", workerWebhook.url())
+                .set("config", workerProviderConfig), accessToken));
         UUID workerProviderId = uuid(workerProvider, "/id");
         assertThat(workerProvider.at("/providerType").asText()).isEqualTo("generic_worker");
         assertThat(workerProvider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
@@ -336,6 +341,16 @@ class AgentIntegrationTest {
         JsonNode workerReviewedTask = read(postCallback("/api/v1/agent-callbacks/worker-main", callback, workerCallbackToken));
         assertThat(workerReviewedTask.at("/status").asText()).isEqualTo("review_requested");
         assertThat(workerReviewedTask.at("/artifacts").toString()).contains("worker/implementation", "Simulated pull request");
+
+        JsonNode deadLetterWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Dead-letter a stopped webhook worker")
+                .put("reporterId", adminUserId.toString()), accessToken));
+        JsonNode deadLetterTask = read(post("/api/v1/work-items/" + uuid(deadLetterWorkItem, "/id") + "/assign-agent", objectMapper.createObjectNode()
+                .put("agentProfileId", workerProfileId.toString()), accessToken));
+        assertThat(deadLetterTask.at("/status").asText()).isEqualTo("running");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(deliveryCount("agent-worker-webhook-" + workerProviderId, "dead_lettered")).isGreaterThanOrEqualTo(1);
 
         ObjectNode restrictedAssignRequest = objectMapper.createObjectNode()
                 .put("agentProfileId", viewerProfileId.toString());

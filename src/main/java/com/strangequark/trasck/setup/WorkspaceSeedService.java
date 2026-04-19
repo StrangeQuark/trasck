@@ -132,7 +132,7 @@ public class WorkspaceSeedService {
             "workspace_admin", List.of("workspace.admin", "workspace.read", "user.manage", "project.create", "project.admin", "project.read",
                     "work_item.create", "work_item.read", "work_item.update", "work_item.delete", "work_item.transition",
                     "work_item.comment", "work_item.link", "work_log.create_own", "work_log.update_own", "work_log.delete_own",
-                    "workflow.admin", "board.admin", "automation.admin", "report.read",
+                    "workflow.admin", "board.admin", "automation.admin", "report.read", "report.manage",
                     "agent.provider.manage", "agent.provider.credential.manage", "agent.profile.manage", "agent.assign",
                     "agent.task.view", "agent.task.cancel", "agent.task.retry", "agent.task.view_logs",
                     "agent.task.accept_result", "repository_connection.manage"),
@@ -146,7 +146,7 @@ public class WorkspaceSeedService {
             "viewer", List.of("workspace.read", "project.read", "work_item.read", "report.read"),
             "project_admin", List.of("project.admin", "project.read", "work_item.create", "work_item.read", "work_item.update",
                     "work_item.delete", "work_item.transition", "work_item.comment", "work_item.link",
-                    "work_log.create_own", "work_log.update_own", "work_log.delete_own", "board.admin", "report.read")
+                    "work_log.create_own", "work_log.update_own", "work_log.delete_own", "board.admin", "report.read", "report.manage")
     );
 
     private final ObjectMapper objectMapper;

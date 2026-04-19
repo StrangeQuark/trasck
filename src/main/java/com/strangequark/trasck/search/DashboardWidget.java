@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
@@ -30,6 +31,9 @@ public class DashboardWidget {
     @Column(name = "widget_type")
     private String widgetType;
 
+    @Column(name = "title")
+    private String title;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "config")
     private JsonNode config;
@@ -46,6 +50,11 @@ public class DashboardWidget {
     @Column(name = "height")
     private Integer height;
 
+    @Column(name = "created_at")
+    private OffsetDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private OffsetDateTime updatedAt;
 
     public UUID getId() {
         return id;
@@ -69,6 +78,14 @@ public class DashboardWidget {
 
     public void setWidgetType(String widgetType) {
         this.widgetType = widgetType;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
     }
 
     public JsonNode getConfig() {
@@ -109,5 +126,21 @@ public class DashboardWidget {
 
     public void setHeight(Integer height) {
         this.height = height;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(OffsetDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public OffsetDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(OffsetDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }
