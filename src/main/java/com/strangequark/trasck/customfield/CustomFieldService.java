@@ -306,6 +306,28 @@ public class CustomFieldService {
         }
     }
 
+    public void enforceRequiredSystemScreenFieldIfConfigured(WorkItem item, String operation, String systemFieldKey) {
+        String targetKey = normalizeSystemFieldKey(systemFieldKey);
+        ScreenAssignment assignment = screenAssignmentRepository.findApplicable(
+                        item.getWorkspaceId(),
+                        item.getProjectId(),
+                        item.getTypeId(),
+                        requiredText(operation, "operation").toLowerCase()
+                ).stream()
+                .findFirst()
+                .orElse(null);
+        if (assignment == null) {
+            return;
+        }
+        boolean required = screenFieldRepository.findByScreenIdOrderByPositionAsc(assignment.getScreenId()).stream()
+                .filter(field -> Boolean.TRUE.equals(field.getRequired()))
+                .filter(field -> field.getCustomFieldId() == null && hasText(field.getSystemFieldKey()))
+                .anyMatch(field -> targetKey.equals(normalizeSystemFieldKey(field.getSystemFieldKey())));
+        if (required) {
+            enforceRequiredSystemScreenField(item, targetKey);
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<ScreenResponse> listScreens(UUID workspaceId) {
         UUID actorId = currentUserService.requireUserId();
@@ -704,6 +726,7 @@ public class CustomFieldService {
             case "parent", "parent_id" -> item.getParentId() != null;
             case "status", "status_id" -> item.getStatusId() != null;
             case "priority", "priority_id" -> item.getPriorityId() != null;
+            case "resolution", "resolution_id" -> item.getResolutionId() != null;
             case "team", "team_id" -> item.getTeamId() != null;
             case "assignee", "assignee_id" -> item.getAssigneeId() != null;
             case "reporter", "reporter_id" -> item.getReporterId() != null;
@@ -712,6 +735,7 @@ public class CustomFieldService {
             case "remaining_minutes" -> item.getRemainingMinutes() != null;
             case "start_date" -> item.getStartDate() != null;
             case "due_date" -> item.getDueDate() != null;
+            case "resolved_at" -> item.getResolvedAt() != null;
             case "visibility" -> hasText(item.getVisibility());
             default -> throw badRequest("Unsupported required system field: " + systemFieldKey);
         };

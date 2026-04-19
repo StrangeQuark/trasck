@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should screen required-field enforcement remain limited to work item create/update, or should command endpoints that mutate required fields also run the relevant screen checks?
-    - Answer: Expand enforcement to command endpoints that mutate required fields, but keep it targeted to the field being changed
-2. Should custom-field work-item list filtering support multiple custom-field predicates in one request now, or wait for saved-filter/query-builder execution?
-    - Answer: Wait for the saved-filter/query-builder execution, but add steps to do this in the Primary Next Steps section so we don't miss it
-3. Should the generated frontend client be wrapped immediately in feature-specific hooks/services, or should the first screens call `TrasckApiClient.request` directly until UI flows settle?
-    - Answer: Wrap immediately in feature-specific hooks/services
-4. Should committed `src/api/generated/openapi.json` stay as the reviewed contract snapshot, or should only the generated TypeScript client be committed after first frontend integration proves enough?
-    - Answer: Keep both for now
+1. Should saved-filter/query-builder execution return cursor-paged work items through a dedicated execution endpoint, or should project work-item lists accept a `savedFilterId` query parameter?
+    - Answer: Use a dedicated saved-filter execution endpoint, while keeping project work-item list params for simple direct filtering
+2. Should the next frontend slice prioritize team/planning screens, saved filter/view/dashboard builder screens, or agent provider/profile setup screens?
+    - Answer: Implement them all
+3. Should the frontend keep Bearer-token local storage for development only, or should the next auth UI pass move browser sessions to cookie plus CSRF flows before broader manual testing?
+    - Answer: Move to cookie plus CSRF
+4. Should frontend API services add normalized toast/error handling now, or keep panel-local errors until navigation and routing are added?
+    - Answer: Add toast/error handling now
 
 ## Current State
 
@@ -29,41 +29,54 @@ Reporting foundations include status, assignment, team, and estimate history wri
 
 Saved dashboard CRUD, widget CRUD, and render APIs are implemented for private, team, project, workspace, and public visibility. Saved filter CRUD, saved view CRUD, favorites, recent items, and the governed report query catalog are implemented. Workspace, project, and team scoped list endpoints exist for dashboards, saved filters, saved views, and report query catalog entries. Widget configs can reference saved filters or catalog entries while recursively rejecting raw SQL keys. Report query catalog `parametersSchema` is enforced at dashboard render time, and permission coverage includes project-only, team-member, non-team, and token-scope users for dashboard/filter/catalog/view sharing behavior.
 
-Product configuration APIs are implemented for the first backend pass. Workspace admins can manage custom field definitions and contexts, work item editors can set/delete validated custom field values, project work-item lists can use typed searchable custom-field filters, and workspace admins can manage screen metadata, fields, and project/type/operation assignments. Screen assignments now enforce required system/custom fields during work item create/update. Field configuration CRUD remains. Export jobs intentionally remain list/get/download until a second export type exists; generic create/cancel/retry should be added at that point.
+Product configuration APIs are implemented for the first backend pass. Workspace admins can manage custom field definitions and contexts, work item editors can set/delete validated custom field values, project work-item lists can use typed searchable custom-field filters, and workspace admins can manage screen metadata, fields, and project/type/operation assignments. Screen assignments enforce required system/custom fields during work item create/update, and command endpoints that mutate required system fields now run targeted checks for the field they changed. Field configuration CRUD remains. Export jobs intentionally remain list/get/download until a second export type exists; generic create/cancel/retry should be added at that point.
 
 Activity and audit foundations are implemented. Static and configured durable consumers project domain events into cursor-page work-item/project/workspace activity streams, cursor-page workspace audit logs, and configured delivery rows. Tests cover durable outbox failure, retry, dead-letter, disabled consumers, unknown replay consumers, and multi-consumer delivery. Audit retention policy metadata is configurable per workspace; exports write JSON artifacts through configured attachment/object storage and create `export_jobs`, manual/scheduled pruning writes a stored export before deleting eligible rows, and workspace admins can list export jobs, inspect export metadata, and download stored export files.
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON, and a generated `TrasckApiClient` with auth, CSRF, binary response, and cursor-page helpers.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON, a generated `TrasckApiClient`, feature-specific API service wrappers, local API-base configuration, and first setup/login/current-user/project work item/dashboard render/agent task flows.
 
 ## Primary Next Steps
 
-### 1. Frontend First Flows
+### 1. Saved Filter Query Builder And Multi-Predicate Execution
 
-Goal: connect the Vite React shell to the backend through the checked-in generated API client.
+Goal: make saved filters executable instead of only stored JSON metadata, while keeping direct project work-item list filtering simple.
 
 Planned work:
 
-- Add local environment config for the backend base URL.
-- Build a thin frontend API module around `TrasckApiClient` based on the answer above.
-- Implement setup/login/current-user flows.
-- Implement project work item cursor list and detail read flows.
-- Implement dashboard render and agent assignment read/action calls after the first auth/work-item flow works.
+- Define the saved filter query JSON shape for work item predicates, boolean groups, sorting, and cursor pagination.
+- Implement the chosen execution API shape from the question above.
+- Translate typed custom-field predicates into validated SQL/JPA query clauses without accepting raw SQL.
+- Keep the existing project work-item list single custom-field predicate until the query-builder execution path proves stable.
+- Add integration tests for multiple system-field and custom-field predicates, invalid operators, scoped saved-filter permissions, and cursor pagination.
 
 Done when:
 
-- The frontend can authenticate, show a project work-item list, open a work-item detail page, and call at least one reporting/dashboard endpoint through typed API functions.
+- A saved filter can return cursor-paged work items using multiple predicates through a governed backend execution path.
 
-### 2. Remaining Backend Configuration Hardening
+### 2. Frontend Domain Expansion
+
+Goal: expand the first console into the next product workflow while keeping feature services around the generated API client.
+
+Planned work:
+
+- Add the next screen group selected from the question above.
+- Add routing and shared shell navigation once there are multiple durable frontend surfaces.
+- Add typed service helpers for any new backend endpoints used by the screen group.
+- Keep both generated `openapi.json` and `trasckApi.ts` committed as the reviewed frontend contract snapshot.
+
+Done when:
+
+- The selected workflow can be exercised end to end from the Vite React app without raw generated-client calls in components.
+
+### 3. Remaining Backend Configuration Hardening
 
 Goal: close the remaining backend configuration gaps that are better finished after the first frontend/API contract pass exposes real usage.
 
 Planned work:
 
 - Add field configuration CRUD.
-- Decide and implement multi-predicate custom-field filtering if it should land before saved-filter/query-builder execution.
-- Decide whether screen required-field enforcement should expand beyond work item create/update command paths.
 - Add board, release, roadmap, notification, automation, and import API slices.
 - Add generic export create/cancel/retry once a second export type exists.
 
@@ -71,7 +84,7 @@ Done when:
 
 - The remaining backend configuration APIs have service-layer permission checks, targeted integration coverage, and a clear contract for frontend screens.
 
-### 3. Backend Reliability And Permission Hardening
+### 4. Backend Reliability And Permission Hardening
 
 Goal: keep the growing backend safe enough for manual product testing.
 
@@ -106,8 +119,8 @@ The following work should be completed before the application is ready for a mea
 ### Product Configuration Readiness
 
 - Decide which remaining configuration after core system fields is globally seeded, workspace-seeded, or project-seeded.
-- Decide whether multi-predicate custom-field filters belong in the project work-item list endpoint or only in saved-filter/query-builder execution.
-- Decide whether screen required-field enforcement should stay on create/update or cover mutation-specific command endpoints as well.
+- Keep multi-predicate custom-field filtering in the saved-filter/query-builder execution plan unless product usage proves direct list query params need it too.
+- Continue expanding targeted screen required-field checks only for command endpoints that can invalidate a required field.
 
 ### Test Readiness
 
@@ -124,5 +137,5 @@ The following work should be completed before the application is ready for a mea
 ### Frontend Readiness
 
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
-- Add a local environment configuration for backend base URL.
-- Build first frontend flows for setup/login, project work item list/detail, team/planning configuration, dashboard rendering, saved filters/views, and agent assignment/review.
+- Keep feature-specific frontend API services as the boundary between UI components and the generated client.
+- Build frontend flows for team/planning configuration, dashboard construction, saved filters/views, and agent provider/profile setup.
