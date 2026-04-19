@@ -98,7 +98,6 @@ public class DashboardService {
         DashboardRequest createRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
-        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
         String visibility = normalizeVisibility(createRequest.visibility());
         UUID projectId = normalizeProjectId(workspaceId, visibility, createRequest.projectId());
         UUID teamId = normalizeTeamId(workspaceId, visibility, createRequest.teamId());
@@ -470,6 +469,7 @@ public class DashboardService {
 
     private void requireSharedPermission(UUID actorId, UUID workspaceId, String visibility, UUID projectId) {
         if ("private".equals(visibility)) {
+            permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
             return;
         }
         if ("project".equals(visibility)) {
@@ -480,51 +480,19 @@ public class DashboardService {
     }
 
     private boolean canManageReports(UUID actorId, UUID workspaceId) {
-        try {
-            permissionService.requireWorkspacePermission(actorId, workspaceId, "report.manage");
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseWorkspace(actorId, workspaceId, "report.manage");
     }
 
     private boolean canUseWorkspace(UUID actorId, UUID workspaceId, String permissionKey) {
-        try {
-            permissionService.requireWorkspacePermission(actorId, workspaceId, permissionKey);
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseWorkspace(actorId, workspaceId, permissionKey);
     }
 
     private boolean canManageProjectReports(UUID actorId, UUID projectId) {
-        try {
-            permissionService.requireProjectPermission(actorId, projectId, "report.manage");
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseProject(actorId, projectId, "report.manage");
     }
 
     private boolean canReadProjectReports(UUID actorId, UUID projectId) {
-        try {
-            permissionService.requireProjectPermission(actorId, projectId, "report.read");
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseProject(actorId, projectId, "report.read");
     }
 
     private void recordDashboardEvent(Dashboard dashboard, String eventType, UUID actorId) {

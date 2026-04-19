@@ -13,9 +13,13 @@ import com.strangequark.trasck.team.TeamMembershipRepository;
 import com.strangequark.trasck.team.TeamRepository;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -76,7 +80,7 @@ public class ReportQueryCatalogService {
     public ReportQueryCatalogResponse get(UUID queryId) {
         UUID actorId = currentUserService.requireUserId();
         ReportQueryCatalogEntry entry = entry(queryId);
-        permissionService.requireWorkspacePermission(actorId, entry.getWorkspaceId(), "report.read");
+        activeWorkspace(entry.getWorkspaceId());
         requireReadable(actorId, entry);
         return ReportQueryCatalogResponse.from(entry);
     }
@@ -105,7 +109,7 @@ public class ReportQueryCatalogService {
         entry.setDescription(trimToNull(createRequest.description()));
         entry.setQueryType(normalizeQueryType(createRequest.queryType()));
         entry.setQueryConfig(validatedConfig(createRequest.queryConfig(), "queryConfig"));
-        entry.setParametersSchema(validatedConfig(createRequest.parametersSchema(), "parametersSchema"));
+        entry.setParametersSchema(validatedParametersSchema(createRequest.parametersSchema()));
         entry.setVisibility(visibility);
         entry.setEnabled(createRequest.enabled() == null || Boolean.TRUE.equals(createRequest.enabled()));
         ReportQueryCatalogEntry saved = reportQueryCatalogRepository.save(entry);
@@ -159,7 +163,7 @@ public class ReportQueryCatalogService {
             entry.setQueryConfig(validatedConfig(updateRequest.queryConfig(), "queryConfig"));
         }
         if (updateRequest.parametersSchema() != null) {
-            entry.setParametersSchema(validatedConfig(updateRequest.parametersSchema(), "parametersSchema"));
+            entry.setParametersSchema(validatedParametersSchema(updateRequest.parametersSchema()));
         }
         if (updateRequest.enabled() != null) {
             entry.setEnabled(updateRequest.enabled());
@@ -186,6 +190,7 @@ public class ReportQueryCatalogService {
         UUID actorId = currentUserService.requireUserId();
         ObjectNode config = toObject(widgetConfig, "widget config");
         UUID reportQueryId = firstUuid(config, config.path("query"), "reportQueryId");
+        ReportQueryCatalogEntry reportQueryEntry = null;
         ObjectNode resolved = config.deepCopy();
         if (reportQueryId != null) {
             ReportQueryCatalogEntry entry = entry(reportQueryId);
@@ -193,6 +198,7 @@ public class ReportQueryCatalogService {
                 throw notFound("Report query not found");
             }
             requireReadable(actorId, entry);
+            reportQueryEntry = entry;
             resolved = objectMapper.createObjectNode();
             resolved.put("reportType", entry.getQueryType());
             resolved.set("query", toObject(entry.getQueryConfig(), "report query config"));
@@ -200,6 +206,9 @@ public class ReportQueryCatalogService {
         }
 
         resolveSavedFilter(actorId, workspaceId, resolved);
+        if (reportQueryEntry != null) {
+            validateRuntimeParameters(reportQueryEntry, resolved.path("query").isObject() ? resolved.path("query") : resolved);
+        }
         return resolved;
     }
 
@@ -232,6 +241,255 @@ public class ReportQueryCatalogService {
             throw badRequest(fieldName + " must not contain raw SQL");
         }
         return json;
+    }
+
+    private JsonNode validatedParametersSchema(Object config) {
+        ObjectNode schema = toObject(toJson(config), "parametersSchema");
+        if (containsRawSqlKey(schema)) {
+            throw badRequest("parametersSchema must not contain raw SQL");
+        }
+        if (schema.isEmpty()) {
+            return schema;
+        }
+        JsonNode rootType = schema.get("type");
+        if (rootType != null && !rootType.isNull() && (!rootType.isTextual() || !"object".equals(rootType.asText()))) {
+            throw badRequest("parametersSchema.type must be object");
+        }
+        if (schema.has("required") && !schema.path("required").isArray()) {
+            throw badRequest("parametersSchema.required must be an array");
+        }
+        if (schema.has("additionalProperties") && !schema.path("additionalProperties").isBoolean()) {
+            throw badRequest("parametersSchema.additionalProperties must be a boolean");
+        }
+        ObjectNode definitions = parameterDefinitions(schema);
+        for (String requiredParameter : requiredParameters(schema, definitions)) {
+            if (!definitions.has(requiredParameter)) {
+                throw badRequest("parametersSchema.required references unknown parameter " + requiredParameter);
+            }
+        }
+        Iterator<Map.Entry<String, JsonNode>> fields = definitions.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            if (!field.getValue().isObject()) {
+                throw badRequest("parametersSchema." + field.getKey() + " must be an object");
+            }
+            validateParameterDefinition(field.getKey(), (ObjectNode) field.getValue());
+        }
+        return schema;
+    }
+
+    private void validateParameterDefinition(String parameterName, ObjectNode definition) {
+        String type = parameterType(parameterName, definition);
+        if (!List.of("string", "uuid", "integer", "number", "boolean", "date", "datetime", "array", "object").contains(type)) {
+            throw badRequest("parametersSchema." + parameterName + ".type is not supported");
+        }
+        if (definition.has("required") && !definition.path("required").isBoolean()) {
+            throw badRequest("parametersSchema." + parameterName + ".required must be a boolean");
+        }
+        if (definition.has("enum") && !definition.path("enum").isArray()) {
+            throw badRequest("parametersSchema." + parameterName + ".enum must be an array");
+        }
+        if ("array".equals(type) && definition.has("items")) {
+            JsonNode items = definition.path("items");
+            if (!items.isObject()) {
+                throw badRequest("parametersSchema." + parameterName + ".items must be an object");
+            }
+            validateParameterDefinition(parameterName + ".items", (ObjectNode) items);
+        }
+    }
+
+    private void validateRuntimeParameters(ReportQueryCatalogEntry entry, JsonNode query) {
+        JsonNode schema = entry.getParametersSchema();
+        if (schema == null || !schema.isObject() || schema.isEmpty()) {
+            return;
+        }
+        ObjectNode parameters = toObject(query, "widget query");
+        ObjectNode definitions = parameterDefinitions(schema);
+        Set<String> required = requiredParameters(schema, definitions);
+        for (String parameterName : required) {
+            JsonNode value = parameters.get(parameterName);
+            if (value == null || value.isNull() || (value.isTextual() && !hasText(value.asText()))) {
+                throw badRequest("widget query." + parameterName + " is required by report query " + entry.getQueryKey());
+            }
+        }
+
+        Iterator<Map.Entry<String, JsonNode>> fields = parameters.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            if (isControlParameter(field.getKey())) {
+                continue;
+            }
+            JsonNode definition = definitions.get(field.getKey());
+            if (definition == null || definition.isMissingNode()) {
+                if (schema.path("additionalProperties").isBoolean() && !schema.path("additionalProperties").asBoolean()) {
+                    throw badRequest("widget query." + field.getKey() + " is not allowed by report query " + entry.getQueryKey());
+                }
+                continue;
+            }
+            validateRuntimeParameter(field.getKey(), field.getValue(), (ObjectNode) definition);
+        }
+    }
+
+    private ObjectNode parameterDefinitions(JsonNode schema) {
+        JsonNode properties = schema.path("properties");
+        if (properties.isObject()) {
+            return (ObjectNode) properties;
+        }
+        JsonNode parameters = schema.path("parameters");
+        if (parameters.isObject()) {
+            return (ObjectNode) parameters;
+        }
+        ObjectNode direct = objectMapper.createObjectNode();
+        Iterator<Map.Entry<String, JsonNode>> fields = schema.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            if (!List.of("type", "required", "additionalProperties").contains(field.getKey())) {
+                direct.set(field.getKey(), field.getValue());
+            }
+        }
+        return direct;
+    }
+
+    private Set<String> requiredParameters(JsonNode schema, ObjectNode definitions) {
+        Set<String> required = new HashSet<>();
+        JsonNode rootRequired = schema.path("required");
+        if (rootRequired.isArray()) {
+            for (JsonNode value : rootRequired) {
+                if (!value.isTextual() || !hasText(value.asText())) {
+                    throw badRequest("parametersSchema.required must contain parameter names");
+                }
+                required.add(value.asText());
+            }
+        }
+        Iterator<Map.Entry<String, JsonNode>> fields = definitions.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            if (field.getValue().path("required").asBoolean(false)) {
+                required.add(field.getKey());
+            }
+        }
+        return required;
+    }
+
+    private void validateRuntimeParameter(String parameterName, JsonNode value, ObjectNode definition) {
+        if (value == null || value.isNull()) {
+            return;
+        }
+        String type = parameterType(parameterName, definition);
+        switch (type) {
+            case "string" -> requireTextValue(parameterName, value);
+            case "uuid" -> parseUuid(requireTextValue(parameterName, value), "widget query." + parameterName + " must be a UUID");
+            case "integer" -> requireIntegerValue(parameterName, value);
+            case "number" -> requireNumberValue(parameterName, value);
+            case "boolean" -> requireBooleanValue(parameterName, value);
+            case "date" -> requireDateValue(parameterName, value);
+            case "datetime" -> requireDateTimeValue(parameterName, value);
+            case "array" -> requireArrayValue(parameterName, value, definition.path("items"));
+            case "object" -> {
+                if (!value.isObject()) {
+                    throw badRequest("widget query." + parameterName + " must be an object");
+                }
+            }
+            default -> throw badRequest("parametersSchema." + parameterName + ".type is not supported");
+        }
+        validateEnumValue(parameterName, value, definition.path("enum"));
+    }
+
+    private String parameterType(String parameterName, JsonNode definition) {
+        JsonNode type = definition.path("type");
+        if (!type.isTextual() || !hasText(type.asText())) {
+            throw badRequest("parametersSchema." + parameterName + ".type is required");
+        }
+        return normalizeKey(type.asText());
+    }
+
+    private String requireTextValue(String parameterName, JsonNode value) {
+        if (!value.isTextual() || !hasText(value.asText())) {
+            throw badRequest("widget query." + parameterName + " must be a string");
+        }
+        return value.asText();
+    }
+
+    private void requireIntegerValue(String parameterName, JsonNode value) {
+        if (value.isIntegralNumber()) {
+            return;
+        }
+        if (value.isTextual()) {
+            try {
+                Integer.parseInt(value.asText());
+                return;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        throw badRequest("widget query." + parameterName + " must be an integer");
+    }
+
+    private void requireNumberValue(String parameterName, JsonNode value) {
+        if (value.isNumber()) {
+            return;
+        }
+        if (value.isTextual()) {
+            try {
+                Double.parseDouble(value.asText());
+                return;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        throw badRequest("widget query." + parameterName + " must be a number");
+    }
+
+    private void requireBooleanValue(String parameterName, JsonNode value) {
+        if (value.isBoolean()) {
+            return;
+        }
+        if (value.isTextual() && List.of("true", "false").contains(value.asText().toLowerCase())) {
+            return;
+        }
+        throw badRequest("widget query." + parameterName + " must be a boolean");
+    }
+
+    private void requireDateValue(String parameterName, JsonNode value) {
+        try {
+            LocalDate.parse(requireTextValue(parameterName, value));
+        } catch (Exception ex) {
+            throw badRequest("widget query." + parameterName + " must be an ISO-8601 date");
+        }
+    }
+
+    private void requireDateTimeValue(String parameterName, JsonNode value) {
+        try {
+            OffsetDateTime.parse(requireTextValue(parameterName, value));
+        } catch (Exception ex) {
+            throw badRequest("widget query." + parameterName + " must be an ISO-8601 timestamp");
+        }
+    }
+
+    private void requireArrayValue(String parameterName, JsonNode value, JsonNode itemDefinition) {
+        if (!value.isArray()) {
+            throw badRequest("widget query." + parameterName + " must be an array");
+        }
+        if (itemDefinition == null || !itemDefinition.isObject() || itemDefinition.isEmpty()) {
+            return;
+        }
+        for (JsonNode item : value) {
+            validateRuntimeParameter(parameterName + "[]", item, (ObjectNode) itemDefinition);
+        }
+    }
+
+    private void validateEnumValue(String parameterName, JsonNode value, JsonNode allowedValues) {
+        if (allowedValues == null || !allowedValues.isArray() || allowedValues.isEmpty()) {
+            return;
+        }
+        for (JsonNode allowedValue : allowedValues) {
+            if (allowedValue.asText().equals(value.asText())) {
+                return;
+            }
+        }
+        throw badRequest("widget query." + parameterName + " is not an allowed value");
+    }
+
+    private boolean isControlParameter(String parameterName) {
+        return "reportQueryId".equals(parameterName) || "savedFilterId".equals(parameterName);
     }
 
     private ObjectNode toObject(JsonNode node, String fieldName) {
@@ -429,27 +687,11 @@ public class ReportQueryCatalogService {
     }
 
     private boolean canUseWorkspace(UUID actorId, UUID workspaceId, String permissionKey) {
-        try {
-            permissionService.requireWorkspacePermission(actorId, workspaceId, permissionKey);
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseWorkspace(actorId, workspaceId, permissionKey);
     }
 
     private boolean canUseProject(UUID actorId, UUID projectId, String permissionKey) {
-        try {
-            permissionService.requireProjectPermission(actorId, projectId, permissionKey);
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseProject(actorId, projectId, permissionKey);
     }
 
     private void recordEvent(ReportQueryCatalogEntry entry, String eventType, UUID actorId) {

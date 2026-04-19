@@ -93,6 +93,7 @@ class WorkItemApiIntegrationTest {
         UUID projectId = uuid(setup, "/project/id");
         UUID memberRoleId = roleId(setup, "member");
         UUID viewerRoleId = roleId(setup, "viewer");
+        UUID projectAdminRoleId = roleId(setup, "project_admin");
 
         assertThat(get("/api/v1/projects/" + projectId + "/work-items").statusCode()).isEqualTo(401);
         accessToken = login(setup);
@@ -388,13 +389,15 @@ class WorkItemApiIntegrationTest {
         UUID savedFilterId = uuid(savedFilter, "/id");
         assertThat(savedFilter.at("/visibility").asText()).isEqualTo("project");
         assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/saved-filters")).isNotEmpty();
-        JsonNode reportQuery = postJson("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", objectMapper.createObjectNode()
+        ObjectNode reportQueryRequest = objectMapper.createObjectNode()
                 .put("queryKey", "committed-team-work")
                 .put("name", "Committed team work query")
                 .put("queryType", "project_dashboard_summary")
                 .put("visibility", "project")
-                .put("projectId", projectId.toString())
-                .set("queryConfig", objectMapper.createObjectNode().put("savedFilterId", savedFilterId.toString())));
+                .put("projectId", projectId.toString());
+        reportQueryRequest.set("queryConfig", objectMapper.createObjectNode().put("savedFilterId", savedFilterId.toString()));
+        reportQueryRequest.set("parametersSchema", projectDashboardParameterSchema());
+        JsonNode reportQuery = postJson("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", reportQueryRequest);
         UUID reportQueryId = uuid(reportQuery, "/id");
         ObjectNode unsafeCatalogConfig = objectMapper.createObjectNode();
         unsafeCatalogConfig.set("nested", objectMapper.createObjectNode().put("rawSql", "select 1"));
@@ -403,6 +406,15 @@ class WorkItemApiIntegrationTest {
                 .put("name", "Unsafe query")
                 .put("queryType", "project_dashboard_summary")
                 .set("queryConfig", unsafeCatalogConfig)).statusCode()).isEqualTo(400);
+        ObjectNode invalidParametersSchema = objectMapper.createObjectNode()
+                .put("type", "object");
+        invalidParametersSchema.set("properties", objectMapper.createObjectNode()
+                .set("projectId", objectMapper.createObjectNode().put("type", "unsupported")));
+        assertThat(post("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", objectMapper.createObjectNode()
+                .put("queryKey", "invalid-parameter-schema")
+                .put("name", "Invalid parameter schema")
+                .put("queryType", "project_dashboard_summary")
+                .set("parametersSchema", invalidParametersSchema)).statusCode()).isEqualTo(400);
         JsonNode projectDashboard = postJson("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
                 .put("name", "Project Reporting")
                 .put("visibility", "project")
@@ -420,6 +432,82 @@ class WorkItemApiIntegrationTest {
         assertThat(uuid(catalogWidget, "/id")).isNotNull();
         JsonNode renderedProjectDashboard = getJson("/api/v1/dashboards/" + projectDashboardId + "/render?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
         assertThat(renderedProjectDashboard.at("/widgets/0/data/total").asLong()).isEqualTo(1);
+        JsonNode strictReportQuery = postJson("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", objectMapper.createObjectNode()
+                .put("queryKey", "strict-runtime-params")
+                .put("name", "Strict runtime params")
+                .put("queryType", "project_dashboard_summary")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("parametersSchema", projectDashboardParameterSchema()));
+        UUID strictReportQueryId = uuid(strictReportQuery, "/id");
+        JsonNode strictDashboard = postJson("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
+                .put("name", "Strict Project Reporting")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString()));
+        UUID strictDashboardId = uuid(strictDashboard, "/id");
+        JsonNode strictWidget = postJson("/api/v1/dashboards/" + strictDashboardId + "/widgets", objectMapper.createObjectNode()
+                .put("widgetType", "work_item_summary")
+                .put("title", "Strict params")
+                .put("positionX", 0)
+                .put("positionY", 0)
+                .put("width", 4)
+                .put("height", 2)
+                .set("config", objectMapper.createObjectNode().put("reportQueryId", strictReportQueryId.toString())));
+        assertThat(uuid(strictWidget, "/id")).isNotNull();
+        assertThat(get("/api/v1/dashboards/" + strictDashboardId + "/render").statusCode()).isEqualTo(400);
+        JsonNode permissionTeamDashboard = postJson("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
+                .put("name", "Team Permission Dashboard")
+                .put("visibility", "team")
+                .put("teamId", reportingScope.teamId().toString()));
+        UUID permissionTeamDashboardId = uuid(permissionTeamDashboard, "/id");
+        postJson("/api/v1/teams/" + reportingScope.teamId() + "/memberships", objectMapper.createObjectNode()
+                .put("userId", memberId.toString())
+                .put("role", "member")
+                .put("capacityPercent", 100));
+        String teamMemberToken = login(memberEmail, memberPassword);
+        String viewerToken = login(viewerEmail, viewerPassword);
+        accessToken = viewerToken;
+        assertThat(get("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(404);
+        accessToken = teamMemberToken;
+        assertThat(get("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(200);
+        accessToken = adminAccessToken;
+        JsonNode projectInvitation = postJson("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
+                .put("email", "project-reporter-" + UUID.randomUUID() + "@example.com")
+                .put("projectId", projectId.toString())
+                .put("projectRoleId", projectAdminRoleId.toString()));
+        JsonNode projectRegistered = objectMapper.readTree(rawPost("/api/v1/auth/register", objectMapper.createObjectNode()
+                .put("email", projectInvitation.at("/email").asText())
+                .put("username", "project-reporter-" + UUID.randomUUID())
+                .put("displayName", "Project Reporter")
+                .put("password", "project-reporter-password")
+                .put("invitationToken", projectInvitation.at("/token").asText())).body());
+        UUID projectOnlyUserId = uuid(projectRegistered, "/user/id");
+        jdbcTemplate.update("delete from workspace_memberships where workspace_id = ? and user_id = ?", workspaceId, projectOnlyUserId);
+        String projectOnlyToken = projectRegistered.at("/accessToken").asText();
+        accessToken = projectOnlyToken;
+        assertThat(get("/api/v1/workspaces/" + workspaceId + "/dashboards").statusCode()).isEqualTo(403);
+        assertThat(get("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(200);
+        assertThat(get("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(200);
+        assertThat(get("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(200);
+        assertThat(post("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
+                .put("name", "Project-only workspace dashboard")
+                .put("visibility", "workspace")).statusCode()).isEqualTo(403);
+        JsonNode projectOnlyDashboard = postJson("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
+                .put("name", "Project-only dashboard")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString()));
+        UUID projectOnlyDashboardId = uuid(projectOnlyDashboard, "/id");
+        accessToken = adminAccessToken;
+        JsonNode scopedReadOnlyToken = postJson("/api/v1/auth/tokens/personal", objectMapper.createObjectNode()
+                .put("name", "Work item read only dashboard token")
+                .set("scopes", objectMapper.createArrayNode().add("work_item.read")));
+        accessToken = scopedReadOnlyToken.at("/token").asText();
+        assertThat(get("/api/v1/workspaces/" + workspaceId + "/dashboards").statusCode()).isEqualTo(403);
+        accessToken = adminAccessToken;
+        assertThat(delete("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/dashboards/" + projectOnlyDashboardId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/dashboards/" + strictDashboardId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/report-query-catalog/" + strictReportQueryId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(204);
@@ -490,7 +578,9 @@ class WorkItemApiIntegrationTest {
         assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + commentId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/comments")).isEmpty();
 
-        domainEventOutboxDispatcher.dispatchPending();
+        for (int i = 0; i < 3; i++) {
+            domainEventOutboxDispatcher.dispatchPending();
+        }
         JsonNode workItemActivity = getJson("/api/v1/work-items/" + storyId + "/activity");
         assertThat(eventTypes(workItemActivity)).contains("work_item.created", "work_item.comment_created", "work_item.work_logged", "work_item.attachment_removed");
         JsonNode projectActivity = getJson("/api/v1/workspaces/" + workspaceId + "/projects/" + projectId + "/activity");
@@ -587,6 +677,22 @@ class WorkItemApiIntegrationTest {
         HttpResponse<String> response = post("/api/v1/projects/" + projectId + "/work-items", workItemBody(actorId, typeKey, parentId, title, assigneeId));
         assertThat(response.statusCode()).isEqualTo(201);
         return objectMapper.readTree(response.body());
+    }
+
+    private ObjectNode projectDashboardParameterSchema() {
+        ObjectNode schema = objectMapper.createObjectNode()
+                .put("type", "object")
+                .put("additionalProperties", false);
+        schema.set("required", objectMapper.createArrayNode()
+                .add("projectId")
+                .add("teamId")
+                .add("iterationId"));
+        ObjectNode properties = objectMapper.createObjectNode();
+        properties.set("projectId", objectMapper.createObjectNode().put("type", "uuid"));
+        properties.set("teamId", objectMapper.createObjectNode().put("type", "uuid"));
+        properties.set("iterationId", objectMapper.createObjectNode().put("type", "uuid"));
+        schema.set("properties", properties);
+        return schema;
     }
 
     private ObjectNode workItemBody(UUID actorId, String typeKey, UUID parentId, String title, UUID assigneeId) {

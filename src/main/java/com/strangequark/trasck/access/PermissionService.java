@@ -64,6 +64,16 @@ public class PermissionService {
     }
 
     @Transactional(readOnly = true)
+    public boolean canUseWorkspace(UUID userId, UUID workspaceId, String permissionKey) {
+        return currentPrincipalAllows(permissionKey) && hasWorkspacePermission(userId, workspaceId, permissionKey);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean canUseProject(UUID userId, UUID projectId, String permissionKey) {
+        return currentPrincipalAllows(permissionKey) && hasProjectPermission(userId, projectId, permissionKey);
+    }
+
+    @Transactional(readOnly = true)
     public void requireWorkspacePermission(UUID userId, UUID workspaceId, String permissionKey) {
         if (!currentPrincipalAllows(permissionKey) || !hasWorkspacePermission(userId, workspaceId, permissionKey)) {
             throw forbidden();
