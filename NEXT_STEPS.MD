@@ -4,15 +4,13 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend slices.
 
-1. Should the first agent-management APIs be workspace-admin-only, or should a separate `Agent Manager` role be seeded and enforced immediately?
+1. Should the next agent adapter pass add a provider-specific adapter first, such as Codex, Claude Code, or webhook workers, or harden an allowlisted local runner first?
     - Answer:
-2. Should the simulated agent adapter complete tasks automatically in the same request, or should it move tasks through queued/running states so callback and retry behavior is exercised?
+2. Should agent callback JWT signing stay as a shared HS256 application secret for now, or move to per-provider asymmetric keys/JWKS before any real external provider is enabled?
     - Answer:
-3. Should agent task completion create a comment/review artifact on the work item, or only update agent task status and activity/audit streams for the first pass?
+3. Should accepting an agent result only mark the agent task complete, or should it also queue/perform a workflow transition toward Approval once workflow automation exists?
     - Answer:
-4. Should repository connections in the first agent slice support generic Git URLs only, or should they also model provider-specific metadata for GitHub/GitLab from the start?
-    - Answer:
-5. Should agent callbacks use per-task callback secrets first, provider-level secrets first, or signed JWT assertions tied to the provider profile?
+4. Should agent profiles remain workspace-level with repository/task validation, or should Trasck add project-scoped agent availability and capability rules before provider-specific adapters?
     - Answer:
 
 ## Current State
@@ -29,28 +27,11 @@ Activity and audit foundations are implemented. Static durable consumers project
 
 Core JPA mappings now include useful associations for common navigation paths such as workspace/project, project/work item, work item/type/status/priority, and workflow/status/transition while preserving scalar UUID fields where they keep command code explicit.
 
+The first provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated agent providers, rotate provider credentials without exposing raw secrets, create assignable agent profiles backed by agent users, add generic Git/GitHub/GitLab repository connections, assign work items to agents, receive signed JWT callbacks, create review artifacts/comments from completed callbacks, accept agent results, and project agent events into activity/audit streams. Assignment and callback-authored comments verify the agent user's project permissions. The simulated adapter proves queued-to-running lifecycle behavior without shell commands or paid/external AI execution.
+
 ## Primary Next Steps
 
-### 1. Add Provider-Neutral AI Agent Service Foundations
-
-Goal: let work items be assigned to AI agents without making Trasck dependent on any one agent vendor or changing the normal Jira/Rally-style workflow.
-
-Planned work:
-
-- Add an `AgentProviderAdapter` service contract that supports configuration validation, capability discovery, dispatch, cancel, retry, and callback handling.
-- Add provider, credential, agent profile, repository connection, and agent task APIs on top of the existing schema/JPA foundation.
-- Implement a simulated stub/local adapter first. It should prove lifecycle, permissions, activity/audit, retry/cancel, and callback behavior without running shell commands. An allowlisted local command runner should be a later hardened adapter.
-- Keep provider-specific behavior inside adapters selected by `provider_type`.
-- Add audit and activity events for agent assignment, provider configuration, credential rotation, task status changes, messages, and artifacts.
-- Add tests for assignment, dispatch, callback idempotency, cancellation, retry, completion, failure, artifact creation, and permission enforcement.
-
-Done when:
-
-- A work item can be assigned to a configured agent through the same assignment model used for humans.
-- Agent execution state is visible and auditable without closing the work item automatically.
-- A future provider such as Codex, Claude Code, a local runner, or a webhook worker can be added by implementing the adapter contract rather than changing work item or workflow logic.
-
-### 2. Add Work Logs And Reporting History Foundations
+### 1. Add Work Logs And Reporting History Foundations
 
 Goal: complete the remaining collaboration/time-tracking slice and start producing the history needed for useful reports.
 
@@ -67,7 +48,7 @@ Done when:
 - Time tracking changes are visible in activity and safe for later reporting.
 - Reporting history has a clear source of truth for the first dashboard/list views.
 
-### 3. Add API Documentation And Local Runtime Polish
+### 2. Add API Documentation And Local Runtime Polish
 
 Goal: make the backend ready for a meaningful manual pass before frontend work depends on it heavily.
 
@@ -82,6 +63,23 @@ Done when:
 
 - A developer can start the backend locally, run the core flows, and understand the required auth headers/cookies without reading implementation code.
 
+### 3. Harden And Expand Agent Adapter Contracts
+
+Goal: prepare the provider-neutral agent foundation for real adapters without weakening normal project-management behavior.
+
+Planned work:
+
+- Decide whether the next adapter is provider-specific, webhook/polling, or a hardened allowlisted local runner.
+- Add adapter contract tests for dispatch, retry, cancel, callback validation, failure handling, and artifact mapping.
+- Add callback signing hardening if external providers are next, including per-provider keys or asymmetric assertions if selected.
+- Add request-changes/waiting-for-input flows so humans can interact with an agent task without accepting or canceling it.
+- Add explicit tests proving agent users cannot exceed their workspace/project role permissions.
+
+Done when:
+
+- A real provider can be added by implementing an adapter and tests without changing work item, workflow, or reporting code.
+- Callback trust, secret handling, and agent permissions are strong enough for a non-simulated provider.
+
 ## Before Full User Testing
 
 The following work should be completed before the application is ready for a meaningful end-to-end test by a user.
@@ -89,10 +87,10 @@ The following work should be completed before the application is ready for a mea
 ### Backend Readiness
 
 - Expand permission checks beyond work items and user-management endpoints as more APIs are exposed.
-- Add provider-neutral agent provider, agent profile, repository connection, and agent task APIs.
-- Add the first simulated stub/local agent adapter while keeping tests isolated from shell commands and paid or external AI execution.
-- Add authenticated, idempotent agent callback endpoints.
-- Extend activity/audit projection coverage to provider setup, credential rotation, agent assignment, privileged task actions, and callback failures as the agent APIs are added.
+- Add provider-specific agent adapters or a hardened allowlisted local runner after the simulated adapter contract is stable.
+- Replace simulated credential fingerprinting with decryptable encrypted secret storage or external secret management before real provider API dispatch.
+- Harden signed agent callbacks for external providers with the chosen per-provider/shared/asymmetric key strategy.
+- Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, and external callback failures as those flows are added.
 - Add physical audit retention pruning/export jobs after the retention policy metadata has a scheduled executor.
 - Add token expiry integration tests and any remaining token lifecycle edge cases.
 - Add work log APIs and reporting history consumers for time tracking.

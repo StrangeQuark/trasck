@@ -179,6 +179,12 @@ Implemented endpoints:
 - `GET /api/v1/workspaces/{workspaceId}/audit-log` exposes admin-only audit log entries for a workspace.
 - `GET /api/v1/workspaces/{workspaceId}/audit-retention-policy` and `PUT /api/v1/workspaces/{workspaceId}/audit-retention-policy` manage configurable workspace audit retention policy metadata.
 - `POST /api/v1/workspaces/{workspaceId}/domain-events/replay` lets workspace admins replay selected domain events through selected durable consumers, defaulting to the activity and audit projection consumers.
+- `GET /api/v1/workspaces/{workspaceId}/agent-providers`, `POST /api/v1/workspaces/{workspaceId}/agent-providers`, `PATCH /api/v1/agent-providers/{providerId}`, and `POST /api/v1/agent-providers/{providerId}/credentials` manage provider-neutral agent providers and rotated credentials.
+- `GET /api/v1/workspaces/{workspaceId}/agents`, `POST /api/v1/workspaces/{workspaceId}/agents`, and `PATCH /api/v1/agents/{profileId}` manage assignable agent profiles backed by `users.account_type = agent`.
+- `GET /api/v1/workspaces/{workspaceId}/repository-connections` and `POST /api/v1/workspaces/{workspaceId}/repository-connections` manage generic Git, GitHub, and GitLab repository connections with provider metadata.
+- `POST /api/v1/work-items/{workItemId}/assign-agent` assigns a work item to a configured agent and creates an agent task.
+- `GET /api/v1/agent-tasks/{taskId}`, `POST /api/v1/agent-tasks/{taskId}/cancel`, `POST /api/v1/agent-tasks/{taskId}/retry`, and `POST /api/v1/agent-tasks/{taskId}/accept-result` expose agent task review and lifecycle commands.
+- `POST /api/v1/agent-callbacks/{providerKey}` accepts provider-neutral signed JWT callback assertions for agent task status, messages, artifacts, and review requests.
 
 Implemented seed data:
 
@@ -203,6 +209,8 @@ Security state:
 - Comment edits/deletes are author-or-admin shaped: authors need `work_item.comment`; users editing/deleting someone else's comment need `work_item.update`. Watcher self-service add/remove requires `work_item.read`; managing watchers for other users requires `work_item.update`.
 - Activity streams use service-layer permission checks for the requested workspace, project, or work item.
 - Audit log, audit retention, and domain event replay APIs are workspace-admin-only through method-level permission checks.
+- Agent management uses explicit service-layer permission checks. Workspace Admins and the seeded Agent Manager role can manage providers, credentials, profiles, assignments, tasks, and repository connections according to their role grants.
+- Agent callback endpoints are open at the HTTP security layer but require a valid signed callback JWT in `X-Trasck-Agent-Callback-Jwt`. The assertion is scoped to the workspace, provider, provider key, agent profile, and agent task before any state change is accepted.
 
 Work item implementation state:
 
@@ -216,6 +224,21 @@ Work item implementation state:
 - Static activity and audit projection consumers are implemented. Activity projection writes idempotent work-item, project, and workspace streams for important product events. Audit projection writes idempotent workspace audit entries for auth, token, user-management, retention-policy, and replay events, with redaction applied before values reach API responses.
 - Workspace audit retention policy metadata is configurable through admin APIs. The current implementation records the policy decision; physical retention pruning/export jobs are still future work.
 - Admin replay can reset and dispatch selected domain event deliveries for the activity/audit projection consumers without invoking paid or external systems.
+
+AI agent implementation state:
+
+- The first provider-neutral agent service slice is implemented around the existing schema/JPA model.
+- `AgentProviderAdapter` is the adapter contract used by provider-specific implementations. The first implementation is `simulated`, which proves dispatch, retry, cancel, callback, review artifact, and projection behavior without shelling out or calling paid/external AI systems.
+- Provider keys, provider types, dispatch modes, callback statuses, repository providers, and artifact types are normalized before storage or comparison.
+- Agent providers currently accept the `simulated` provider type. Codex, Claude Code, webhook, polling, hosted-service, and allowlisted local-runner adapters remain future provider implementations of the same contract.
+- The first credential endpoint does not return raw secrets and stores a SHA-256 fingerprint for simulated credentials. Decryptable encrypted secret storage or external secret management is still required before real provider dispatch can use API tokens.
+- Agent profile creation creates an agent-backed `users` row and workspace membership, so assignment, permissions, reporting, and activity continue to use the existing user/role model.
+- Agent assignment and callback-authored comments verify the agent user's project permissions, so callbacks do not bypass the role model.
+- Repository connections support `generic_git`, `github`, and `gitlab`; GitHub/GitLab-specific metadata is stored inside provider-neutral `repository_connections.config.providerMetadata`.
+- Assigning a work item to an agent sets the work item assignee to the agent user, writes assignment history, creates a queued `agent_tasks` row, links repository context, records durable domain events, dispatches the adapter, and moves the task to `running`.
+- Agent callbacks support `running`, `waiting_for_input`, `failed`, and `completed`. A completed callback moves the task to `review_requested`, stores callback messages/artifacts, creates an `Agent Review Request` artifact, creates a work item comment authored by the agent user, and does not transition the work item to Done.
+- Human acceptance of the review result marks the agent task `completed`; workflow movement remains a separate human/workflow operation until workflow automation is added.
+- Activity and audit projection consumers include agent provider setup, credential rotation, profile setup, assignment, task review/completion, and agent-created work item comments.
 
 ## Database Conventions
 
@@ -1746,19 +1769,19 @@ POST   /api/v1/workspaces/{workspaceId}/domain-events/replay
 Example agent endpoints:
 
 ```text
-GET    /api/v1/agent-providers
-POST   /api/v1/agent-providers
-PATCH  /api/v1/agent-providers/{id}
-POST   /api/v1/agent-providers/{id}/credentials
-GET    /api/v1/agents
-POST   /api/v1/agents
-PATCH  /api/v1/agents/{id}
+GET    /api/v1/workspaces/{workspaceId}/agent-providers
+POST   /api/v1/workspaces/{workspaceId}/agent-providers
+PATCH  /api/v1/agent-providers/{providerId}
+POST   /api/v1/agent-providers/{providerId}/credentials
+GET    /api/v1/workspaces/{workspaceId}/agents
+POST   /api/v1/workspaces/{workspaceId}/agents
+PATCH  /api/v1/agents/{profileId}
+GET    /api/v1/workspaces/{workspaceId}/repository-connections
+POST   /api/v1/workspaces/{workspaceId}/repository-connections
 GET    /api/v1/agent-tasks/{id}
 POST   /api/v1/agent-tasks/{id}/cancel
 POST   /api/v1/agent-tasks/{id}/retry
-POST   /api/v1/agent-tasks/{id}/events
-POST   /api/v1/agent-tasks/{id}/messages
-POST   /api/v1/agent-tasks/{id}/artifacts
+POST   /api/v1/agent-tasks/{id}/accept-result
 POST   /api/v1/agent-callbacks/{providerKey}
 ```
 
@@ -1908,7 +1931,7 @@ Trasck should support AI-assisted execution without becoming dependent on any on
 Provider model:
 
 - `agent_providers.provider_type` selects an adapter such as `codex`, `claude_code`, `webhook`, `local_runner`, `hosted_service`, or `custom`.
-- The first provider adapter should be a non-external stub/local runner to prove the provider-neutral lifecycle without paid or vendor-specific execution. Codex, Claude Code, webhook workers, hosted services, and future agents should then plug into the same contract.
+- The first provider adapter is the non-external `simulated` adapter. It proves the provider-neutral lifecycle without paid, shell, or vendor-specific execution. Codex, Claude Code, webhook workers, hosted services, polling agents, and hardened local runners should plug into the same contract later.
 - `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff. Manual handoff is the default dispatch mode.
 - Provider-specific options belong in `agent_providers.config`; shared capability declarations belong in `capability_schema`.
 - Provider credentials should be encrypted database values first. Secrets must not be embedded directly in provider configs or agent task payloads.
@@ -1928,6 +1951,7 @@ Execution model:
 - `agent_messages` support clarifying questions and human replies.
 - `agent_artifacts` capture outputs such as branches, pull requests, patches, logs, generated docs, screenshots, or external task URLs.
 - `agent_task_repositories` attaches one or more repositories, base branches, working branches, and pull request URLs to the task.
+- Signed callback assertions are issued when Trasck dispatches or retries an agent task. Callbacks must present `X-Trasck-Agent-Callback-Jwt`; the token is verified and then checked against the provider key, provider ID, workspace ID, agent profile ID, and task ID before state changes are accepted.
 
 Provider contract:
 
@@ -2076,12 +2100,12 @@ Recommended order:
 9. Implement custom fields, screens, screen assignments, and field configurations.
 10. Implement reporting history and snapshots.
 11. Implement notifications, automation, webhooks, and integrations.
-12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events.
+12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events. The first simulated provider-neutral service/API slice is implemented; provider-specific adapters, hardened local execution, external webhook delivery, richer retry/request-changes flows, and provider-key management remain.
 13. Implement saved filters, dashboards, views, favorites, and recent items.
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, and authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, attachment metadata, local attachment upload/download/delete cleanup, and domain events.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated AI agent lifecycle with provider/profile/repository setup, signed callbacks, review artifacts/comments, callback idempotency, acceptance, activity projection, and audit projection.
 
 Required backend tests:
 
@@ -2093,8 +2117,8 @@ Required backend tests:
 - Migration tests when schema grows.
 - Import job tests for idempotency and partial failure handling.
 - Reporting calculation tests for cycle time, velocity, and cumulative flow.
-- Codex provider adapter contract tests with controlled stubs.
-- Agent task lifecycle tests for dispatch, callback, progress, completion, failure, cancellation, retry, and artifact creation.
+- Provider-specific adapter contract tests with controlled stubs.
+- Agent task lifecycle tests for cancellation, retry edge cases, failure, waiting-for-input, request-changes, and provider-specific artifact handling.
 - Agent permission tests proving agents cannot exceed their workspace/project roles.
 
 High-risk cases to test early:
