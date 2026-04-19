@@ -13,7 +13,7 @@ public interface DashboardRepository extends JpaRepository<Dashboard, UUID> {
             where dashboard.workspaceId = :workspaceId
               and (
                   dashboard.ownerId = :userId
-                  or dashboard.visibility in ('workspace', 'public')
+                  or dashboard.visibility in ('project', 'workspace', 'public')
                   or dashboard.visibility = 'team'
               )
             order by dashboard.name asc

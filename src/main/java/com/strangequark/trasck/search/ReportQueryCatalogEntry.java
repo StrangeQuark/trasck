@@ -17,8 +17,8 @@ import org.hibernate.type.SqlTypes;
 @Entity
 @DynamicInsert
 @DynamicUpdate
-@Table(name = "dashboards")
-public class Dashboard {
+@Table(name = "report_query_catalog")
+public class ReportQueryCatalogEntry {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -37,15 +37,31 @@ public class Dashboard {
     @Column(name = "team_id")
     private UUID teamId;
 
+    @Column(name = "query_key")
+    private String queryKey;
+
     @Column(name = "name")
     private String name;
+
+    @Column(name = "description")
+    private String description;
+
+    @Column(name = "query_type")
+    private String queryType;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "query_config")
+    private JsonNode queryConfig;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "parameters_schema")
+    private JsonNode parametersSchema;
 
     @Column(name = "visibility")
     private String visibility;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "layout")
-    private JsonNode layout;
+    @Column(name = "enabled")
+    private Boolean enabled;
 
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
@@ -93,12 +109,52 @@ public class Dashboard {
         this.teamId = teamId;
     }
 
+    public String getQueryKey() {
+        return queryKey;
+    }
+
+    public void setQueryKey(String queryKey) {
+        this.queryKey = queryKey;
+    }
+
     public String getName() {
         return name;
     }
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public String getQueryType() {
+        return queryType;
+    }
+
+    public void setQueryType(String queryType) {
+        this.queryType = queryType;
+    }
+
+    public JsonNode getQueryConfig() {
+        return queryConfig;
+    }
+
+    public void setQueryConfig(JsonNode queryConfig) {
+        this.queryConfig = queryConfig;
+    }
+
+    public JsonNode getParametersSchema() {
+        return parametersSchema;
+    }
+
+    public void setParametersSchema(JsonNode parametersSchema) {
+        this.parametersSchema = parametersSchema;
     }
 
     public String getVisibility() {
@@ -109,12 +165,12 @@ public class Dashboard {
         this.visibility = visibility;
     }
 
-    public JsonNode getLayout() {
-        return layout;
+    public Boolean getEnabled() {
+        return enabled;
     }
 
-    public void setLayout(JsonNode layout) {
-        this.layout = layout;
+    public void setEnabled(Boolean enabled) {
+        this.enabled = enabled;
     }
 
     public OffsetDateTime getCreatedAt() {

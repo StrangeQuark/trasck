@@ -50,13 +50,17 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 38. Team/iteration reporting resolves explicit `work_items.team_id` first and falls back to team membership overlap snapshots when a work item has no explicit team assignment. Explicit team assignment changes use dedicated command/history/event shapes.
 39. Agent callback key rotation immediately invalidates callback JWTs signed by older provider keys. Generic worker authentication uses one active, unexpired `worker_token` credential per worker identity, with `metadata.workerId` required.
 40. Generic-worker webhook dispatch is durable outbox work through configured domain-event consumers, not a synchronous call inside work item or agent command handling.
-41. Saved dashboards support private, workspace-shared, and team-shared visibility. Shared dashboard writes require `report.manage`; dashboard reads and reporting endpoints require `report.read`.
-42. Dashboard widgets use flexible reporting-API-backed query config. Widgets must not expose raw SQL or direct table access.
+41. Saved dashboards support private, project-shared, workspace-shared, and team-shared visibility. Shared dashboard writes require `report.manage`; dashboard reads and reporting endpoints require `report.read` at the matching project or workspace scope.
+42. Dashboard widgets use flexible reporting-API-backed query config. Widgets may reference governed report query catalog entries and saved filters, but must not expose raw SQL or direct table access.
 43. Cross-project dashboard summaries expose project, team, and work item type dimensions together in the first response shape.
 44. Generic-worker webhook consumers use provider-level max-attempt/dead-letter settings before non-test external webhook workers are enabled.
 45. The first team/planning API slice is admin-managed: workspace admins manage teams and memberships, project admins assign teams to projects, and board admins manage project-scoped iterations.
 46. Team membership changes are immediate active/left changes in the first API pass, and project-team assignments update the existing single `project_teams.role` value in place.
 47. Iteration commitment can be calculated from the current iteration scope, and closing an iteration can carry incomplete work into another compatible project/team iteration.
+48. Saved filters use the same private, team, project, workspace, and public visibility model as dashboards. Project-specific list UX should be represented by `project` visibility or optional project scope inside the filter query, not by ad hoc endpoints.
+49. Persisted reporting snapshots should expose both raw snapshot records and report-shaped time-series DTOs so dashboards and future exports can choose the right level of detail.
+50. Iteration reports support live canonical state, persisted snapshot/velocity state, or both in one response.
+51. Audit retention has admin export/prune APIs and scheduled pruning. External archival artifacts can be added later if retention policy requires immutable exports before deletion.
 
 ## Full Work Hierarchy
 
@@ -195,7 +199,7 @@ Implemented endpoints:
 - `GET /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments/files`, `GET /api/v1/work-items/{workItemId}/attachments/{attachmentId}/download`, and `DELETE /api/v1/work-items/{workItemId}/attachments/{attachmentId}` manage attachment metadata and file bytes for work items.
 - `GET /api/v1/work-items/{workItemId}/activity`, `GET /api/v1/workspaces/{workspaceId}/projects/{projectId}/activity`, and `GET /api/v1/workspaces/{workspaceId}/activity` expose durable activity projections for work-item, project, and workspace streams.
 - `GET /api/v1/workspaces/{workspaceId}/audit-log` exposes admin-only audit log entries for a workspace.
-- `GET /api/v1/workspaces/{workspaceId}/audit-retention-policy` and `PUT /api/v1/workspaces/{workspaceId}/audit-retention-policy` manage configurable workspace audit retention policy metadata.
+- `GET /api/v1/workspaces/{workspaceId}/audit-retention-policy`, `PUT /api/v1/workspaces/{workspaceId}/audit-retention-policy`, `POST /api/v1/workspaces/{workspaceId}/audit-retention-policy/export`, and `POST /api/v1/workspaces/{workspaceId}/audit-retention-policy/prune` manage configurable workspace audit retention policy metadata, export retention candidates, and prune eligible audit rows.
 - `POST /api/v1/workspaces/{workspaceId}/domain-events/replay` lets workspace admins replay selected domain events through selected durable consumers, defaulting to the activity and audit projection consumers.
 - `GET /api/v1/workspaces/{workspaceId}/agent-providers`, `POST /api/v1/workspaces/{workspaceId}/agent-providers`, `PATCH /api/v1/agent-providers/{providerId}`, `POST /api/v1/agent-providers/{providerId}/credentials`, `GET /api/v1/agent-providers/{providerId}/credentials`, `POST /api/v1/agent-providers/{providerId}/credentials/{credentialId}/deactivate`, `POST /api/v1/agent-providers/{providerId}/credentials/reencrypt`, and `POST /api/v1/agent-providers/{providerId}/callback-keys/rotate` manage provider-neutral agent providers, encrypted credentials, and callback signing keys.
 - `GET /api/v1/workspaces/{workspaceId}/agents`, `POST /api/v1/workspaces/{workspaceId}/agents`, and `PATCH /api/v1/agents/{profileId}` manage assignable agent profiles backed by `users.account_type = agent`.
@@ -208,9 +212,13 @@ Implemented endpoints:
 - `GET /api/v1/reports/projects/{projectId}/dashboard-summary` exposes an on-demand project dashboard aggregate. Optional `from`, `to`, `teamId`, and `iterationId` filters support project, team, and iteration report scopes through the same query model.
 - `GET /api/v1/reports/workspaces/{workspaceId}/dashboard-summary` exposes a workspace or project-set dashboard aggregate. Optional `projectIds`, `from`, and `to` filters support cross-project comparisons.
 - `GET /api/v1/reports/programs/{programId}/dashboard-summary` exposes a program dashboard aggregate for projects assigned to a program.
-- `POST /api/v1/reports/workspaces/{workspaceId}/snapshots/run` manually runs reporting snapshots for cycle time, iteration scope, velocity, and cumulative flow for a workspace.
-- `GET /api/v1/workspaces/{workspaceId}/dashboards`, `POST /api/v1/workspaces/{workspaceId}/dashboards`, `GET /api/v1/dashboards/{dashboardId}`, `PATCH /api/v1/dashboards/{dashboardId}`, `DELETE /api/v1/dashboards/{dashboardId}`, and `GET /api/v1/dashboards/{dashboardId}/render` manage and render saved dashboards.
+- `POST /api/v1/reports/workspaces/{workspaceId}/snapshots/run`, `POST /api/v1/reports/workspaces/{workspaceId}/snapshots/backfill`, and `POST /api/v1/reports/workspaces/{workspaceId}/snapshots/reconcile` manually run, backfill, and reconcile reporting snapshots for cycle time, iteration scope, velocity, and cumulative flow for a workspace.
+- `GET /api/v1/reports/projects/{projectId}/snapshots` returns raw persisted cycle-time, iteration, velocity, and cumulative-flow snapshot records plus report-shaped time-series points.
+- `GET /api/v1/reports/iterations/{iterationId}/report` returns live iteration metrics, persisted snapshot/velocity metrics, or both.
+- `GET /api/v1/workspaces/{workspaceId}/dashboards`, `POST /api/v1/workspaces/{workspaceId}/dashboards`, `GET /api/v1/dashboards/{dashboardId}`, `PATCH /api/v1/dashboards/{dashboardId}`, `DELETE /api/v1/dashboards/{dashboardId}`, and `GET /api/v1/dashboards/{dashboardId}/render` manage and render saved dashboards with private, team, project, workspace, and public visibility.
 - `POST /api/v1/dashboards/{dashboardId}/widgets`, `PATCH /api/v1/dashboards/{dashboardId}/widgets/{widgetId}`, and `DELETE /api/v1/dashboards/{dashboardId}/widgets/{widgetId}` manage saved dashboard widgets.
+- `GET /api/v1/workspaces/{workspaceId}/saved-filters`, `POST /api/v1/workspaces/{workspaceId}/saved-filters`, `GET /api/v1/saved-filters/{savedFilterId}`, `PATCH /api/v1/saved-filters/{savedFilterId}`, and `DELETE /api/v1/saved-filters/{savedFilterId}` manage saved filters with dashboard-style visibility and optional project/team query scoping.
+- `GET /api/v1/workspaces/{workspaceId}/report-query-catalog`, `POST /api/v1/workspaces/{workspaceId}/report-query-catalog`, `GET /api/v1/report-query-catalog/{queryId}`, `PATCH /api/v1/report-query-catalog/{queryId}`, and `DELETE /api/v1/report-query-catalog/{queryId}` manage governed reusable reporting queries for dashboard widgets.
 
 Implemented seed data:
 
@@ -234,7 +242,7 @@ Security state:
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
 - Comment edits/deletes are author-or-admin shaped: authors need `work_item.comment`; users editing/deleting someone else's comment need `work_item.update`. Watcher self-service add/remove requires `work_item.read`; managing watchers for other users requires `work_item.update`. Work-log self-service uses dedicated `work_log.create_own`, `work_log.update_own`, and `work_log.delete_own` permissions for a user's own time entries; logging or mutating time for another user requires `work_item.update`.
 - Team reads require `workspace.read`, team and membership mutations require `workspace.admin`, project-team reads require `project.read`, project-team mutations require `project.admin`, iteration reads require `project.read`, and iteration scope/commit/close mutations require `board.admin`.
-- Reporting/history read APIs require `report.read` on the work item's project. Workspace/program dashboard summary reads, saved dashboard reads/renders, and manual workspace snapshot execution require `report.read` on the workspace. Creating shared workspace/team dashboards requires `report.manage`; private dashboard owners can manage their own dashboards with `report.read`.
+- Reporting/history read APIs require `report.read` on the work item's project. Workspace/program dashboard summary reads and manual workspace snapshot execution require `report.read` on the workspace. Project dashboard reads use project `report.read`; workspace/team/shared dashboard reads use workspace `report.read` plus the dashboard visibility rules. Creating shared workspace/team dashboards requires workspace `report.manage`; creating project dashboards requires project `report.manage`; private dashboard owners can manage their own dashboards with `report.read`.
 - Activity streams use service-layer permission checks for the requested workspace, project, or work item.
 - Audit log, audit retention, and domain event replay APIs are workspace-admin-only through method-level permission checks.
 - Agent management uses explicit service-layer permission checks. Workspace Admins and the seeded Agent Manager role can manage providers, credentials, profiles, assignments, tasks, and repository connections according to their role grants.
@@ -252,11 +260,11 @@ Work item implementation state:
 - Work item collaboration APIs cover comments, links, watchers, work logs, labels, attachment metadata, and attachment byte upload/download/delete. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, storage configuration, checksums, and common bad inputs before database constraints are hit.
 - Work log APIs write `work_logs` rows with positive minutes, work dates, optional start timestamps, Markdown/body-document descriptions, soft delete, dedicated own-entry permissions, and durable `work_item.work_logged`, `work_item.work_log_updated`, and `work_item.work_log_deleted` events.
 - Work item create/update writes reporting history for status, assignment, explicit team assignment, and estimate changes. Estimate history records `points`, `minutes`, and `remaining_minutes` changes in `work_item_estimate_history`.
-- Reporting read APIs expose status history, assignment history, team history, estimate history, non-deleted work-log totals, on-demand project dashboard summaries, and workspace/program cross-project dashboard summaries. Project summaries return work counts, throughput, estimate/time totals, aging WIP, cycle-time inputs, status/type/priority groupings, and widget-shaped payloads for project, team, and iteration scopes. Workspace/program summaries expose project, team, and work item type dimensions together and order project comparisons by earliest `workspace_sequence_number`. Snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`.
+- Reporting read APIs expose status history, assignment history, team history, estimate history, non-deleted work-log totals, on-demand project dashboard summaries, workspace/program cross-project dashboard summaries, raw persisted snapshot records, report-shaped snapshot series, and live/snapshot iteration reports. Project summaries return work counts, throughput, estimate/time totals, aging WIP, cycle-time inputs, status/type/priority groupings, and widget-shaped payloads for project, team, and iteration scopes. Workspace/program summaries expose project, team, and work item type dimensions together and order project comparisons by earliest `workspace_sequence_number`. Snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`; manual run, backfill, and reconcile controls are implemented.
 - Attachment byte storage is behind a provider-neutral storage interface. The first providers are local filesystem storage for development and S3-compatible object storage selected by workspace attachment storage configuration. Local filesystem roots default from `trasck.attachments.local-root`; uploaded files receive generated storage keys and SHA-256 checksums.
 - Work item and collaboration changes persist rows in `domain_events`, publish in-process Spring events after commit, and remain pending in the durable outbox until static or database-configured consumers complete delivery through `domain_event_deliveries`.
 - Static activity and audit projection consumers are implemented. Activity projection writes idempotent work-item, project, team, iteration, and workspace streams for important product events. Audit projection writes idempotent workspace audit entries for auth, token, user-management, team/planning, retention-policy, and replay events, with redaction applied before values reach API responses.
-- Workspace audit retention policy metadata is configurable through admin APIs. The current implementation records the policy decision; physical retention pruning/export jobs are still future work.
+- Workspace audit retention policy metadata is configurable through admin APIs. Retention candidates can be exported through an admin API response, eligible rows can be pruned manually, and scheduled pruning runs through `trasck.audit.retention.cron`. External archive-file creation remains a future option if compliance requirements need immutable exports before pruning.
 - Admin replay can reset and dispatch selected domain event deliveries for the activity/audit projection consumers without invoking paid or external systems.
 
 AI agent implementation state:
@@ -956,6 +964,7 @@ erDiagram
     WORKSPACES ||--o{ SAVED_FILTERS : defines
     WORKSPACES ||--o{ DASHBOARDS : defines
     DASHBOARDS ||--o{ DASHBOARD_WIDGETS : contains
+    WORKSPACES ||--o{ REPORT_QUERY_CATALOG : governs
     WORKSPACES ||--o{ VIEWS : defines
     USERS ||--o{ FAVORITES : owns
     USERS ||--o{ RECENT_ITEMS : owns
@@ -1140,15 +1149,20 @@ erDiagram
         uuid id PK
         uuid workspace_id FK
         uuid owner_id FK
+        uuid project_id FK
+        uuid team_id FK
         string name
         jsonb query
         string visibility
+        timestamptz created_at
+        timestamptz updated_at
     }
 
     DASHBOARDS {
         uuid id PK
         uuid workspace_id FK
         uuid owner_id FK
+        uuid project_id FK
         uuid team_id FK
         string name
         string visibility
@@ -1167,6 +1181,23 @@ erDiagram
         integer position_y
         integer width
         integer height
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    REPORT_QUERY_CATALOG {
+        uuid id PK
+        uuid workspace_id FK
+        uuid owner_id FK
+        uuid project_id FK
+        uuid team_id FK
+        string query_key
+        string name
+        string query_type
+        jsonb query_config
+        jsonb parameters_schema
+        string visibility
+        boolean enabled
         timestamptz created_at
         timestamptz updated_at
     }
@@ -1487,9 +1518,10 @@ erDiagram
 | `import_jobs` | Jira/Rally/CSV import jobs. |
 | `import_job_records` | Per-record import results. |
 | `export_jobs` | Data export jobs. |
-| `saved_filters` | Saved work item queries. |
-| `dashboards` | Private, workspace-shared, and team-shared dashboards. |
+| `saved_filters` | Saved work item/report queries with private/team/project/workspace/public visibility. |
+| `dashboards` | Private, team-shared, project-shared, workspace-shared, and public dashboards. |
 | `dashboard_widgets` | Flexible reporting-API-backed widgets on dashboards. |
+| `report_query_catalog` | Governed reusable reporting query definitions for dashboards and power users. |
 | `views` | Saved table, board, timeline, list, and roadmap views. |
 | `favorites` | Starred entities. |
 | `recent_items` | Recently viewed entities. |
@@ -1620,8 +1652,10 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `external_references` | `id`, `integration_id`, `entity_type`, `entity_id`, `provider`, `external_id`, `external_url`, `metadata` |
 | `import_job_records` | `id`, `import_job_id`, `source_type`, `source_id`, `target_type`, `target_id`, `status`, `error_message`, `raw_payload` |
 | `export_jobs` | `id`, `workspace_id`, `requested_by_id`, `export_type`, `status`, `file_attachment_id`, `started_at`, `finished_at` |
-| `dashboards` | `id`, `workspace_id`, `owner_id`, `team_id`, `name`, `visibility`, `layout`, `created_at`, `updated_at` |
+| `saved_filters` | `id`, `workspace_id`, `owner_id`, `project_id`, `team_id`, `name`, `query`, `visibility`, `created_at`, `updated_at` |
+| `dashboards` | `id`, `workspace_id`, `owner_id`, `project_id`, `team_id`, `name`, `visibility`, `layout`, `created_at`, `updated_at` |
 | `dashboard_widgets` | `id`, `dashboard_id`, `widget_type`, `title`, `config`, `position_x`, `position_y`, `width`, `height`, `created_at`, `updated_at` |
+| `report_query_catalog` | `id`, `workspace_id`, `owner_id`, `project_id`, `team_id`, `query_key`, `name`, `description`, `query_type`, `query_config`, `parameters_schema`, `visibility`, `enabled`, `created_at`, `updated_at` |
 | `favorites` | `id`, `user_id`, `entity_type`, `entity_id`, `created_at` |
 | `recent_items` | `id`, `user_id`, `entity_type`, `entity_id`, `viewed_at` |
 
@@ -1871,6 +1905,8 @@ GET    /api/v1/workspaces/{workspaceId}/activity
 GET    /api/v1/workspaces/{workspaceId}/audit-log
 GET    /api/v1/workspaces/{workspaceId}/audit-retention-policy
 PUT    /api/v1/workspaces/{workspaceId}/audit-retention-policy
+POST   /api/v1/workspaces/{workspaceId}/audit-retention-policy/export
+POST   /api/v1/workspaces/{workspaceId}/audit-retention-policy/prune
 POST   /api/v1/workspaces/{workspaceId}/domain-events/replay
 ```
 
@@ -1940,6 +1976,7 @@ Implemented projection consumers:
 - `audit-projection` creates workspace audit rows for auth, token, user-management, retention-policy, and replay events.
 - Shared redaction removes secrets, raw tokens, password-like fields, credential fields, assertions, authorization headers, cookies, and hashes before activity/audit values are exposed.
 - Workspace admins can replay selected events for selected consumers through the domain event replay API.
+- Workspace admins can export retention candidates and prune eligible audit rows through retention-policy APIs; scheduled pruning runs through `trasck.audit.retention.cron`.
 
 Examples:
 
@@ -1974,10 +2011,12 @@ Implementation notes:
 - Store status history, assignment history, explicit team history, and estimate history as facts.
 - Dashboard summaries are calculated on demand from canonical work item state, status history, iteration membership, team membership, team assignment, snapshots, and non-deleted work logs.
 - The project dashboard endpoint supports project, team, and iteration scopes. Workspace/project-set and program dashboard endpoints support cross-project comparison and expose project, team, and work item type dimensions together.
-- Saved dashboards support private, workspace-shared, and team-shared visibility. Saved widgets use flexible reporting-API-backed query config and render through reporting services instead of raw domain tables.
+- Saved dashboards support private, team-shared, project-shared, workspace-shared, and public visibility. Saved filters use the same visibility model and can be referenced from dashboard widget config.
+- Governed report query catalog entries let power users define reusable reporting query config without raw SQL. Widgets can reference catalog entries through `reportQueryId`, saved filters through `savedFilterId`, or direct reporting query config.
 - Team/iteration reporting uses explicit `work_items.team_id` first, then falls back to assignee team-membership overlap for work without an explicit team. Explicit team assignment changes are recorded in `work_item_team_history`.
 - Snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`; cycle-time dashboard output uses `cycle_time_records` when available and falls back to live history-derived lead-time inputs otherwise.
-- Store snapshots for expensive time-series reports, with manual execution available through workspace reporting APIs and scheduled execution available through `trasck.reporting.snapshots.cron`.
+- Store snapshots for expensive time-series reports, with manual run/backfill/reconcile controls available through workspace reporting APIs and scheduled execution available through `trasck.reporting.snapshots.cron`.
+- Persisted snapshot reads expose raw cycle-time, iteration, velocity, and cumulative-flow rows plus report-shaped time-series points. Iteration reports can return live metrics, persisted snapshot metrics, or both.
 - Recalculate rollups asynchronously where possible.
 - Keep reporting data reconstructable from history when feasible.
 
@@ -2227,14 +2266,14 @@ Recommended order:
 7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/work-log/label/attachment storage slice, activity projections, audit projections, retention policy metadata, and replay wiring are implemented.
 8. Implement boards, columns, iterations, releases, and roadmaps. Project-scoped iteration CRUD, scope add/remove, commit, close, and carryover APIs are implemented; board, release, and roadmap APIs remain.
 9. Implement custom fields, screens, screen assignments, and field configurations.
-10. Implement reporting history and snapshots. Initial status, assignment, team, and estimate history writes, work-item history/work-log summary read APIs, on-demand project/team/iteration dashboard aggregate APIs, workspace/program/project-set dashboard summaries, saved dashboard/widget CRUD/render APIs, and snapshot jobs for cycle time, iteration scope, velocity, and cumulative flow are implemented.
+10. Implement reporting history and snapshots. Initial status, assignment, team, and estimate history writes, work-item history/work-log summary read APIs, on-demand project/team/iteration dashboard aggregate APIs, workspace/program/project-set dashboard summaries, saved dashboard/widget CRUD/render APIs, raw/report-shaped persisted snapshot read APIs, live/snapshot iteration reports, and snapshot jobs with manual run/backfill/reconcile controls for cycle time, iteration scope, velocity, and cumulative flow are implemented.
 11. Implement notifications, automation, webhooks, and integrations.
 12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events. The simulated/Codex/Claude Code/generic-worker non-external service/API slice is implemented with project-scoped profiles, encrypted provider secrets, encrypted per-provider callback signing keys, per-worker token polling/webhook protocol endpoints, durable outbound worker webhook delivery through configured domain-event consumers, provider-level max-attempt/dead-letter settings, optional worker-token expiry, request-changes/human-message flows, credential re-encryption, credential deactivation, immediate callback key invalidation on rotation, and first adapter contract tests; real provider dispatch and hardened local execution remain.
-13. Implement saved filters, dashboards, views, favorites, and recent items. Saved dashboards and dashboard widgets are implemented; saved filters, views, favorites, and recent item APIs remain.
+13. Implement saved filters, dashboards, views, favorites, and recent items. Saved dashboard/widget CRUD/render APIs, project-scoped dashboards, saved filter CRUD, and the governed report query catalog are implemented; views, favorites, and recent item APIs remain.
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, dedicated-permission self-service work logs, team CRUD/membership/project-team APIs, iteration CRUD/scope/commit/close/carryover APIs, work-item reporting/history read APIs, project/team/iteration dashboard summary APIs, workspace/program/project-set dashboard summaries, saved dashboard/widget CRUD and render APIs, reporting snapshot execution, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, authenticated work item API flows with hierarchy validation, explicit team assignment command/history/events, ranking, transitions, assignment/team/estimate history, closure rows, rich JSON documents, comments, links, watchers, work logs, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated/Codex/Claude Code/generic-worker AI agent lifecycle with provider/profile/repository setup, project-scoped profiles, encrypted per-provider signed callbacks, durable worker webhook dispatch, provider-level webhook dead-letter behavior, generic worker claim/heartbeat/log/message/artifact/cancel/retry flows, per-worker token credentials with expiry coverage, credential maintenance, immediate callback key invalidation on rotation, request-changes/human-message flows, agent permission denial, review artifacts/comments, callback idempotency, acceptance-to-Approval transition, activity projection, and audit projection.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing/revocation/expiry, service token creation/authentication/listing/expiry, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication with retry/dead-letter/disabled/unknown-replay/multi-consumer coverage, permission denial, watcher self-service, dedicated-permission self-service work logs, team CRUD/membership/project-team APIs, iteration CRUD/scope/commit/close/carryover APIs, work-item reporting/history read APIs, project/team/iteration dashboard summary APIs, workspace/program/project-set dashboard summaries, saved dashboard/widget CRUD and render APIs, project-scoped dashboards, saved filter CRUD, governed report query catalog CRUD, raw/report-shaped snapshot read APIs, live/snapshot iteration reports, reporting snapshot execution/backfill/reconcile, S3-compatible attachment storage provider tests, activity stream projection, audit projection with redaction, audit retention policy updates/export/prune, admin event replay idempotency, authenticated work item API flows with hierarchy validation, explicit team assignment command/history/events, ranking, transitions, assignment/team/estimate history, closure rows, rich JSON documents, comments, links, watchers, work logs, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated/Codex/Claude Code/generic-worker AI agent lifecycle with provider/profile/repository setup, project-scoped profiles, encrypted per-provider signed callbacks, durable worker webhook dispatch, provider-level webhook dead-letter behavior, generic worker claim/heartbeat/log/message/artifact/cancel/retry flows, per-worker token credentials with expiry coverage, credential maintenance, immediate callback key invalidation on rotation, request-changes/human-message flows, agent permission denial, review artifacts/comments, callback idempotency, acceptance-to-Approval transition, activity projection, and audit projection.
 
 Required backend tests:
 

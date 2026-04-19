@@ -6,10 +6,12 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -86,6 +88,88 @@ public class AuditService {
         return AuditRetentionPolicyResponse.from(saved);
     }
 
+    @Transactional(readOnly = true)
+    public AuditRetentionExportResponse exportRetentionCandidates(UUID workspaceId, Integer limit) {
+        activeWorkspace(workspaceId);
+        AuditRetentionPolicy policy = retentionPolicy(workspaceId);
+        OffsetDateTime cutoff = retentionCutoff(policy);
+        long eligible = cutoff == null ? 0 : auditLogEntryRepository.countByWorkspaceIdAndCreatedAtBefore(workspaceId, cutoff);
+        List<AuditLogEntryResponse> entries = cutoff == null
+                ? List.of()
+                : auditLogEntryRepository.findByWorkspaceIdAndCreatedAtBeforeOrderByCreatedAtAsc(
+                        workspaceId,
+                        cutoff,
+                        PageRequest.of(0, normalizeExportLimit(limit))
+                ).stream().map(AuditLogEntryResponse::from).toList();
+        return new AuditRetentionExportResponse(
+                workspaceId,
+                Boolean.TRUE.equals(policy.getRetentionEnabled()),
+                policy.getRetentionDays(),
+                cutoff,
+                eligible,
+                entries
+        );
+    }
+
+    @Transactional
+    public AuditRetentionPruneResponse pruneRetentionCandidates(UUID workspaceId) {
+        activeWorkspace(workspaceId);
+        UUID actorId = currentUserService.requireUserId();
+        AuditRetentionPruneResponse response = pruneWorkspace(workspaceId);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("actorUserId", actorId.toString())
+                .put("entriesEligible", response.entriesEligible())
+                .put("entriesPruned", response.entriesPruned());
+        if (response.cutoff() != null) {
+            payload.put("cutoff", response.cutoff().toString());
+        }
+        domainEventService.record(workspaceId, "audit_retention_policy", workspaceId, "audit.retention_pruned", payload);
+        return response;
+    }
+
+    @Scheduled(cron = "${trasck.audit.retention.cron:0 45 3 * * *}", zone = "UTC")
+    @Transactional
+    public void runScheduledRetentionPruning() {
+        for (AuditRetentionPolicy policy : auditRetentionPolicyRepository.findByRetentionEnabledTrue()) {
+            if (policy.getWorkspaceId() != null) {
+                pruneWorkspace(policy.getWorkspaceId());
+            }
+        }
+    }
+
+    private AuditRetentionPruneResponse pruneWorkspace(UUID workspaceId) {
+        AuditRetentionPolicy policy = retentionPolicy(workspaceId);
+        OffsetDateTime cutoff = retentionCutoff(policy);
+        long eligible = cutoff == null ? 0 : auditLogEntryRepository.countByWorkspaceIdAndCreatedAtBefore(workspaceId, cutoff);
+        int pruned = cutoff == null ? 0 : auditLogEntryRepository.deleteRetainedEntries(workspaceId, cutoff);
+        return new AuditRetentionPruneResponse(
+                workspaceId,
+                Boolean.TRUE.equals(policy.getRetentionEnabled()),
+                policy.getRetentionDays(),
+                cutoff,
+                eligible,
+                pruned
+        );
+    }
+
+    private AuditRetentionPolicy retentionPolicy(UUID workspaceId) {
+        return auditRetentionPolicyRepository.findByWorkspaceId(workspaceId)
+                .orElseGet(() -> {
+                    AuditRetentionPolicy policy = new AuditRetentionPolicy();
+                    policy.setWorkspaceId(workspaceId);
+                    policy.setRetentionEnabled(false);
+                    return policy;
+                });
+    }
+
+    private OffsetDateTime retentionCutoff(AuditRetentionPolicy policy) {
+        if (!Boolean.TRUE.equals(policy.getRetentionEnabled()) || policy.getRetentionDays() == null) {
+            return null;
+        }
+        return OffsetDateTime.now().minusDays(policy.getRetentionDays());
+    }
+
     private ObjectNode policySnapshot(AuditRetentionPolicy policy) {
         ObjectNode snapshot = objectMapper.createObjectNode()
                 .put("retentionEnabled", Boolean.TRUE.equals(policy.getRetentionEnabled()));
@@ -115,6 +199,13 @@ public class AuditService {
             return 50;
         }
         return Math.max(1, Math.min(limit, 100));
+    }
+
+    private int normalizeExportLimit(Integer limit) {
+        if (limit == null) {
+            return 500;
+        }
+        return Math.max(1, Math.min(limit, 1000));
     }
 
     private <T> T required(T value, String fieldName) {

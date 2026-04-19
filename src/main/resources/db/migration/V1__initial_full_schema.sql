@@ -1211,26 +1211,43 @@ create table saved_filters (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
     owner_id uuid references users(id) on delete set null,
+    project_id uuid references projects(id) on delete cascade,
+    team_id uuid references teams(id) on delete set null,
     name varchar(160) not null,
     query jsonb not null default '{}'::jsonb,
     visibility varchar(40) not null default 'private',
-    constraint ck_saved_filters_visibility check (visibility in ('private', 'workspace', 'public'))
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_saved_filters_visibility check (visibility in ('private', 'team', 'project', 'workspace', 'public')),
+    constraint ck_saved_filters_team_visibility check (
+        (visibility = 'team' and team_id is not null)
+        or (visibility <> 'team' and team_id is null)
+    ),
+    constraint ck_saved_filters_project_visibility check (
+        (visibility = 'project' and project_id is not null)
+        or (visibility <> 'project' and project_id is null)
+    )
 );
 
 create table dashboards (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
     owner_id uuid references users(id) on delete set null,
+    project_id uuid references projects(id) on delete cascade,
     team_id uuid references teams(id) on delete set null,
     name varchar(160) not null,
     visibility varchar(40) not null default 'private',
     layout jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    constraint ck_dashboards_visibility check (visibility in ('private', 'team', 'workspace', 'public')),
+    constraint ck_dashboards_visibility check (visibility in ('private', 'team', 'project', 'workspace', 'public')),
     constraint ck_dashboards_team_visibility check (
         (visibility = 'team' and team_id is not null)
         or (visibility <> 'team' and team_id is null)
+    ),
+    constraint ck_dashboards_project_visibility check (
+        (visibility = 'project' and project_id is not null)
+        or (visibility <> 'project' and project_id is null)
     )
 );
 
@@ -1246,6 +1263,34 @@ create table dashboard_widgets (
     height integer not null default 1,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
+);
+
+create table report_query_catalog (
+    id uuid primary key default gen_random_uuid(),
+    workspace_id uuid not null references workspaces(id) on delete cascade,
+    owner_id uuid references users(id) on delete set null,
+    project_id uuid references projects(id) on delete cascade,
+    team_id uuid references teams(id) on delete set null,
+    query_key varchar(120) not null,
+    name varchar(160) not null,
+    description text,
+    query_type varchar(80) not null,
+    query_config jsonb not null default '{}'::jsonb,
+    parameters_schema jsonb not null default '{}'::jsonb,
+    visibility varchar(40) not null default 'private',
+    enabled boolean not null default true,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (workspace_id, query_key),
+    constraint ck_report_query_catalog_visibility check (visibility in ('private', 'team', 'project', 'workspace', 'public')),
+    constraint ck_report_query_catalog_team_visibility check (
+        (visibility = 'team' and team_id is not null)
+        or (visibility <> 'team' and team_id is null)
+    ),
+    constraint ck_report_query_catalog_project_visibility check (
+        (visibility = 'project' and project_id is not null)
+        or (visibility <> 'project' and project_id is null)
+    )
 );
 
 create table views (
@@ -1429,8 +1474,10 @@ create trigger trg_repository_connections_updated_at before update on repository
 create trigger trg_domain_event_deliveries_updated_at before update on domain_event_deliveries for each row execute function set_updated_at();
 create trigger trg_event_consumer_configs_updated_at before update on event_consumer_configs for each row execute function set_updated_at();
 create trigger trg_audit_retention_policies_updated_at before update on audit_retention_policies for each row execute function set_updated_at();
+create trigger trg_saved_filters_updated_at before update on saved_filters for each row execute function set_updated_at();
 create trigger trg_dashboards_updated_at before update on dashboards for each row execute function set_updated_at();
 create trigger trg_dashboard_widgets_updated_at before update on dashboard_widgets for each row execute function set_updated_at();
+create trigger trg_report_query_catalog_updated_at before update on report_query_catalog for each row execute function set_updated_at();
 
 create index ix_users_account_type on users(account_type);
 create index ix_workspaces_organization_key on workspaces(organization_id, key);
@@ -1513,8 +1560,15 @@ create index ix_repository_connections_workspace_project on repository_connectio
 create index ix_external_references_entity on external_references(entity_type, entity_id);
 create index ix_import_job_records_job_status on import_job_records(import_job_id, status);
 create index ix_saved_filters_workspace_owner on saved_filters(workspace_id, owner_id);
+create index ix_saved_filters_workspace_visibility on saved_filters(workspace_id, visibility);
+create index ix_saved_filters_project on saved_filters(project_id);
+create index ix_saved_filters_team on saved_filters(team_id);
 create index ix_dashboards_workspace_owner on dashboards(workspace_id, owner_id);
+create index ix_dashboards_workspace_project on dashboards(workspace_id, project_id);
 create index ix_dashboards_workspace_team on dashboards(workspace_id, team_id);
 create index ix_dashboard_widgets_dashboard_position on dashboard_widgets(dashboard_id, position_y, position_x);
+create index ix_report_query_catalog_workspace_visibility on report_query_catalog(workspace_id, visibility);
+create index ix_report_query_catalog_project on report_query_catalog(project_id);
+create index ix_report_query_catalog_team on report_query_catalog(team_id);
 create index ix_views_workspace_owner on views(workspace_id, owner_id);
 create index ix_recent_items_user_viewed_at on recent_items(user_id, viewed_at desc);

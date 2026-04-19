@@ -1,7 +1,11 @@
 package com.strangequark.trasck.reporting;
 
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface VelocitySnapshotRepository extends JpaRepository<VelocitySnapshot, UUID> {
+    List<VelocitySnapshot> findByIterationId(UUID iterationId);
+
+    List<VelocitySnapshot> findByIterationIdInOrderByIterationIdAsc(List<UUID> iterationIds);
 }
