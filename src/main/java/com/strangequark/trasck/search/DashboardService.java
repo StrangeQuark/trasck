@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.project.Project;
+import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.reporting.PortfolioReportSummaryResponse;
 import com.strangequark.trasck.reporting.ProjectReportSummaryResponse;
 import com.strangequark.trasck.reporting.ReportingService;
@@ -16,6 +18,7 @@ import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,11 +35,13 @@ public class DashboardService {
     private final DashboardRepository dashboardRepository;
     private final DashboardWidgetRepository dashboardWidgetRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final ProjectRepository projectRepository;
     private final TeamRepository teamRepository;
     private final TeamMembershipRepository teamMembershipRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final ReportingService reportingService;
+    private final ReportQueryCatalogService reportQueryCatalogService;
     private final DomainEventService domainEventService;
 
     public DashboardService(
@@ -44,22 +49,26 @@ public class DashboardService {
             DashboardRepository dashboardRepository,
             DashboardWidgetRepository dashboardWidgetRepository,
             WorkspaceRepository workspaceRepository,
+            ProjectRepository projectRepository,
             TeamRepository teamRepository,
             TeamMembershipRepository teamMembershipRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             ReportingService reportingService,
+            ReportQueryCatalogService reportQueryCatalogService,
             DomainEventService domainEventService
     ) {
         this.objectMapper = objectMapper;
         this.dashboardRepository = dashboardRepository;
         this.dashboardWidgetRepository = dashboardWidgetRepository;
         this.workspaceRepository = workspaceRepository;
+        this.projectRepository = projectRepository;
         this.teamRepository = teamRepository;
         this.teamMembershipRepository = teamMembershipRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.reportingService = reportingService;
+        this.reportQueryCatalogService = reportQueryCatalogService;
         this.domainEventService = domainEventService;
     }
 
@@ -79,7 +88,7 @@ public class DashboardService {
     public DashboardResponse get(UUID dashboardId) {
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireReadable(actorId, dashboard);
         return response(dashboard);
     }
@@ -91,12 +100,14 @@ public class DashboardService {
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
         String visibility = normalizeVisibility(createRequest.visibility());
-        requireSharedPermission(actorId, workspaceId, visibility);
+        UUID projectId = normalizeProjectId(workspaceId, visibility, createRequest.projectId());
         UUID teamId = normalizeTeamId(workspaceId, visibility, createRequest.teamId());
+        requireSharedPermission(actorId, workspaceId, visibility, projectId);
 
         Dashboard dashboard = new Dashboard();
         dashboard.setWorkspaceId(workspaceId);
         dashboard.setOwnerId(actorId);
+        dashboard.setProjectId(projectId);
         dashboard.setTeamId(teamId);
         dashboard.setName(requiredText(createRequest.name(), "name"));
         dashboard.setVisibility(visibility);
@@ -111,20 +122,32 @@ public class DashboardService {
         DashboardRequest updateRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireWritable(actorId, dashboard);
         String targetVisibility = hasText(updateRequest.visibility())
                 ? normalizeVisibility(updateRequest.visibility())
                 : dashboard.getVisibility();
-        requireSharedPermission(actorId, dashboard.getWorkspaceId(), targetVisibility);
+        UUID requestedProjectId = updateRequest.projectId();
+        if (requestedProjectId == null && "project".equals(targetVisibility) && "project".equals(dashboard.getVisibility())) {
+            requestedProjectId = dashboard.getProjectId();
+        }
+        UUID requestedTeamId = updateRequest.teamId();
+        if (requestedTeamId == null && "team".equals(targetVisibility) && "team".equals(dashboard.getVisibility())) {
+            requestedTeamId = dashboard.getTeamId();
+        }
+        UUID targetProjectId = hasText(updateRequest.visibility()) || updateRequest.projectId() != null
+                ? normalizeProjectId(dashboard.getWorkspaceId(), targetVisibility, requestedProjectId)
+                : dashboard.getProjectId();
         UUID targetTeamId = hasText(updateRequest.visibility()) || updateRequest.teamId() != null
-                ? normalizeTeamId(dashboard.getWorkspaceId(), targetVisibility, updateRequest.teamId())
+                ? normalizeTeamId(dashboard.getWorkspaceId(), targetVisibility, requestedTeamId)
                 : dashboard.getTeamId();
+        requireSharedPermission(actorId, dashboard.getWorkspaceId(), targetVisibility, targetProjectId);
 
         if (hasText(updateRequest.name())) {
             dashboard.setName(updateRequest.name().trim());
         }
         dashboard.setVisibility(targetVisibility);
+        dashboard.setProjectId(targetProjectId);
         dashboard.setTeamId(targetTeamId);
         if (updateRequest.layout() != null) {
             dashboard.setLayout(toJson(updateRequest.layout()));
@@ -138,7 +161,7 @@ public class DashboardService {
     public void delete(UUID dashboardId) {
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireWritable(actorId, dashboard);
         dashboardRepository.delete(dashboard);
         recordDashboardEvent(dashboard, "dashboard.deleted", actorId);
@@ -149,7 +172,7 @@ public class DashboardService {
         DashboardWidgetRequest createRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireWritable(actorId, dashboard);
         DashboardWidget widget = new DashboardWidget();
         widget.setDashboardId(dashboard.getId());
@@ -164,7 +187,7 @@ public class DashboardService {
         DashboardWidgetRequest updateRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireWritable(actorId, dashboard);
         DashboardWidget widget = dashboardWidgetRepository.findById(widgetId)
                 .filter(existing -> dashboard.getId().equals(existing.getDashboardId()))
@@ -179,7 +202,7 @@ public class DashboardService {
     public void deleteWidget(UUID dashboardId, UUID widgetId) {
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireWritable(actorId, dashboard);
         DashboardWidget widget = dashboardWidgetRepository.findById(widgetId)
                 .filter(existing -> dashboard.getId().equals(existing.getDashboardId()))
@@ -192,7 +215,7 @@ public class DashboardService {
     public DashboardRenderResponse render(UUID dashboardId, String from, String to) {
         UUID actorId = currentUserService.requireUserId();
         Dashboard dashboard = dashboard(dashboardId);
-        permissionService.requireWorkspacePermission(actorId, dashboard.getWorkspaceId(), "report.read");
+        activeWorkspace(dashboard.getWorkspaceId());
         requireReadable(actorId, dashboard);
         List<DashboardWidget> widgets = widgets(dashboard.getId());
         List<DashboardWidgetRenderResponse> rendered = new ArrayList<>();
@@ -210,7 +233,8 @@ public class DashboardService {
     }
 
     private RenderedWidgetData renderWidgetData(Dashboard dashboard, DashboardWidget widget, String from, String to) {
-        JsonNode config = widget.getConfig() == null || widget.getConfig().isNull() ? objectMapper.createObjectNode() : widget.getConfig();
+        JsonNode rawConfig = widget.getConfig() == null || widget.getConfig().isNull() ? objectMapper.createObjectNode() : widget.getConfig();
+        ObjectNode config = reportQueryCatalogService.resolveWidgetConfig(dashboard.getWorkspaceId(), rawConfig);
         JsonNode query = config.path("query").isObject() ? config.path("query") : config;
         String reportType = normalizeKey(firstText(text(config, "reportType"), widget.getWidgetType()));
         String effectiveFrom = firstText(from, text(query, "from"));
@@ -305,7 +329,7 @@ public class DashboardService {
         if (!json.isObject()) {
             throw badRequest("widget config must be a JSON object");
         }
-        if (json.has("sql") || json.has("rawSql")) {
+        if (containsRawSqlKey(json)) {
             throw badRequest("dashboard widgets must use reporting API query config, not raw SQL");
         }
         JsonNode query = json.path("query");
@@ -313,6 +337,33 @@ public class DashboardService {
             throw badRequest("widget config.query must be a JSON object");
         }
         return json;
+    }
+
+    private boolean containsRawSqlKey(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return false;
+        }
+        if (node.isObject()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                if ("sql".equalsIgnoreCase(field.getKey()) || "rawSql".equalsIgnoreCase(field.getKey())) {
+                    return true;
+                }
+                if (containsRawSqlKey(field.getValue())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                if (containsRawSqlKey(child)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private DashboardResponse response(Dashboard dashboard) {
@@ -353,6 +404,24 @@ public class DashboardService {
         return team.getId();
     }
 
+    private UUID normalizeProjectId(UUID workspaceId, String visibility, UUID projectId) {
+        if (!"project".equals(visibility)) {
+            if (projectId != null) {
+                throw badRequest("projectId is only valid for project dashboards");
+            }
+            return null;
+        }
+        if (projectId == null) {
+            throw badRequest("projectId is required for project dashboards");
+        }
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+                .orElseThrow(() -> badRequest("Project not found in this workspace"));
+        if (!workspaceId.equals(project.getWorkspaceId()) || !"active".equals(project.getStatus())) {
+            throw badRequest("Project not found in this workspace");
+        }
+        return project.getId();
+    }
+
     private void requireReadable(UUID actorId, Dashboard dashboard) {
         if (!canReadDashboard(actorId, dashboard, canManageReports(actorId, dashboard.getWorkspaceId()))) {
             throw notFound("Dashboard not found");
@@ -360,19 +429,37 @@ public class DashboardService {
     }
 
     private boolean canReadDashboard(UUID actorId, Dashboard dashboard, boolean canManage) {
-        if (actorId.equals(dashboard.getOwnerId()) || canManage) {
+        if (canManage) {
             return true;
         }
+        if (actorId.equals(dashboard.getOwnerId())) {
+            if ("project".equals(dashboard.getVisibility()) && dashboard.getProjectId() != null) {
+                return canReadProjectReports(actorId, dashboard.getProjectId())
+                        || canUseWorkspace(actorId, dashboard.getWorkspaceId(), "report.read");
+            }
+            return canUseWorkspace(actorId, dashboard.getWorkspaceId(), "report.read");
+        }
         if ("workspace".equals(dashboard.getVisibility()) || "public".equals(dashboard.getVisibility())) {
-            return true;
+            return canUseWorkspace(actorId, dashboard.getWorkspaceId(), "report.read");
+        }
+        if ("project".equals(dashboard.getVisibility()) && dashboard.getProjectId() != null) {
+            return canReadProjectReports(actorId, dashboard.getProjectId());
         }
         return "team".equals(dashboard.getVisibility())
                 && dashboard.getTeamId() != null
+                && canUseWorkspace(actorId, dashboard.getWorkspaceId(), "report.read")
                 && teamMembershipRepository.existsByTeamIdAndUserIdAndLeftAtIsNull(dashboard.getTeamId(), actorId);
     }
 
     private void requireWritable(UUID actorId, Dashboard dashboard) {
-        if ("private".equals(dashboard.getVisibility()) && actorId.equals(dashboard.getOwnerId())) {
+        if ("private".equals(dashboard.getVisibility())
+                && actorId.equals(dashboard.getOwnerId())
+                && canUseWorkspace(actorId, dashboard.getWorkspaceId(), "report.read")) {
+            return;
+        }
+        if ("project".equals(dashboard.getVisibility())
+                && dashboard.getProjectId() != null
+                && canManageProjectReports(actorId, dashboard.getProjectId())) {
             return;
         }
         if (canManageReports(actorId, dashboard.getWorkspaceId())) {
@@ -381,8 +468,12 @@ public class DashboardService {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You do not have permission to manage this dashboard");
     }
 
-    private void requireSharedPermission(UUID actorId, UUID workspaceId, String visibility) {
+    private void requireSharedPermission(UUID actorId, UUID workspaceId, String visibility, UUID projectId) {
         if ("private".equals(visibility)) {
+            return;
+        }
+        if ("project".equals(visibility)) {
+            permissionService.requireProjectPermission(actorId, required(projectId, "projectId"), "report.manage");
             return;
         }
         permissionService.requireWorkspacePermission(actorId, workspaceId, "report.manage");
@@ -400,12 +491,51 @@ public class DashboardService {
         }
     }
 
+    private boolean canUseWorkspace(UUID actorId, UUID workspaceId, String permissionKey) {
+        try {
+            permissionService.requireWorkspacePermission(actorId, workspaceId, permissionKey);
+            return true;
+        } catch (ResponseStatusException ex) {
+            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    private boolean canManageProjectReports(UUID actorId, UUID projectId) {
+        try {
+            permissionService.requireProjectPermission(actorId, projectId, "report.manage");
+            return true;
+        } catch (ResponseStatusException ex) {
+            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    private boolean canReadProjectReports(UUID actorId, UUID projectId) {
+        try {
+            permissionService.requireProjectPermission(actorId, projectId, "report.read");
+            return true;
+        } catch (ResponseStatusException ex) {
+            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
     private void recordDashboardEvent(Dashboard dashboard, String eventType, UUID actorId) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("dashboardId", dashboard.getId().toString())
                 .put("dashboardName", dashboard.getName())
                 .put("visibility", dashboard.getVisibility())
                 .put("actorUserId", actorId.toString());
+        if (dashboard.getProjectId() != null) {
+            payload.put("projectId", dashboard.getProjectId().toString());
+        }
         if (dashboard.getTeamId() != null) {
             payload.put("teamId", dashboard.getTeamId().toString());
         }
@@ -460,8 +590,8 @@ public class DashboardService {
 
     private String normalizeVisibility(String visibility) {
         String normalized = hasText(visibility) ? visibility.trim().toLowerCase() : "private";
-        if (!List.of("private", "team", "workspace", "public").contains(normalized)) {
-            throw badRequest("visibility must be private, team, workspace, or public");
+        if (!List.of("private", "team", "project", "workspace", "public").contains(normalized)) {
+            throw badRequest("visibility must be private, team, project, workspace, or public");
         }
         return normalized;
     }

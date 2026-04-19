@@ -81,4 +81,39 @@ public class ReportingController {
     ) {
         return reportingService.runWorkspaceSnapshots(workspaceId, date);
     }
+
+    @PostMapping("/workspaces/{workspaceId}/snapshots/backfill")
+    public ReportingSnapshotBackfillResponse backfillWorkspaceSnapshots(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate
+    ) {
+        return reportingService.backfillWorkspaceSnapshots(workspaceId, fromDate, toDate, "backfill");
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/snapshots/reconcile")
+    public ReportingSnapshotBackfillResponse reconcileWorkspaceSnapshots(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate
+    ) {
+        return reportingService.backfillWorkspaceSnapshots(workspaceId, fromDate, toDate, "reconcile");
+    }
+
+    @GetMapping("/projects/{projectId}/snapshots")
+    public ProjectReportingSnapshotsResponse projectSnapshots(
+            @PathVariable UUID projectId,
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate
+    ) {
+        return reportingService.projectSnapshots(projectId, fromDate, toDate);
+    }
+
+    @GetMapping("/iterations/{iterationId}/report")
+    public IterationReportResponse iterationReport(
+            @PathVariable UUID iterationId,
+            @RequestParam(required = false) String source
+    ) {
+        return reportingService.iterationReport(iterationId, source);
+    }
 }

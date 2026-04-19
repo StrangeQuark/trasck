@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
@@ -30,6 +31,12 @@ public class SavedFilter {
     @Column(name = "owner_id")
     private UUID ownerId;
 
+    @Column(name = "project_id")
+    private UUID projectId;
+
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @Column(name = "name")
     private String name;
 
@@ -39,6 +46,12 @@ public class SavedFilter {
 
     @Column(name = "visibility")
     private String visibility;
+
+    @Column(name = "created_at")
+    private OffsetDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private OffsetDateTime updatedAt;
 
 
     public UUID getId() {
@@ -65,6 +78,22 @@ public class SavedFilter {
         this.ownerId = ownerId;
     }
 
+    public UUID getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(UUID projectId) {
+        this.projectId = projectId;
+    }
+
+    public UUID getTeamId() {
+        return teamId;
+    }
+
+    public void setTeamId(UUID teamId) {
+        this.teamId = teamId;
+    }
+
     public String getName() {
         return name;
     }
@@ -87,5 +116,21 @@ public class SavedFilter {
 
     public void setVisibility(String visibility) {
         this.visibility = visibility;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(OffsetDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public OffsetDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(OffsetDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

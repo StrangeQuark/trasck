@@ -282,6 +282,17 @@ class WorkItemApiIntegrationTest {
         assertThat(snapshotRun.at("/iterationSnapshots").asInt()).isEqualTo(1);
         assertThat(snapshotRun.at("/velocitySnapshots").asInt()).isEqualTo(1);
         assertThat(snapshotRun.at("/cumulativeFlowSnapshots").asInt()).isGreaterThanOrEqualTo(1);
+        JsonNode snapshotBackfill = postJson("/api/v1/reports/workspaces/" + workspaceId + "/snapshots/backfill?fromDate=2026-04-19&toDate=2026-04-19", objectMapper.createObjectNode());
+        assertThat(snapshotBackfill.at("/daysProcessed").asInt()).isEqualTo(1);
+        JsonNode persistedSnapshots = getJson("/api/v1/reports/projects/" + projectId + "/snapshots?fromDate=2026-04-19&toDate=2026-04-19");
+        assertThat(persistedSnapshots.at("/iterationSnapshots")).hasSize(1);
+        assertThat(persistedSnapshots.at("/velocitySnapshots")).hasSize(1);
+        assertThat(persistedSnapshots.at("/cumulativeFlowSnapshots")).isNotEmpty();
+        assertThat(persistedSnapshots.at("/series")).isNotEmpty();
+        JsonNode iterationReport = getJson("/api/v1/reports/iterations/" + reportingScope.iterationId() + "/report?source=both");
+        assertThat(iterationReport.at("/source").asText()).isEqualTo("both");
+        assertThat(iterationReport.at("/live/scopedWorkItems").asLong()).isEqualTo(1);
+        assertThat(iterationReport.at("/snapshots")).hasSize(1);
 
         JsonNode projectSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
         assertThat(projectSummary.at("/scope/scopeType").asText()).isEqualTo("project");
@@ -355,8 +366,63 @@ class WorkItemApiIntegrationTest {
         JsonNode updatedWidget = patch("/api/v1/dashboards/" + dashboardId + "/widgets/" + widgetId, objectMapper.createObjectNode()
                 .put("title", "Committed Work Items"));
         assertThat(updatedWidget.at("/title").asText()).isEqualTo("Committed Work Items");
+        ObjectNode unsafeWidgetConfig = objectMapper.createObjectNode();
+        unsafeWidgetConfig.set("query", objectMapper.createObjectNode()
+                .set("nested", objectMapper.createObjectNode().put("rawSql", "select 1")));
+        assertThat(post("/api/v1/dashboards/" + dashboardId + "/widgets", objectMapper.createObjectNode()
+                .put("widgetType", "work_item_summary")
+                .set("config", unsafeWidgetConfig)).statusCode()).isEqualTo(400);
         assertThat(delete("/api/v1/dashboards/" + dashboardId + "/widgets/" + widgetId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/dashboards/" + dashboardId).statusCode()).isEqualTo(204);
+
+        ObjectNode unsafeFilterQuery = objectMapper.createObjectNode();
+        unsafeFilterQuery.set("nested", objectMapper.createObjectNode().put("sql", "select 1"));
+        assertThat(post("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Unsafe filter")
+                .set("query", unsafeFilterQuery)).statusCode()).isEqualTo(400);
+        JsonNode savedFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Committed team work")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", widgetQuery));
+        UUID savedFilterId = uuid(savedFilter, "/id");
+        assertThat(savedFilter.at("/visibility").asText()).isEqualTo("project");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/saved-filters")).isNotEmpty();
+        JsonNode reportQuery = postJson("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", objectMapper.createObjectNode()
+                .put("queryKey", "committed-team-work")
+                .put("name", "Committed team work query")
+                .put("queryType", "project_dashboard_summary")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("queryConfig", objectMapper.createObjectNode().put("savedFilterId", savedFilterId.toString())));
+        UUID reportQueryId = uuid(reportQuery, "/id");
+        ObjectNode unsafeCatalogConfig = objectMapper.createObjectNode();
+        unsafeCatalogConfig.set("nested", objectMapper.createObjectNode().put("rawSql", "select 1"));
+        assertThat(post("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", objectMapper.createObjectNode()
+                .put("queryKey", "unsafe-query")
+                .put("name", "Unsafe query")
+                .put("queryType", "project_dashboard_summary")
+                .set("queryConfig", unsafeCatalogConfig)).statusCode()).isEqualTo(400);
+        JsonNode projectDashboard = postJson("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
+                .put("name", "Project Reporting")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString()));
+        UUID projectDashboardId = uuid(projectDashboard, "/id");
+        assertThat(uuid(projectDashboard, "/projectId")).isEqualTo(projectId);
+        JsonNode catalogWidget = postJson("/api/v1/dashboards/" + projectDashboardId + "/widgets", objectMapper.createObjectNode()
+                .put("widgetType", "work_item_summary")
+                .put("title", "Catalog committed work")
+                .put("positionX", 0)
+                .put("positionY", 0)
+                .put("width", 4)
+                .put("height", 2)
+                .set("config", objectMapper.createObjectNode().put("reportQueryId", reportQueryId.toString())));
+        assertThat(uuid(catalogWidget, "/id")).isNotNull();
+        JsonNode renderedProjectDashboard = getJson("/api/v1/dashboards/" + projectDashboardId + "/render?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
+        assertThat(renderedProjectDashboard.at("/widgets/0/data/total").asLong()).isEqualTo(1);
+        assertThat(delete("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(204);
 
         JsonNode statusHistory = getJson("/api/v1/reports/work-items/" + storyId + "/status-history");
         assertThat(statusHistory).hasSize(6);

@@ -28,6 +28,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +59,8 @@ public class ReportingService {
     private final WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository;
     private final WorkItemTeamHistoryRepository workItemTeamHistoryRepository;
     private final WorkLogRepository workLogRepository;
+    private final IterationSnapshotRepository iterationSnapshotRepository;
+    private final VelocitySnapshotRepository velocitySnapshotRepository;
     private final WorkspaceRepository workspaceRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
@@ -77,6 +80,8 @@ public class ReportingService {
             WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository,
             WorkItemTeamHistoryRepository workItemTeamHistoryRepository,
             WorkLogRepository workLogRepository,
+            IterationSnapshotRepository iterationSnapshotRepository,
+            VelocitySnapshotRepository velocitySnapshotRepository,
             WorkspaceRepository workspaceRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
@@ -95,6 +100,8 @@ public class ReportingService {
         this.workItemEstimateHistoryRepository = workItemEstimateHistoryRepository;
         this.workItemTeamHistoryRepository = workItemTeamHistoryRepository;
         this.workLogRepository = workLogRepository;
+        this.iterationSnapshotRepository = iterationSnapshotRepository;
+        this.velocitySnapshotRepository = velocitySnapshotRepository;
         this.workspaceRepository = workspaceRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
@@ -245,6 +252,329 @@ public class ReportingService {
                 ? parseDate(snapshotDate, "date")
                 : LocalDate.now(ZoneOffset.UTC);
         return reportingSnapshotService.runWorkspaceSnapshots(workspaceId, effectiveSnapshotDate);
+    }
+
+    @Transactional
+    public ReportingSnapshotBackfillResponse backfillWorkspaceSnapshots(UUID workspaceId, String fromDate, String toDate, String action) {
+        Workspace workspace = reportableWorkspace(workspaceId);
+        requireWorkspaceReportRead(workspace.getId());
+        LocalDate effectiveTo = hasText(toDate) ? parseDate(toDate, "toDate") : LocalDate.now(ZoneOffset.UTC);
+        LocalDate effectiveFrom = hasText(fromDate) ? parseDate(fromDate, "fromDate") : effectiveTo;
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fromDate must be on or before toDate");
+        }
+        long days = ChronoUnit.DAYS.between(effectiveFrom, effectiveTo) + 1;
+        if (days > 370) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "snapshot backfill is limited to 370 days per request");
+        }
+        List<ReportingSnapshotRunResponse> runs = new ArrayList<>();
+        int cycleTimeRecords = 0;
+        int iterationSnapshots = 0;
+        int velocitySnapshots = 0;
+        int cumulativeFlowSnapshots = 0;
+        for (LocalDate date = effectiveFrom; !date.isAfter(effectiveTo); date = date.plusDays(1)) {
+            ReportingSnapshotRunResponse run = reportingSnapshotService.runWorkspaceSnapshots(workspaceId, date);
+            runs.add(run);
+            cycleTimeRecords += run.cycleTimeRecords();
+            iterationSnapshots += run.iterationSnapshots();
+            velocitySnapshots += run.velocitySnapshots();
+            cumulativeFlowSnapshots += run.cumulativeFlowSnapshots();
+        }
+        return new ReportingSnapshotBackfillResponse(
+                workspaceId,
+                normalizeSnapshotAction(action),
+                effectiveFrom,
+                effectiveTo,
+                runs.size(),
+                cycleTimeRecords,
+                iterationSnapshots,
+                velocitySnapshots,
+                cumulativeFlowSnapshots,
+                runs
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public ProjectReportingSnapshotsResponse projectSnapshots(UUID projectId, String fromDate, String toDate) {
+        Project project = reportableProject(projectId);
+        requireReportRead(project);
+        SnapshotWindow window = snapshotWindow(fromDate, toDate);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("projectId", project.getId())
+                .addValue("fromDate", window.fromDate())
+                .addValue("toDate", window.toDate());
+
+        List<CycleTimeRecordResponse> cycleTimeRecords = namedJdbcTemplate.query("""
+                select ctr.id,
+                       ctr.work_item_id,
+                       ctr.created_at,
+                       ctr.started_at,
+                       ctr.completed_at,
+                       ctr.lead_time_minutes,
+                       ctr.cycle_time_minutes
+                from cycle_time_records ctr
+                join work_items wi on wi.id = ctr.work_item_id
+                where wi.project_id = :projectId
+                  and ctr.completed_at::date >= :fromDate
+                  and ctr.completed_at::date <= :toDate
+                order by ctr.completed_at asc, ctr.work_item_id asc
+                """, params, (rs, rowNum) -> new CycleTimeRecordResponse(
+                (UUID) rs.getObject("id"),
+                (UUID) rs.getObject("work_item_id"),
+                rs.getObject("created_at", OffsetDateTime.class),
+                rs.getObject("started_at", OffsetDateTime.class),
+                rs.getObject("completed_at", OffsetDateTime.class),
+                integer(rs, "lead_time_minutes"),
+                integer(rs, "cycle_time_minutes")
+        ));
+        List<IterationSnapshotResponse> iterationSnapshots = namedJdbcTemplate.query("""
+                select snapshot.id,
+                       snapshot.iteration_id,
+                       snapshot.snapshot_date,
+                       snapshot.committed_points,
+                       snapshot.completed_points,
+                       snapshot.remaining_points,
+                       snapshot.scope_added_points,
+                       snapshot.scope_removed_points
+                from iteration_snapshots snapshot
+                join iterations iteration on iteration.id = snapshot.iteration_id
+                where iteration.project_id = :projectId
+                  and snapshot.snapshot_date >= :fromDate
+                  and snapshot.snapshot_date <= :toDate
+                order by snapshot.snapshot_date asc, snapshot.iteration_id asc
+                """, params, (rs, rowNum) -> new IterationSnapshotResponse(
+                (UUID) rs.getObject("id"),
+                (UUID) rs.getObject("iteration_id"),
+                rs.getObject("snapshot_date", LocalDate.class),
+                decimal(rs.getBigDecimal("committed_points")),
+                decimal(rs.getBigDecimal("completed_points")),
+                decimal(rs.getBigDecimal("remaining_points")),
+                decimal(rs.getBigDecimal("scope_added_points")),
+                decimal(rs.getBigDecimal("scope_removed_points"))
+        ));
+        List<VelocitySnapshotResponse> velocitySnapshots = namedJdbcTemplate.query("""
+                select snapshot.id,
+                       snapshot.team_id,
+                       snapshot.iteration_id,
+                       coalesce(iteration.end_date, iteration.start_date) as snapshot_date,
+                       snapshot.committed_points,
+                       snapshot.completed_points,
+                       snapshot.carried_over_points
+                from velocity_snapshots snapshot
+                join iterations iteration on iteration.id = snapshot.iteration_id
+                where iteration.project_id = :projectId
+                  and (iteration.start_date is null or iteration.start_date <= :toDate)
+                  and (iteration.end_date is null or iteration.end_date >= :fromDate)
+                order by iteration.start_date asc nulls last, iteration.name asc, snapshot.team_id asc
+                """, params, (rs, rowNum) -> new VelocitySnapshotResponse(
+                (UUID) rs.getObject("id"),
+                (UUID) rs.getObject("team_id"),
+                (UUID) rs.getObject("iteration_id"),
+                rs.getObject("snapshot_date", LocalDate.class),
+                decimal(rs.getBigDecimal("committed_points")),
+                decimal(rs.getBigDecimal("completed_points")),
+                decimal(rs.getBigDecimal("carried_over_points"))
+        ));
+        List<CumulativeFlowSnapshotResponse> cumulativeFlowSnapshots = namedJdbcTemplate.query("""
+                select snapshot.id,
+                       snapshot.board_id,
+                       snapshot.snapshot_date,
+                       snapshot.status_id,
+                       snapshot.work_item_count,
+                       snapshot.total_points
+                from cumulative_flow_snapshots snapshot
+                join boards board on board.id = snapshot.board_id
+                where board.project_id = :projectId
+                  and snapshot.snapshot_date >= :fromDate
+                  and snapshot.snapshot_date <= :toDate
+                order by snapshot.snapshot_date asc, snapshot.board_id asc, snapshot.status_id asc
+                """, params, (rs, rowNum) -> new CumulativeFlowSnapshotResponse(
+                (UUID) rs.getObject("id"),
+                (UUID) rs.getObject("board_id"),
+                rs.getObject("snapshot_date", LocalDate.class),
+                (UUID) rs.getObject("status_id"),
+                integer(rs, "work_item_count"),
+                decimal(rs.getBigDecimal("total_points"))
+        ));
+        return new ProjectReportingSnapshotsResponse(
+                project.getId(),
+                project.getWorkspaceId(),
+                window.fromDate(),
+                window.toDate(),
+                cycleTimeRecords,
+                iterationSnapshots,
+                velocitySnapshots,
+                cumulativeFlowSnapshots,
+                snapshotSeries(cycleTimeRecords, iterationSnapshots, velocitySnapshots, cumulativeFlowSnapshots)
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public IterationReportResponse iterationReport(UUID iterationId, String source) {
+        Iteration iteration = iterationRepository.findById(iterationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Iteration not found"));
+        UUID projectId = iteration.getProjectId();
+        if (projectId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Iteration reports require a project-scoped iteration");
+        }
+        Project project = reportableProject(projectId);
+        requireReportRead(project);
+        String effectiveSource = normalizeIterationReportSource(source);
+        IterationReportResponse.IterationMetrics live = "snapshot".equals(effectiveSource) ? null : liveIterationMetrics(iteration);
+        List<IterationSnapshot> snapshots = "live".equals(effectiveSource)
+                ? List.of()
+                : iterationSnapshotRepository.findByIterationIdOrderBySnapshotDateAsc(iteration.getId());
+        List<VelocitySnapshot> velocitySnapshots = "live".equals(effectiveSource)
+                ? List.of()
+                : velocitySnapshotRepository.findByIterationId(iteration.getId());
+        IterationReportResponse.IterationMetrics latestSnapshot = snapshots.isEmpty()
+                ? null
+                : snapshotMetrics(snapshots.get(snapshots.size() - 1));
+        return new IterationReportResponse(
+                iteration.getId(),
+                project.getId(),
+                iteration.getTeamId(),
+                effectiveSource,
+                live,
+                latestSnapshot,
+                snapshots.stream().map(IterationSnapshotResponse::from).toList(),
+                velocitySnapshots.stream().map(VelocitySnapshotResponse::from).toList()
+        );
+    }
+
+    private SnapshotWindow snapshotWindow(String fromDate, String toDate) {
+        LocalDate effectiveTo = hasText(toDate) ? parseDate(toDate, "toDate") : LocalDate.now(ZoneOffset.UTC);
+        LocalDate effectiveFrom = hasText(fromDate) ? parseDate(fromDate, "fromDate") : effectiveTo.minusDays(DEFAULT_REPORT_DAYS);
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fromDate must be on or before toDate");
+        }
+        return new SnapshotWindow(effectiveFrom, effectiveTo);
+    }
+
+    private String normalizeSnapshotAction(String action) {
+        if (!hasText(action)) {
+            return "backfill";
+        }
+        String normalized = action.trim().toLowerCase();
+        if (!List.of("backfill", "reconcile").contains(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "action must be backfill or reconcile");
+        }
+        return normalized;
+    }
+
+    private String normalizeIterationReportSource(String source) {
+        String normalized = hasText(source) ? source.trim().toLowerCase() : "both";
+        if (!List.of("live", "snapshot", "both").contains(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "source must be live, snapshot, or both");
+        }
+        return normalized;
+    }
+
+    private IterationReportResponse.IterationMetrics liveIterationMetrics(Iteration iteration) {
+        return namedJdbcTemplate.queryForObject("""
+                select coalesce(iteration.committed_points, 0) as committed_points,
+                       coalesce(sum(coalesce(work_item.estimate_points, 0)) filter (
+                           where iteration_work_item.removed_at is null
+                             and coalesce(status.terminal, false) = true
+                       ), 0) as completed_points,
+                       coalesce(sum(coalesce(work_item.estimate_points, 0)) filter (
+                           where iteration_work_item.removed_at is null
+                             and coalesce(status.terminal, false) = false
+                       ), 0) as remaining_points,
+                       coalesce(sum(coalesce(work_item.estimate_points, 0)) filter (
+                           where iteration_work_item.removed_at is null
+                       ), 0) as scoped_points,
+                       coalesce(sum(coalesce(work_item.estimate_points, 0)) filter (
+                           where iteration_work_item.removed_at is not null
+                       ), 0) as removed_points,
+                       count(work_item.id) filter (where iteration_work_item.removed_at is null) as scoped_work_items,
+                       count(work_item.id) filter (
+                           where iteration_work_item.removed_at is null
+                             and coalesce(status.terminal, false) = true
+                       ) as completed_work_items
+                from iterations iteration
+                left join iteration_work_items iteration_work_item on iteration_work_item.iteration_id = iteration.id
+                left join work_items work_item on work_item.id = iteration_work_item.work_item_id
+                    and work_item.deleted_at is null
+                left join workflow_statuses status on status.id = work_item.status_id
+                where iteration.id = :iterationId
+                group by iteration.id, iteration.committed_points
+                """, new MapSqlParameterSource().addValue("iterationId", iteration.getId()), (rs, rowNum) -> {
+            BigDecimal scopedPoints = decimal(rs.getBigDecimal("scoped_points"));
+            return new IterationReportResponse.IterationMetrics(
+                    decimal(rs.getBigDecimal("committed_points")),
+                    decimal(rs.getBigDecimal("completed_points")),
+                    decimal(rs.getBigDecimal("remaining_points")),
+                    scopedPoints,
+                    decimal(rs.getBigDecimal("removed_points")),
+                    rs.getLong("scoped_work_items"),
+                    rs.getLong("completed_work_items")
+            );
+        });
+    }
+
+    private IterationReportResponse.IterationMetrics snapshotMetrics(IterationSnapshot snapshot) {
+        return new IterationReportResponse.IterationMetrics(
+                decimal(snapshot.getCommittedPoints()),
+                decimal(snapshot.getCompletedPoints()),
+                decimal(snapshot.getRemainingPoints()),
+                decimal(snapshot.getScopeAddedPoints()),
+                decimal(snapshot.getScopeRemovedPoints()),
+                0,
+                0
+        );
+    }
+
+    private List<ReportingSnapshotSeriesPointResponse> snapshotSeries(
+            List<CycleTimeRecordResponse> cycleTimeRecords,
+            List<IterationSnapshotResponse> iterationSnapshots,
+            List<VelocitySnapshotResponse> velocitySnapshots,
+            List<CumulativeFlowSnapshotResponse> cumulativeFlowSnapshots
+    ) {
+        List<ReportingSnapshotSeriesPointResponse> series = new ArrayList<>();
+        for (CycleTimeRecordResponse record : cycleTimeRecords) {
+            LocalDate completedDate = record.completedAt() == null ? null : record.completedAt().toLocalDate();
+            if (completedDate != null && record.leadTimeMinutes() != null) {
+                series.add(new ReportingSnapshotSeriesPointResponse(
+                        completedDate,
+                        "cycle_time.lead_time_minutes",
+                        record.workItemId(),
+                        "Lead time",
+                        BigDecimal.valueOf(record.leadTimeMinutes())
+                ));
+            }
+            if (completedDate != null && record.cycleTimeMinutes() != null) {
+                series.add(new ReportingSnapshotSeriesPointResponse(
+                        completedDate,
+                        "cycle_time.cycle_time_minutes",
+                        record.workItemId(),
+                        "Cycle time",
+                        BigDecimal.valueOf(record.cycleTimeMinutes())
+                ));
+            }
+        }
+        for (IterationSnapshotResponse snapshot : iterationSnapshots) {
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "iteration.committed_points", snapshot.iterationId(), "Committed points", snapshot.committedPoints()));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "iteration.completed_points", snapshot.iterationId(), "Completed points", snapshot.completedPoints()));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "iteration.remaining_points", snapshot.iterationId(), "Remaining points", snapshot.remainingPoints()));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "iteration.scope_added_points", snapshot.iterationId(), "Scope added points", snapshot.scopeAddedPoints()));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "iteration.scope_removed_points", snapshot.iterationId(), "Scope removed points", snapshot.scopeRemovedPoints()));
+        }
+        for (VelocitySnapshotResponse snapshot : velocitySnapshots) {
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "velocity.committed_points", snapshot.iterationId(), "Committed points", snapshot.committedPoints()));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "velocity.completed_points", snapshot.iterationId(), "Completed points", snapshot.completedPoints()));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "velocity.carried_over_points", snapshot.iterationId(), "Carried-over points", snapshot.carriedOverPoints()));
+        }
+        for (CumulativeFlowSnapshotResponse snapshot : cumulativeFlowSnapshots) {
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "cumulative_flow.work_item_count", snapshot.statusId(), "Work item count", BigDecimal.valueOf(snapshot.workItemCount())));
+            series.add(new ReportingSnapshotSeriesPointResponse(snapshot.snapshotDate(), "cumulative_flow.total_points", snapshot.statusId(), "Total points", snapshot.totalPoints()));
+        }
+        return series;
+    }
+
+    private Integer integer(ResultSet rs, String columnName) throws SQLException {
+        int value = rs.getInt(columnName);
+        return rs.wasNull() ? null : value;
     }
 
     private WorkItem reportableWorkItem(UUID workItemId) {
@@ -759,6 +1089,9 @@ public class ReportingService {
     }
 
     private record ReportWindow(OffsetDateTime from, OffsetDateTime to, LocalDate fromDate, LocalDate toDateExclusive) {
+    }
+
+    private record SnapshotWindow(LocalDate fromDate, LocalDate toDate) {
     }
 
     private record ReportScope(

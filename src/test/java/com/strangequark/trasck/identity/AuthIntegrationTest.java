@@ -15,6 +15,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.UUID;
@@ -194,6 +196,14 @@ class AuthIntegrationTest {
         assertThat(listedServiceTokens).hasSize(1);
         assertThat(listedServiceTokens.get(0).at("/token").isNull()).isTrue();
 
+        JsonNode expiredServiceToken = read(post("/api/v1/workspaces/" + workspaceId + "/service-tokens", objectMapper.createObjectNode()
+                .put("name", "Expired automation reader")
+                .put("username", "expired-automation-reader")
+                .put("displayName", "Expired Automation Reader")
+                .put("roleId", viewerRoleId.toString())
+                .put("expiresAt", OffsetDateTime.now(ZoneOffset.UTC).minusDays(1).toString()), admin.accessToken()));
+        assertThat(get("/api/v1/projects/" + projectId + "/work-items", expiredServiceToken.at("/token").asText()).statusCode()).isEqualTo(401);
+
         JsonNode readOnlyToken = read(post("/api/v1/auth/tokens/personal", objectMapper.createObjectNode()
                 .put("name", "Read-only work item token")
                 .set("scopes", objectMapper.createArrayNode().add("work_item.read")), admin.accessToken()));
@@ -202,6 +212,12 @@ class AuthIntegrationTest {
                 .put("typeKey", "story")
                 .put("title", "Token scope should block create"), readOnlyToken.at("/token").asText());
         assertThat(scopeDeniedCreate.statusCode()).isEqualTo(403);
+        JsonNode expiredPersonalToken = read(post("/api/v1/auth/tokens/personal", objectMapper.createObjectNode()
+                .put("name", "Expired personal token")
+                .put("expiresAt", OffsetDateTime.now(ZoneOffset.UTC).minusDays(1).toString()), admin.accessToken()));
+        assertThat(get("/api/v1/auth/me", expiredPersonalToken.at("/token").asText()).statusCode()).isEqualTo(401);
+        assertThat(delete("/api/v1/auth/tokens/" + uuid(readOnlyToken, "/id"), admin.accessToken()).statusCode()).isEqualTo(204);
+        assertThat(get("/api/v1/projects/" + projectId + "/work-items", readOnlyToken.at("/token").asText()).statusCode()).isEqualTo(401);
 
         HttpResponse<String> oauthRedirect = get("/api/v1/auth/oauth2/authorization/github", null);
         assertThat(oauthRedirect.statusCode()).isBetween(300, 399);
@@ -233,6 +249,55 @@ class AuthIntegrationTest {
         assertThat(countWhere("domain_event_deliveries", "consumer_key", "configured-auth-test")).isEqualTo(1);
         assertThat(countWhere("domain_events", "processing_status", "published")).isGreaterThan(0);
 
+        UUID retryEventId = insertDomainEvent(workspaceId, "outbox.retry_test", adminUserId);
+        jdbcTemplate.update("""
+                insert into event_consumer_configs (consumer_key, consumer_type, display_name, event_types, config)
+                values (?, ?, ?, cast(? as jsonb), cast(? as jsonb))
+                """, "configured-retry-test", "test-configured", "Configured Retry Test", "[\"outbox.retry_test\"]", "{\"fail\":true}");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertDelivery(retryEventId, "configured-retry-test", "failed", 1);
+        jdbcTemplate.update("""
+                update domain_event_deliveries
+                set next_attempt_at = now() - interval '1 minute'
+                where domain_event_id = ? and consumer_key = ?
+                """, retryEventId, "configured-retry-test");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertDelivery(retryEventId, "configured-retry-test", "failed", 2);
+
+        UUID deadLetterEventId = insertDomainEvent(workspaceId, "outbox.deadletter_test", adminUserId);
+        jdbcTemplate.update("""
+                insert into event_consumer_configs (consumer_key, consumer_type, display_name, event_types, config)
+                values (?, ?, ?, cast(? as jsonb), cast(? as jsonb))
+                """, "configured-deadletter-test", "test-configured", "Configured Dead Letter Test", "[\"outbox.deadletter_test\"]", "{\"fail\":true,\"maxAttempts\":1,\"deadLetterOnExhaustion\":true}");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertDelivery(deadLetterEventId, "configured-deadletter-test", "dead_lettered", 1);
+        assertThat(eventStatus(deadLetterEventId)).isEqualTo("dead_lettered");
+
+        UUID disabledEventId = insertDomainEvent(workspaceId, "outbox.disabled_test", adminUserId);
+        jdbcTemplate.update("""
+                insert into event_consumer_configs (consumer_key, consumer_type, display_name, event_types, config, enabled)
+                values (?, ?, ?, cast(? as jsonb), cast(? as jsonb), false)
+                """, "configured-disabled-test", "test-configured", "Configured Disabled Test", "[\"outbox.disabled_test\"]", "{}");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(deliveryCount(disabledEventId, "configured-disabled-test")).isZero();
+
+        UUID multiConsumerEventId = insertDomainEvent(workspaceId, "outbox.multi_test", adminUserId);
+        jdbcTemplate.update("""
+                insert into event_consumer_configs (consumer_key, consumer_type, display_name, event_types, config)
+                values (?, ?, ?, cast(? as jsonb), cast(? as jsonb))
+                """, "configured-multi-test", "test-configured", "Configured Multi Test", "[\"outbox.multi_test\"]", "{}");
+        domainEventOutboxDispatcher.dispatchPending();
+        assertThat(deliveredCount(multiConsumerEventId)).isGreaterThanOrEqualTo(2);
+        assertDelivery(multiConsumerEventId, "auth-integration-test", "delivered", 1);
+        assertDelivery(multiConsumerEventId, "configured-multi-test", "delivered", 1);
+
+        ObjectNode unknownReplayRequest = objectMapper.createObjectNode().put("includePublished", true);
+        unknownReplayRequest.set("eventIds", objectMapper.createArrayNode().add(disabledEventId.toString()));
+        unknownReplayRequest.set("consumerKeys", objectMapper.createArrayNode().add("missing-consumer"));
+        JsonNode unknownReplay = read(post("/api/v1/workspaces/" + workspaceId + "/domain-events/replay", unknownReplayRequest, admin.accessToken()));
+        assertThat(unknownReplay.at("/eventsMatched").asInt()).isEqualTo(1);
+        assertThat(unknownReplay.at("/deliveriesReset").asInt()).isZero();
+
         JsonNode defaultRetention = read(get("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy", admin.accessToken()));
         assertThat(defaultRetention.at("/retentionEnabled").asBoolean()).isFalse();
         JsonNode retention = read(put("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy", objectMapper.createObjectNode()
@@ -240,6 +305,17 @@ class AuthIntegrationTest {
                 .put("retentionDays", 365), admin.accessToken()));
         assertThat(retention.at("/retentionEnabled").asBoolean()).isTrue();
         assertThat(retention.at("/retentionDays").asInt()).isEqualTo(365);
+        UUID oldAuditId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                insert into audit_log_entries (id, workspace_id, action, target_type, target_id, created_at)
+                values (?, ?, ?, ?, ?, now() - interval '400 days')
+                """, oldAuditId, workspaceId, "audit.old_retention_test", "workspace", workspaceId);
+        JsonNode retentionExport = read(post("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy/export?limit=10", objectMapper.createObjectNode(), admin.accessToken()));
+        assertThat(retentionExport.at("/entriesEligible").asLong()).isGreaterThanOrEqualTo(1);
+        assertThat(ids(retentionExport.at("/entries"))).contains(oldAuditId.toString());
+        JsonNode retentionPrune = read(post("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy/prune", objectMapper.createObjectNode(), admin.accessToken()));
+        assertThat(retentionPrune.at("/entriesPruned").asLong()).isGreaterThanOrEqualTo(1);
+        assertThat(countWhere("audit_log_entries", "id", oldAuditId)).isZero();
 
         UUID secretEventId = UUID.randomUUID();
         jdbcTemplate.update("""
@@ -388,6 +464,14 @@ class AuthIntegrationTest {
         return actions;
     }
 
+    private String[] ids(JsonNode entries) {
+        String[] ids = new String[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            ids[i] = entries.get(i).at("/id").asText();
+        }
+        return ids;
+    }
+
     private UUID roleId(JsonNode setup, String key) {
         for (JsonNode role : setup.at("/seedData/roles")) {
             if (key.equals(role.at("/key").asText())) {
@@ -413,6 +497,57 @@ class AuthIntegrationTest {
                 domainEventId
         );
         return count == null ? 0 : count;
+    }
+
+    private UUID insertDomainEvent(UUID workspaceId, String eventType, UUID actorId) {
+        UUID eventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                insert into domain_events (id, workspace_id, aggregate_type, aggregate_id, event_type, payload)
+                values (?, ?, ?, ?, ?, cast(? as jsonb))
+                """,
+                eventId,
+                workspaceId,
+                "workspace",
+                workspaceId,
+                eventType,
+                "{\"actorUserId\":\"" + actorId + "\"}"
+        );
+        return eventId;
+    }
+
+    private void assertDelivery(UUID domainEventId, String consumerKey, String status, int attempts) {
+        assertThat(jdbcTemplate.queryForObject("""
+                select delivery_status
+                from domain_event_deliveries
+                where domain_event_id = ? and consumer_key = ?
+                """, String.class, domainEventId, consumerKey)).isEqualTo(status);
+        assertThat(jdbcTemplate.queryForObject("""
+                select attempts
+                from domain_event_deliveries
+                where domain_event_id = ? and consumer_key = ?
+                """, Integer.class, domainEventId, consumerKey)).isEqualTo(attempts);
+    }
+
+    private int deliveryCount(UUID domainEventId, String consumerKey) {
+        Integer count = jdbcTemplate.queryForObject("""
+                select count(*)
+                from domain_event_deliveries
+                where domain_event_id = ? and consumer_key = ?
+                """, Integer.class, domainEventId, consumerKey);
+        return count == null ? 0 : count;
+    }
+
+    private int deliveredCount(UUID domainEventId) {
+        Integer count = jdbcTemplate.queryForObject("""
+                select count(*)
+                from domain_event_deliveries
+                where domain_event_id = ? and delivery_status = 'delivered'
+                """, Integer.class, domainEventId);
+        return count == null ? 0 : count;
+    }
+
+    private String eventStatus(UUID domainEventId) {
+        return jdbcTemplate.queryForObject("select processing_status from domain_events where id = ?", String.class, domainEventId);
     }
 
     private String oauthAssertion(String provider, String subject, String email, boolean emailVerified) {
@@ -455,6 +590,9 @@ class AuthIntegrationTest {
 
                 @Override
                 public void handle(DomainEvent event, EventConsumerConfig config) {
+                    if (config.getConfig() != null && config.getConfig().path("fail").asBoolean(false)) {
+                        throw new IllegalStateException("configured test consumer failure");
+                    }
                 }
             };
         }
