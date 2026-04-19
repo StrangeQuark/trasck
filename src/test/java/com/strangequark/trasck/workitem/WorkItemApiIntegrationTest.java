@@ -204,7 +204,43 @@ class WorkItemApiIntegrationTest {
         JsonNode filteredByCustomer = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=customer&customFieldValue=Acme");
         assertThat(filteredByCustomer.at("/items")).hasSize(1);
         assertThat(uuid(filteredByCustomer, "/items/0/id")).isEqualTo(storyId);
+        JsonNode filteredByCustomerContains = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=customer&customFieldOperator=contains&customFieldValue=cm");
+        assertThat(filteredByCustomerContains.at("/items")).hasSize(1);
         assertThat(get("/api/v1/projects/" + projectId + "/work-items?customFieldKey=customer").statusCode()).isEqualTo(400);
+
+        JsonNode impactField = postJson("/api/v1/workspaces/" + workspaceId + "/custom-fields", objectMapper.createObjectNode()
+                .put("name", "Business Impact")
+                .put("key", "impact")
+                .put("fieldType", "number")
+                .put("searchable", true));
+        UUID impactFieldId = uuid(impactField, "/id");
+        putJson("/api/v1/work-items/" + storyId + "/custom-fields/" + impactFieldId, objectMapper.createObjectNode()
+                .put("value", 8.0));
+        putJson("/api/v1/work-items/" + secondEpicId + "/custom-fields/" + impactFieldId, objectMapper.createObjectNode()
+                .put("value", 2.0));
+        JsonNode highImpact = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=impact&customFieldOperator=gt&customFieldValue=5");
+        assertThat(highImpact.at("/items")).hasSize(1);
+        assertThat(uuid(highImpact, "/items/0/id")).isEqualTo(storyId);
+        JsonNode impactRange = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=impact&customFieldOperator=between&customFieldValue=2&customFieldValueTo=8");
+        assertThat(impactRange.at("/items")).hasSize(2);
+
+        JsonNode skillsField = postJson("/api/v1/workspaces/" + workspaceId + "/custom-fields", objectMapper.createObjectNode()
+                .put("name", "Skills")
+                .put("key", "skills")
+                .put("fieldType", "multi_select")
+                .put("searchable", true));
+        UUID skillsFieldId = uuid(skillsField, "/id");
+        ObjectNode storySkills = objectMapper.createObjectNode();
+        storySkills.set("value", objectMapper.createArrayNode().add("backend").add("api"));
+        putJson("/api/v1/work-items/" + storyId + "/custom-fields/" + skillsFieldId, storySkills);
+        ObjectNode epicSkills = objectMapper.createObjectNode();
+        epicSkills.set("value", objectMapper.createArrayNode().add("design"));
+        putJson("/api/v1/work-items/" + secondEpicId + "/custom-fields/" + skillsFieldId, epicSkills);
+        JsonNode backendSkills = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=skills&customFieldOperator=contains&customFieldValue=backend");
+        assertThat(backendSkills.at("/items")).hasSize(1);
+        assertThat(uuid(backendSkills, "/items/0/id")).isEqualTo(storyId);
+        JsonNode backendOrDesignSkills = getJson("/api/v1/projects/" + projectId + "/work-items?customFieldKey=skills&customFieldOperator=in&customFieldValue=backend,design");
+        assertThat(backendOrDesignSkills.at("/items")).hasSize(2);
 
         JsonNode editScreen = postJson("/api/v1/workspaces/" + workspaceId + "/screens", objectMapper.createObjectNode()
                 .put("name", "Story Edit Screen")
@@ -224,6 +260,18 @@ class WorkItemApiIntegrationTest {
         JsonNode fetchedScreen = getJson("/api/v1/screens/" + editScreenId);
         assertThat(fetchedScreen.at("/fields")).hasSize(1);
         assertThat(fetchedScreen.at("/assignments")).hasSize(1);
+        patch("/api/v1/screens/" + editScreenId + "/fields/" + uuid(screenField, "/id"), objectMapper.createObjectNode()
+                .put("required", true));
+        postJson("/api/v1/screens/" + editScreenId + "/fields", objectMapper.createObjectNode()
+                .put("systemFieldKey", "team")
+                .put("position", 20)
+                .put("required", true));
+        ObjectNode clearCustomer = objectMapper.createObjectNode();
+        clearCustomer.set("customFields", objectMapper.createObjectNode().putNull("customer"));
+        assertThat(patchResponse("/api/v1/work-items/" + storyId, clearCustomer).statusCode()).isEqualTo(400);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/custom-fields")).hasSize(3);
+        assertThat(patchResponse("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
+                .put("clearTeam", true)).statusCode()).isEqualTo(400);
 
         ObjectNode commentBody = objectMapper.createObjectNode()
                 .put("bodyMarkdown", "This story needs collaboration coverage.")
@@ -466,6 +514,23 @@ class WorkItemApiIntegrationTest {
         JsonNode updatedSavedView = patch("/api/v1/personalization/views/" + savedViewId, objectMapper.createObjectNode()
                 .put("name", "My current project work"));
         assertThat(updatedSavedView.at("/name").asText()).isEqualTo("My current project work");
+        JsonNode projectSavedView = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/views", objectMapper.createObjectNode()
+                .put("name", "Project shared work")
+                .put("viewType", "work_items")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("config", objectMapper.createObjectNode().put("projectId", projectId.toString())));
+        UUID projectSavedViewId = uuid(projectSavedView, "/id");
+        assertThat(uuid(projectSavedView, "/projectId")).isEqualTo(projectId);
+        assertThat(getJson("/api/v1/projects/" + projectId + "/personalization/views")).isNotEmpty();
+        JsonNode teamSavedView = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/views", objectMapper.createObjectNode()
+                .put("name", "Team shared work")
+                .put("viewType", "work_items")
+                .put("visibility", "team")
+                .put("teamId", reportingScope.teamId().toString())
+                .set("config", objectMapper.createObjectNode().put("teamId", reportingScope.teamId().toString())));
+        UUID teamSavedViewId = uuid(teamSavedView, "/id");
+        assertThat(uuid(teamSavedView, "/teamId")).isEqualTo(reportingScope.teamId());
         JsonNode favorite = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/favorites", objectMapper.createObjectNode()
                 .put("entityType", "work_item")
                 .put("entityId", storyId.toString()));
@@ -555,9 +620,12 @@ class WorkItemApiIntegrationTest {
         String viewerToken = login(viewerEmail, viewerPassword);
         accessToken = viewerToken;
         assertThat(get("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(404);
+        assertThat(get("/api/v1/personalization/views/" + teamSavedViewId).statusCode()).isEqualTo(404);
         accessToken = teamMemberToken;
         assertThat(get("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(200);
         assertThat(getJson("/api/v1/teams/" + reportingScope.teamId() + "/dashboards")).hasSize(1);
+        assertThat(get("/api/v1/personalization/views/" + teamSavedViewId).statusCode()).isEqualTo(200);
+        assertThat(getJson("/api/v1/teams/" + reportingScope.teamId() + "/personalization/views")).hasSize(1);
         accessToken = adminAccessToken;
         JsonNode projectInvitation = postJson("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
                 .put("email", "project-reporter-" + UUID.randomUUID() + "@example.com")
@@ -576,9 +644,11 @@ class WorkItemApiIntegrationTest {
         assertThat(get("/api/v1/workspaces/" + workspaceId + "/dashboards").statusCode()).isEqualTo(403);
         assertThat(get("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(200);
+        assertThat(get("/api/v1/personalization/views/" + projectSavedViewId).statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(200);
         assertThat(getJson("/api/v1/projects/" + projectId + "/dashboards")).isNotEmpty();
         assertThat(getJson("/api/v1/projects/" + projectId + "/saved-filters")).isNotEmpty();
+        assertThat(getJson("/api/v1/projects/" + projectId + "/personalization/views")).isNotEmpty();
         assertThat(getJson("/api/v1/projects/" + projectId + "/report-query-catalog")).isNotEmpty();
         assertThat(post("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
                 .put("name", "Project-only workspace dashboard")
@@ -603,6 +673,8 @@ class WorkItemApiIntegrationTest {
         assertThat(delete("/api/v1/personalization/recent-items/" + recentItemId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/personalization/favorites/" + favoriteId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/personalization/views/" + savedViewId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/personalization/views/" + projectSavedViewId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/personalization/views/" + teamSavedViewId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(204);
 

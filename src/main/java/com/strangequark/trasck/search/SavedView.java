@@ -30,6 +30,12 @@ public class SavedView {
     @Column(name = "owner_id")
     private UUID ownerId;
 
+    @Column(name = "project_id")
+    private UUID projectId;
+
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @Column(name = "name")
     private String name;
 
@@ -42,7 +48,6 @@ public class SavedView {
 
     @Column(name = "visibility")
     private String visibility;
-
 
     public UUID getId() {
         return id;
@@ -66,6 +71,22 @@ public class SavedView {
 
     public void setOwnerId(UUID ownerId) {
         this.ownerId = ownerId;
+    }
+
+    public UUID getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(UUID projectId) {
+        this.projectId = projectId;
+    }
+
+    public UUID getTeamId() {
+        return teamId;
+    }
+
+    public void setTeamId(UUID teamId) {
+        this.teamId = teamId;
     }
 
     public String getName() {

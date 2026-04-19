@@ -1,4 +1,5 @@
 package com.strangequark.trasck.workitem;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -20,6 +21,7 @@ public record WorkItemUpdateRequest(
         Integer estimateMinutes,
         Integer remainingMinutes,
         LocalDate startDate,
-        LocalDate dueDate
+        LocalDate dueDate,
+        Object customFields
 ) {
 }

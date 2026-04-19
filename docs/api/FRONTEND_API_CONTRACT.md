@@ -11,6 +11,7 @@ This document is the frontend-facing companion to generated OpenAPI. The backend
 - Timestamps are ISO-8601 strings with offset.
 - Errors use Spring's standard error body for now; frontend should branch mainly on HTTP status.
 - Generated OpenAPI: `GET /v3/api-docs`; Swagger UI: `GET /swagger-ui.html`.
+- Generated frontend client: run `npm run generate:api` from `trasck-frontend`. By default it reads `http://localhost:6100/v3/api-docs` and writes `src/api/generated/openapi.json` plus `src/api/generated/trasckApi.ts`.
 
 ## List Behavior
 
@@ -29,7 +30,7 @@ Small configuration or scoped-detail endpoints still return arrays:
 
 - Setup seed data, auth token lists, service-token lists.
 - Workspace/project configuration lists: teams, team memberships, project-team assignments, labels, boards, workflows, statuses, roles.
-- Dashboard, dashboard widget, saved filter, report query catalog, repository connection, agent provider/profile/credential lists, including workspace/project/team scoped dashboard/filter/catalog lists.
+- Dashboard, dashboard widget, saved filter, saved view, report query catalog, repository connection, agent provider/profile/credential lists, including workspace/project/team scoped dashboard/filter/view/catalog lists.
 - Work item collaboration lists: comments, links, watchers, work logs, labels, attachments.
 - Reporting history lists for one work item or one scoped report.
 
@@ -103,6 +104,43 @@ export interface WorkItem {
   deletedAt?: ISODateTime;
 }
 
+export interface ProjectWorkItemListQuery {
+  limit?: number;
+  cursor?: string;
+  customFieldKey?: string;
+  customFieldOperator?: "eq" | "ne" | "contains" | "not_contains" | "in" | "gt" | "gte" | "lt" | "lte" | "between";
+  customFieldValue?: string;
+  customFieldValueTo?: string;
+}
+
+export interface WorkItemCreateRequest {
+  typeId?: UUID;
+  typeKey?: string;
+  parentId?: UUID;
+  statusId?: UUID;
+  statusKey?: string;
+  priorityId?: UUID;
+  priorityKey?: string;
+  teamId?: UUID;
+  assigneeId?: UUID;
+  reporterId?: UUID;
+  title: string;
+  descriptionMarkdown?: string;
+  descriptionDocument?: JsonObject;
+  visibility?: WorkItem["visibility"];
+  estimatePoints?: number;
+  estimateMinutes?: number;
+  remainingMinutes?: number;
+  startDate?: ISODate;
+  dueDate?: ISODate;
+  customFields?: Record<string, unknown>;
+}
+
+export interface WorkItemUpdateRequest extends Partial<Omit<WorkItemCreateRequest, "statusId" | "statusKey">> {
+  clearParent?: boolean;
+  clearTeam?: boolean;
+}
+
 export interface Dashboard {
   id: UUID;
   workspaceId: UUID;
@@ -142,6 +180,18 @@ export interface SavedFilter {
   query: JsonObject;
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
+}
+
+export interface SavedView {
+  id: UUID;
+  workspaceId: UUID;
+  ownerId: UUID;
+  projectId?: UUID;
+  teamId?: UUID;
+  name: string;
+  viewType: string;
+  visibility: Dashboard["visibility"];
+  config: JsonObject;
 }
 
 export interface ReportQueryCatalogEntry {
@@ -306,7 +356,7 @@ export interface AgentTask {
 
 1. First setup: `POST /api/v1/setup`, then store IDs from `workspace`, `project`, `adminUser`, and `seedData`.
 2. Login: `POST /api/v1/auth/login`, then use `accessToken` as a Bearer token for local frontend development.
-3. Project work list: `GET /api/v1/projects/{projectId}/work-items?limit=50`, follow `nextCursor` for more pages, then `GET /api/v1/work-items/{workItemId}` for detail.
+3. Project work list: `GET /api/v1/projects/{projectId}/work-items?limit=50`, optionally add one typed custom-field filter, follow `nextCursor` for more pages, then `GET /api/v1/work-items/{workItemId}` for detail.
 4. Work item detail tabs: comments, links, watchers, work logs, labels, attachments, activity, and reporting history all hang off the selected work item ID.
 5. Dashboard builder: create a saved filter, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
 6. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
@@ -317,12 +367,31 @@ export interface AgentTask {
 
 - Setup: `POST /setup`
 - Auth: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation.
-- Work items: project list/create, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
+- Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
 - Teams/planning: team CRUD, memberships, project-team assignment, iteration CRUD, scope, commit, close, carryover.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
-- Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
+- Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
+
+## Custom Field Search
+
+`GET /api/v1/projects/{projectId}/work-items` accepts one custom-field predicate at a time:
+
+- `customFieldKey`: custom field key for a searchable field that applies to the project.
+- `customFieldOperator`: defaults to `eq`; use one of the operators below.
+- `customFieldValue`: required when filtering. For `in`, send a comma-separated string.
+- `customFieldValueTo`: required only with `between`.
+
+Supported operator groups:
+
+| Field Types | Operators |
+|---|---|
+| `text`, `textarea`, `single_select`, `user`, `url` | `eq`, `ne`, `contains`, `not_contains`, `in` |
+| `number`, `integer`, `date`, `datetime` | `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `between` |
+| `boolean` | `eq`, `ne` |
+| `multi_select` | `contains`, `not_contains`, `in` |
+| `json` | `eq`, `ne`; `customFieldValue` must be valid JSON text |
 
 ## Report Query Parameters
 

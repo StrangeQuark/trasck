@@ -14,7 +14,11 @@ import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
 import com.strangequark.trasck.workitem.WorkItemType;
 import com.strangequark.trasck.workitem.WorkItemTypeRepository;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -44,6 +48,18 @@ public class CustomFieldService {
             "json"
     );
     private static final List<String> SCREEN_OPERATIONS = List.of("create", "edit", "view");
+    private static final List<String> CUSTOM_FIELD_SEARCH_OPERATORS = List.of(
+            "eq",
+            "ne",
+            "contains",
+            "not_contains",
+            "in",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "between"
+    );
 
     private final ObjectMapper objectMapper;
     private final CustomFieldRepository customFieldRepository;
@@ -231,19 +247,7 @@ public class CustomFieldService {
         permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.update");
         CustomField field = activeFieldForItem(item, customFieldId);
         JsonNode value = toJsonNullable(valueRequest.value());
-        assertValueAllowed(field, item, value);
-        CustomFieldValue fieldValue = customFieldValueRepository.findByWorkItemIdAndCustomFieldId(item.getId(), field.getId())
-                .orElseGet(() -> {
-                    CustomFieldValue created = new CustomFieldValue();
-                    created.setWorkItemId(item.getId());
-                    created.setCustomFieldId(field.getId());
-                    return created;
-                });
-        fieldValue.setValue(value);
-        fieldValue.setUpdatedAt(OffsetDateTime.now());
-        CustomFieldValue saved = customFieldValueRepository.save(fieldValue);
-        recordWorkItemFieldEvent(item, field, "work_item.custom_field_value_updated", actorId);
-        return CustomFieldValueResponse.from(saved, field);
+        return setValueInternal(item, field, value, actorId);
     }
 
     @Transactional
@@ -252,13 +256,54 @@ public class CustomFieldService {
         WorkItem item = activeWorkItem(workItemId);
         permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.update");
         CustomField field = activeFieldForItem(item, customFieldId);
-        if (isRequiredForItem(field, item)) {
-            throw badRequest("Cannot clear a required custom field value");
+        deleteValueInternal(item, field, actorId, true);
+    }
+
+    public void applyRequestedValues(WorkItem item, Object customFields, UUID actorId) {
+        if (customFields == null) {
+            return;
         }
-        CustomFieldValue value = customFieldValueRepository.findByWorkItemIdAndCustomFieldId(item.getId(), field.getId())
-                .orElseThrow(() -> notFound("Custom field value not found"));
-        customFieldValueRepository.delete(value);
-        recordWorkItemFieldEvent(item, field, "work_item.custom_field_value_deleted", actorId);
+        JsonNode values = toJsonNullable(customFields);
+        if (values == null || values.isNull()) {
+            return;
+        }
+        if (!values.isObject()) {
+            throw badRequest("customFields must be a JSON object keyed by custom field key or ID");
+        }
+        values.fields().forEachRemaining(entry -> {
+            CustomField field = activeFieldForItem(item, entry.getKey());
+            JsonNode value = entry.getValue();
+            if (value == null || value.isNull()) {
+                deleteValueInternal(item, field, actorId, false);
+            } else {
+                setValueInternal(item, field, value, actorId);
+            }
+        });
+    }
+
+    public void enforceRequiredScreenFields(WorkItem item, String operation) {
+        ScreenAssignment assignment = screenAssignmentRepository.findApplicable(
+                        item.getWorkspaceId(),
+                        item.getProjectId(),
+                        item.getTypeId(),
+                        requiredText(operation, "operation").toLowerCase()
+                ).stream()
+                .findFirst()
+                .orElse(null);
+        if (assignment == null) {
+            return;
+        }
+        List<ScreenField> fields = screenFieldRepository.findByScreenIdOrderByPositionAsc(assignment.getScreenId());
+        for (ScreenField field : fields) {
+            if (!Boolean.TRUE.equals(field.getRequired())) {
+                continue;
+            }
+            if (field.getCustomFieldId() != null) {
+                enforceRequiredCustomScreenField(item, field.getCustomFieldId());
+            } else if (hasText(field.getSystemFieldKey())) {
+                enforceRequiredSystemScreenField(item, field.getSystemFieldKey());
+            }
+        }
     }
 
     @Transactional(readOnly = true)
@@ -423,7 +468,13 @@ public class CustomFieldService {
         recordScreenEvent(screen, "screen.assignment_deleted", actorId);
     }
 
-    public UUID resolveSearchableFieldIdForProject(Project project, String customFieldKey) {
+    public CustomFieldSearchFilter resolveSearchableFieldForProject(
+            Project project,
+            String customFieldKey,
+            String customFieldOperator,
+            String customFieldValue,
+            String customFieldValueTo
+    ) {
         CustomField field = customFieldRepository.findByWorkspaceIdAndKeyIgnoreCase(project.getWorkspaceId(), requiredText(customFieldKey, "customFieldKey"))
                 .orElseThrow(() -> badRequest("Searchable custom field not found"));
         if (Boolean.TRUE.equals(field.getArchived()) || !Boolean.TRUE.equals(field.getSearchable())) {
@@ -435,7 +486,9 @@ public class CustomFieldService {
         if (!applies) {
             throw badRequest("Custom field does not apply to this project");
         }
-        return field.getId();
+        String operator = normalizeSearchOperator(customFieldOperator);
+        List<String> values = normalizeSearchValues(field, operator, customFieldValue, customFieldValueTo);
+        return new CustomFieldSearchFilter(field.getId(), field.getKey(), field.getFieldType(), operator, values);
     }
 
     private void applyCustomFieldRequest(CustomField field, CustomFieldRequest request, boolean create) {
@@ -563,6 +616,49 @@ public class CustomFieldService {
         return field;
     }
 
+    private CustomField activeFieldForItem(WorkItem item, String customFieldReference) {
+        String reference = requiredText(customFieldReference, "customField reference");
+        try {
+            return activeFieldForItem(item, UUID.fromString(reference));
+        } catch (IllegalArgumentException ignored) {
+            CustomField field = customFieldRepository.findByWorkspaceIdAndKeyIgnoreCase(item.getWorkspaceId(), reference)
+                    .orElseThrow(() -> badRequest("Custom field does not belong to this work item workspace"));
+            return activeFieldForItem(item, field.getId());
+        }
+    }
+
+    private CustomFieldValueResponse setValueInternal(WorkItem item, CustomField field, JsonNode value, UUID actorId) {
+        assertValueAllowed(field, item, value);
+        CustomFieldValue fieldValue = customFieldValueRepository.findByWorkItemIdAndCustomFieldId(item.getId(), field.getId())
+                .orElseGet(() -> {
+                    CustomFieldValue created = new CustomFieldValue();
+                    created.setWorkItemId(item.getId());
+                    created.setCustomFieldId(field.getId());
+                    return created;
+                });
+        fieldValue.setValue(value);
+        fieldValue.setUpdatedAt(OffsetDateTime.now());
+        CustomFieldValue saved = customFieldValueRepository.save(fieldValue);
+        recordWorkItemFieldEvent(item, field, "work_item.custom_field_value_updated", actorId);
+        return CustomFieldValueResponse.from(saved, field);
+    }
+
+    private void deleteValueInternal(WorkItem item, CustomField field, UUID actorId, boolean requireExisting) {
+        if (isRequiredForItem(field, item)) {
+            throw badRequest("Cannot clear a required custom field value");
+        }
+        CustomFieldValue value = customFieldValueRepository.findByWorkItemIdAndCustomFieldId(item.getId(), field.getId())
+                .orElse(null);
+        if (value == null) {
+            if (requireExisting) {
+                throw notFound("Custom field value not found");
+            }
+            return;
+        }
+        customFieldValueRepository.delete(value);
+        recordWorkItemFieldEvent(item, field, "work_item.custom_field_value_deleted", actorId);
+    }
+
     private void assertValueAllowed(CustomField field, WorkItem item, JsonNode value) {
         if (isRequiredForItem(field, item) && (value == null || value.isNull())) {
             throw badRequest("value is required for this custom field");
@@ -589,6 +685,54 @@ public class CustomFieldService {
                 .anyMatch(context -> Boolean.TRUE.equals(context.getRequired()));
     }
 
+    private void enforceRequiredCustomScreenField(WorkItem item, UUID customFieldId) {
+        CustomField field = activeFieldForItem(item, customFieldId);
+        CustomFieldValue value = customFieldValueRepository.findByWorkItemIdAndCustomFieldId(item.getId(), field.getId())
+                .orElse(null);
+        if (value == null || !hasRequiredValue(value.getValue())) {
+            throw badRequest("Required custom field is missing: " + field.getKey());
+        }
+    }
+
+    private void enforceRequiredSystemScreenField(WorkItem item, String systemFieldKey) {
+        String key = normalizeSystemFieldKey(systemFieldKey);
+        boolean present = switch (key) {
+            case "title" -> hasText(item.getTitle());
+            case "description", "description_markdown" -> hasText(item.getDescriptionMarkdown());
+            case "description_document" -> hasRequiredValue(item.getDescriptionDocument());
+            case "type", "type_id" -> item.getTypeId() != null;
+            case "parent", "parent_id" -> item.getParentId() != null;
+            case "status", "status_id" -> item.getStatusId() != null;
+            case "priority", "priority_id" -> item.getPriorityId() != null;
+            case "team", "team_id" -> item.getTeamId() != null;
+            case "assignee", "assignee_id" -> item.getAssigneeId() != null;
+            case "reporter", "reporter_id" -> item.getReporterId() != null;
+            case "estimate_points" -> item.getEstimatePoints() != null;
+            case "estimate_minutes" -> item.getEstimateMinutes() != null;
+            case "remaining_minutes" -> item.getRemainingMinutes() != null;
+            case "start_date" -> item.getStartDate() != null;
+            case "due_date" -> item.getDueDate() != null;
+            case "visibility" -> hasText(item.getVisibility());
+            default -> throw badRequest("Unsupported required system field: " + systemFieldKey);
+        };
+        if (!present) {
+            throw badRequest("Required system field is missing: " + systemFieldKey);
+        }
+    }
+
+    private boolean hasRequiredValue(JsonNode value) {
+        if (value == null || value.isNull() || value.isMissingNode()) {
+            return false;
+        }
+        if (value.isTextual()) {
+            return hasText(value.asText());
+        }
+        if (value.isArray() || value.isObject()) {
+            return !value.isEmpty();
+        }
+        return true;
+    }
+
     private boolean contextApplies(CustomFieldContext context, WorkItem item) {
         return (context.getProjectId() == null || context.getProjectId().equals(item.getProjectId()))
                 && (context.getWorkItemTypeId() == null || context.getWorkItemTypeId().equals(item.getTypeId()));
@@ -596,10 +740,22 @@ public class CustomFieldService {
 
     private void validateValueType(CustomField field, JsonNode value) {
         switch (field.getFieldType()) {
-            case "text", "textarea", "single_select", "user", "url", "date", "datetime" -> {
+            case "text", "textarea", "single_select", "user", "url" -> {
                 if (!value.isTextual()) {
                     throw badRequest("value must be a string for " + field.getFieldType() + " custom fields");
                 }
+            }
+            case "date" -> {
+                if (!value.isTextual()) {
+                    throw badRequest("value must be a string for date custom fields");
+                }
+                parseDate(value.asText(), "value must be an ISO-8601 date");
+            }
+            case "datetime" -> {
+                if (!value.isTextual()) {
+                    throw badRequest("value must be a string for datetime custom fields");
+                }
+                parseDateTime(value.asText(), "value must be an ISO-8601 datetime with offset");
             }
             case "number" -> {
                 if (!value.isNumber()) {
@@ -711,6 +867,141 @@ public class CustomFieldService {
             throw badRequest("fieldType must be one of " + String.join(", ", FIELD_TYPES));
         }
         return normalized;
+    }
+
+    private String normalizeSearchOperator(String operator) {
+        String normalized = hasText(operator) ? operator.trim().toLowerCase() : "eq";
+        if ("neq".equals(normalized)) {
+            normalized = "ne";
+        }
+        if (!CUSTOM_FIELD_SEARCH_OPERATORS.contains(normalized)) {
+            throw badRequest("customFieldOperator must be one of " + String.join(", ", CUSTOM_FIELD_SEARCH_OPERATORS));
+        }
+        return normalized;
+    }
+
+    private List<String> normalizeSearchValues(CustomField field, String operator, String customFieldValue, String customFieldValueTo) {
+        if ("between".equals(operator)) {
+            String from = requiredText(customFieldValue, "customFieldValue");
+            String to = requiredText(customFieldValueTo, "customFieldValueTo");
+            validateSearchValue(field, operator, from);
+            validateSearchValue(field, operator, to);
+            return List.of(from, to);
+        }
+        if (hasText(customFieldValueTo)) {
+            throw badRequest("customFieldValueTo is only valid with the between customFieldOperator");
+        }
+        String value = requiredText(customFieldValue, "customFieldValue");
+        if ("in".equals(operator)) {
+            List<String> values = Arrays.stream(value.split(","))
+                    .map(String::trim)
+                    .filter(this::hasText)
+                    .toList();
+            if (values.isEmpty()) {
+                throw badRequest("customFieldValue must contain at least one value for the in customFieldOperator");
+            }
+            values.forEach(entry -> validateSearchValue(field, operator, entry));
+            return values;
+        }
+        validateSearchValue(field, operator, value);
+        return List.of(value);
+    }
+
+    private void validateSearchValue(CustomField field, String operator, String value) {
+        switch (field.getFieldType()) {
+            case "text", "textarea", "single_select", "user", "url" -> {
+                if (!List.of("eq", "ne", "contains", "not_contains", "in").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for " + field.getFieldType() + " custom fields");
+                }
+            }
+            case "number" -> {
+                if (!List.of("eq", "ne", "in", "gt", "gte", "lt", "lte", "between").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for number custom fields");
+                }
+                parseDecimal(value, "customFieldValue must be a number");
+            }
+            case "integer" -> {
+                if (!List.of("eq", "ne", "in", "gt", "gte", "lt", "lte", "between").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for integer custom fields");
+                }
+                BigDecimal parsed = parseDecimal(value, "customFieldValue must be an integer");
+                if (parsed.stripTrailingZeros().scale() > 0) {
+                    throw badRequest("customFieldValue must be an integer");
+                }
+            }
+            case "boolean" -> {
+                if (!List.of("eq", "ne").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for boolean custom fields");
+                }
+                parseBoolean(value);
+            }
+            case "date" -> {
+                if (!List.of("eq", "ne", "in", "gt", "gte", "lt", "lte", "between").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for date custom fields");
+                }
+                parseDate(value, "customFieldValue must be an ISO-8601 date");
+            }
+            case "datetime" -> {
+                if (!List.of("eq", "ne", "in", "gt", "gte", "lt", "lte", "between").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for datetime custom fields");
+                }
+                parseDateTime(value, "customFieldValue must be an ISO-8601 datetime with offset");
+            }
+            case "multi_select" -> {
+                if (!List.of("contains", "not_contains", "in").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for multi_select custom fields");
+                }
+            }
+            case "json" -> {
+                if (!List.of("eq", "ne").contains(operator)) {
+                    throw badRequest("customFieldOperator is not supported for json custom fields");
+                }
+                parseJson(value, "customFieldValue must be valid JSON for json custom fields");
+            }
+            default -> throw badRequest("Unsupported custom field type");
+        }
+    }
+
+    private String normalizeSystemFieldKey(String key) {
+        return requiredText(key, "systemFieldKey").trim().toLowerCase().replace('-', '_');
+    }
+
+    private BigDecimal parseDecimal(String value, String message) {
+        try {
+            return new BigDecimal(value);
+        } catch (NumberFormatException ex) {
+            throw badRequest(message);
+        }
+    }
+
+    private void parseBoolean(String value) {
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw badRequest("customFieldValue must be true or false");
+        }
+    }
+
+    private void parseDate(String value, String message) {
+        try {
+            LocalDate.parse(value);
+        } catch (DateTimeParseException ex) {
+            throw badRequest(message);
+        }
+    }
+
+    private void parseDateTime(String value, String message) {
+        try {
+            OffsetDateTime.parse(value);
+        } catch (DateTimeParseException ex) {
+            throw badRequest(message);
+        }
+    }
+
+    private void parseJson(String value, String message) {
+        try {
+            objectMapper.readTree(value);
+        } catch (Exception ex) {
+            throw badRequest(message);
+        }
     }
 
     private void recordFieldEvent(CustomField field, String eventType, UUID actorId) {

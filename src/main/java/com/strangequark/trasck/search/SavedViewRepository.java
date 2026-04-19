@@ -13,9 +13,13 @@ public interface SavedViewRepository extends JpaRepository<SavedView, UUID> {
             where savedView.workspaceId = :workspaceId
               and (
                   savedView.ownerId = :userId
-                  or savedView.visibility in ('workspace', 'public')
+                  or savedView.visibility in ('team', 'project', 'workspace', 'public')
               )
             order by savedView.name asc
             """)
     List<SavedView> findVisibleCandidates(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
+
+    List<SavedView> findByWorkspaceIdAndVisibilityAndProjectIdOrderByNameAsc(UUID workspaceId, String visibility, UUID projectId);
+
+    List<SavedView> findByWorkspaceIdAndVisibilityAndTeamIdOrderByNameAsc(UUID workspaceId, String visibility, UUID teamId);
 }
