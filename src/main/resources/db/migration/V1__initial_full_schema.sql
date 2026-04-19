@@ -1035,6 +1035,13 @@ create table agent_profiles (
     unique (provider_id, user_id)
 );
 
+create table agent_profile_projects (
+    agent_profile_id uuid not null references agent_profiles(id) on delete cascade,
+    project_id uuid not null references projects(id) on delete cascade,
+    created_at timestamptz not null default now(),
+    primary key (agent_profile_id, project_id)
+);
+
 create table repository_connections (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
@@ -1472,6 +1479,7 @@ create index ix_agent_tasks_work_item_queued_at on agent_tasks(work_item_id, que
 create unique index ux_agent_tasks_provider_external on agent_tasks(provider_id, external_task_id) where external_task_id is not null;
 create index ix_agent_task_events_task_created_at on agent_task_events(agent_task_id, created_at);
 create index ix_agent_artifacts_task_type on agent_artifacts(agent_task_id, artifact_type);
+create index ix_agent_profile_projects_project on agent_profile_projects(project_id);
 create index ix_repository_connections_workspace_project on repository_connections(workspace_id, project_id);
 create index ix_external_references_entity on external_references(entity_type, entity_id);
 create index ix_import_job_records_job_status on import_job_records(import_job_id, status);

@@ -10,6 +10,8 @@ import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistory;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistoryRepository;
+import com.strangequark.trasck.reporting.WorkItemEstimateHistory;
+import com.strangequark.trasck.reporting.WorkItemEstimateHistoryRepository;
 import com.strangequark.trasck.reporting.WorkItemStatusHistory;
 import com.strangequark.trasck.reporting.WorkItemStatusHistoryRepository;
 import com.strangequark.trasck.workflow.WorkflowAssignment;
@@ -20,6 +22,7 @@ import com.strangequark.trasck.workflow.WorkflowTransition;
 import com.strangequark.trasck.workflow.WorkflowTransitionAction;
 import com.strangequark.trasck.workflow.WorkflowTransitionActionRepository;
 import com.strangequark.trasck.workflow.WorkflowTransitionRepository;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -46,6 +49,7 @@ public class WorkItemService {
     private final WorkflowTransitionActionRepository workflowTransitionActionRepository;
     private final WorkItemStatusHistoryRepository workItemStatusHistoryRepository;
     private final WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository;
+    private final WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository;
     private final WorkItemSequenceService workItemSequenceService;
     private final WorkItemRankService workItemRankService;
     private final DomainEventService domainEventService;
@@ -68,6 +72,7 @@ public class WorkItemService {
             WorkflowTransitionActionRepository workflowTransitionActionRepository,
             WorkItemStatusHistoryRepository workItemStatusHistoryRepository,
             WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository,
+            WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository,
             WorkItemSequenceService workItemSequenceService,
             WorkItemRankService workItemRankService,
             DomainEventService domainEventService,
@@ -89,6 +94,7 @@ public class WorkItemService {
         this.workflowTransitionActionRepository = workflowTransitionActionRepository;
         this.workItemStatusHistoryRepository = workItemStatusHistoryRepository;
         this.workItemAssignmentHistoryRepository = workItemAssignmentHistoryRepository;
+        this.workItemEstimateHistoryRepository = workItemEstimateHistoryRepository;
         this.workItemSequenceService = workItemSequenceService;
         this.workItemRankService = workItemRankService;
         this.domainEventService = domainEventService;
@@ -144,6 +150,7 @@ public class WorkItemService {
         if (saved.getAssigneeId() != null) {
             writeAssignmentHistory(saved.getId(), null, saved.getAssigneeId(), actorId);
         }
+        writeInitialEstimateHistory(saved, actorId);
         recordEvent(saved, "work_item.created", actorId);
         return WorkItemResponse.from(saved);
     }
@@ -175,6 +182,9 @@ public class WorkItemService {
         permissionService.requireProjectPermission(actorId, project.getId(), "work_item.update");
         UUID oldParentId = item.getParentId();
         UUID oldTypeId = item.getTypeId();
+        BigDecimal oldEstimatePoints = item.getEstimatePoints();
+        Integer oldEstimateMinutes = item.getEstimateMinutes();
+        Integer oldRemainingMinutes = item.getRemainingMinutes();
 
         if (updateRequest.typeId() != null || hasText(updateRequest.typeKey())) {
             WorkItemType type = resolveType(project.getWorkspaceId(), updateRequest.typeId(), updateRequest.typeKey());
@@ -234,6 +244,9 @@ public class WorkItemService {
         if (!same(oldTypeId, saved.getTypeId())) {
             recordEvent(saved, "work_item.type_changed", actorId);
         }
+        writeEstimateHistoryIfChanged(saved.getId(), "points", oldEstimatePoints, saved.getEstimatePoints(), actorId);
+        writeEstimateHistoryIfChanged(saved.getId(), "minutes", toBigDecimal(oldEstimateMinutes), toBigDecimal(saved.getEstimateMinutes()), actorId);
+        writeEstimateHistoryIfChanged(saved.getId(), "remaining_minutes", toBigDecimal(oldRemainingMinutes), toBigDecimal(saved.getRemainingMinutes()), actorId);
         recordEvent(saved, "work_item.updated", actorId);
         return WorkItemResponse.from(saved);
     }
@@ -453,6 +466,34 @@ public class WorkItemService {
         workItemAssignmentHistoryRepository.save(history);
     }
 
+    private void writeInitialEstimateHistory(WorkItem item, UUID actorId) {
+        if (item.getEstimatePoints() != null) {
+            writeEstimateHistory(item.getId(), "points", null, item.getEstimatePoints(), actorId);
+        }
+        if (item.getEstimateMinutes() != null) {
+            writeEstimateHistory(item.getId(), "minutes", null, toBigDecimal(item.getEstimateMinutes()), actorId);
+        }
+        if (item.getRemainingMinutes() != null) {
+            writeEstimateHistory(item.getId(), "remaining_minutes", null, toBigDecimal(item.getRemainingMinutes()), actorId);
+        }
+    }
+
+    private void writeEstimateHistoryIfChanged(UUID workItemId, String estimateType, BigDecimal oldValue, BigDecimal newValue, UUID actorId) {
+        if (!sameDecimal(oldValue, newValue)) {
+            writeEstimateHistory(workItemId, estimateType, oldValue, newValue, actorId);
+        }
+    }
+
+    private void writeEstimateHistory(UUID workItemId, String estimateType, BigDecimal oldValue, BigDecimal newValue, UUID actorId) {
+        WorkItemEstimateHistory history = new WorkItemEstimateHistory();
+        history.setWorkItemId(workItemId);
+        history.setEstimateType(estimateType);
+        history.setOldValue(oldValue);
+        history.setNewValue(newValue);
+        history.setChangedById(actorId);
+        workItemEstimateHistoryRepository.save(history);
+    }
+
     private void rebuildClosure(UUID projectId) {
         jdbcTemplate.update("""
                 delete from work_item_closure
@@ -533,6 +574,17 @@ public class WorkItemService {
 
     private boolean same(UUID left, UUID right) {
         return left == null ? right == null : left.equals(right);
+    }
+
+    private boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null) {
+            return left == null && right == null;
+        }
+        return left.compareTo(right) == 0;
+    }
+
+    private BigDecimal toBigDecimal(Integer value) {
+        return value == null ? null : BigDecimal.valueOf(value.longValue());
     }
 
     private UUID firstNonNull(UUID first, UUID second) {

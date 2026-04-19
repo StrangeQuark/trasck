@@ -156,6 +156,34 @@ public class WorkItemController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/work-items/{workItemId}/work-logs")
+    public List<WorkLogResponse> listWorkLogs(@PathVariable UUID workItemId) {
+        return collaborationService.listWorkLogs(workItemId);
+    }
+
+    @PostMapping("/work-items/{workItemId}/work-logs")
+    public ResponseEntity<WorkLogResponse> createWorkLog(
+            @PathVariable UUID workItemId,
+            @RequestBody WorkLogRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(collaborationService.createWorkLog(workItemId, request));
+    }
+
+    @PatchMapping("/work-items/{workItemId}/work-logs/{workLogId}")
+    public WorkLogResponse updateWorkLog(
+            @PathVariable UUID workItemId,
+            @PathVariable UUID workLogId,
+            @RequestBody WorkLogRequest request
+    ) {
+        return collaborationService.updateWorkLog(workItemId, workLogId, request);
+    }
+
+    @DeleteMapping("/work-items/{workItemId}/work-logs/{workLogId}")
+    public ResponseEntity<Void> deleteWorkLog(@PathVariable UUID workItemId, @PathVariable UUID workLogId) {
+        collaborationService.deleteWorkLog(workItemId, workLogId);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/workspaces/{workspaceId}/labels")
     public List<LabelResponse> listWorkspaceLabels(@PathVariable UUID workspaceId) {
         return collaborationService.listWorkspaceLabels(workspaceId);

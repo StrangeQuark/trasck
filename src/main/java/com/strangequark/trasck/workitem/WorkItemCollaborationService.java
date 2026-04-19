@@ -13,6 +13,8 @@ import com.strangequark.trasck.activity.CommentRepository;
 import com.strangequark.trasck.activity.Watcher;
 import com.strangequark.trasck.activity.WatcherId;
 import com.strangequark.trasck.activity.WatcherRepository;
+import com.strangequark.trasck.activity.WorkLog;
+import com.strangequark.trasck.activity.WorkLogRepository;
 import com.strangequark.trasck.activity.WorkItemAttachment;
 import com.strangequark.trasck.activity.WorkItemAttachmentId;
 import com.strangequark.trasck.activity.WorkItemAttachmentRepository;
@@ -23,6 +25,7 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -40,6 +43,7 @@ public class WorkItemCollaborationService {
     private final CommentRepository commentRepository;
     private final WorkItemLinkRepository workItemLinkRepository;
     private final WatcherRepository watcherRepository;
+    private final WorkLogRepository workLogRepository;
     private final LabelRepository labelRepository;
     private final WorkItemLabelRepository workItemLabelRepository;
     private final AttachmentRepository attachmentRepository;
@@ -57,6 +61,7 @@ public class WorkItemCollaborationService {
             CommentRepository commentRepository,
             WorkItemLinkRepository workItemLinkRepository,
             WatcherRepository watcherRepository,
+            WorkLogRepository workLogRepository,
             LabelRepository labelRepository,
             WorkItemLabelRepository workItemLabelRepository,
             AttachmentRepository attachmentRepository,
@@ -73,6 +78,7 @@ public class WorkItemCollaborationService {
         this.commentRepository = commentRepository;
         this.workItemLinkRepository = workItemLinkRepository;
         this.watcherRepository = watcherRepository;
+        this.workLogRepository = workLogRepository;
         this.labelRepository = labelRepository;
         this.workItemLabelRepository = workItemLabelRepository;
         this.attachmentRepository = attachmentRepository;
@@ -220,6 +226,77 @@ public class WorkItemCollaborationService {
             watcherRepository.deleteById(id);
             recordWorkItemEvent(item, "work_item.watcher_removed", actorId, "watcherUserId", userId);
         }
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkLogResponse> listWorkLogs(UUID workItemId) {
+        WorkItem item = readableWorkItem(workItemId);
+        requireProjectPermission(item, "work_item.read");
+        return workLogRepository.findByWorkItemIdAndDeletedAtIsNullOrderByWorkDateDescCreatedAtDesc(workItemId).stream()
+                .map(WorkLogResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public WorkLogResponse createWorkLog(UUID workItemId, WorkLogRequest request) {
+        WorkItem item = readableWorkItem(workItemId);
+        UUID actorId = requireProjectPermission(item, "work_item.update");
+        WorkLogRequest createRequest = required(request, "request");
+        UUID loggedUserId = firstNonNull(createRequest.userId(), actorId);
+        activeUser(loggedUserId);
+
+        WorkLog workLog = new WorkLog();
+        workLog.setWorkItemId(item.getId());
+        workLog.setUserId(loggedUserId);
+        workLog.setMinutesSpent(positiveMinutes(createRequest.minutesSpent()));
+        workLog.setWorkDate(firstNonNull(createRequest.workDate(), LocalDate.now()));
+        workLog.setStartedAt(createRequest.startedAt());
+        workLog.setDescriptionMarkdown(createRequest.descriptionMarkdown());
+        workLog.setDescriptionDocument(toJsonNode(createRequest.descriptionDocument()));
+        WorkLog saved = workLogRepository.save(workLog);
+        recordWorkLogEvent(item, "work_item.work_logged", actorId, saved);
+        return WorkLogResponse.from(saved);
+    }
+
+    @Transactional
+    public WorkLogResponse updateWorkLog(UUID workItemId, UUID workLogId, WorkLogRequest request) {
+        WorkItem item = readableWorkItem(workItemId);
+        UUID actorId = requireProjectPermission(item, "work_item.update");
+        WorkLogRequest updateRequest = required(request, "request");
+        WorkLog workLog = workLogRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(workLogId, workItemId)
+                .orElseThrow(() -> notFound("Work log not found"));
+        if (updateRequest.userId() != null) {
+            activeUser(updateRequest.userId());
+            workLog.setUserId(updateRequest.userId());
+        }
+        if (updateRequest.minutesSpent() != null) {
+            workLog.setMinutesSpent(positiveMinutes(updateRequest.minutesSpent()));
+        }
+        if (updateRequest.workDate() != null) {
+            workLog.setWorkDate(updateRequest.workDate());
+        }
+        if (updateRequest.startedAt() != null) {
+            workLog.setStartedAt(updateRequest.startedAt());
+        }
+        if (updateRequest.descriptionMarkdown() != null) {
+            workLog.setDescriptionMarkdown(updateRequest.descriptionMarkdown());
+        }
+        if (updateRequest.descriptionDocument() != null) {
+            workLog.setDescriptionDocument(toJsonNode(updateRequest.descriptionDocument()));
+        }
+        WorkLog saved = workLogRepository.save(workLog);
+        recordWorkLogEvent(item, "work_item.work_log_updated", actorId, saved);
+        return WorkLogResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteWorkLog(UUID workItemId, UUID workLogId) {
+        WorkItem item = readableWorkItem(workItemId);
+        UUID actorId = requireProjectPermission(item, "work_item.update");
+        WorkLog workLog = workLogRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(workLogId, workItemId)
+                .orElseThrow(() -> notFound("Work log not found"));
+        workLog.setDeletedAt(OffsetDateTime.now());
+        recordWorkLogEvent(item, "work_item.work_log_deleted", actorId, workLog);
     }
 
     @Transactional(readOnly = true)
@@ -482,6 +559,18 @@ public class WorkItemCollaborationService {
         domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), eventType, payload);
     }
 
+    private void recordWorkLogEvent(WorkItem item, String eventType, UUID actorId, WorkLog workLog) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workItemId", item.getId().toString())
+                .put("workItemKey", item.getKey())
+                .put("projectId", item.getProjectId().toString())
+                .put("actorUserId", actorId.toString())
+                .put("workLogId", workLog.getId().toString())
+                .put("loggedUserId", workLog.getUserId() == null ? "" : workLog.getUserId().toString())
+                .put("minutesSpent", workLog.getMinutesSpent());
+        domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), eventType, payload);
+    }
+
     private void recordLabelEvent(Label label, String eventType, UUID actorId) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("labelId", label.getId().toString())
@@ -541,6 +630,18 @@ public class WorkItemCollaborationService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " is required");
         }
         return value.trim();
+    }
+
+    private int positiveMinutes(Integer minutesSpent) {
+        Integer minutes = required(minutesSpent, "minutesSpent");
+        if (minutes <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "minutesSpent must be greater than 0");
+        }
+        return minutes;
+    }
+
+    private <T> T firstNonNull(T first, T second) {
+        return first == null ? second : first;
     }
 
     private String blankToNull(String value) {

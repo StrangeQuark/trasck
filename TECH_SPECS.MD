@@ -1,6 +1,6 @@
 # Trasck Technical Specifications
 
-Last reviewed: 2026-04-18
+Last reviewed: 2026-04-19
 
 ## Purpose
 
@@ -45,7 +45,7 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 33. Personal and service API token scopes are enforced in addition to role permissions. A token can reduce access but cannot grant permissions beyond the backing user's workspace/project roles.
 34. Service-token-backed `service` users should be managed through dedicated service-token/admin surfaces by default, not mixed into normal human user/member lists.
 35. Work item attachment bytes use a provider-neutral storage interface. Local filesystem storage is the default development provider; S3-compatible object storage is selected through workspace storage configuration.
-36. The first AI provider adapter should be a stub/local implementation to prove the provider-neutral lifecycle before adding Codex-specific, Claude-specific, or hosted-provider behavior.
+36. AI provider adapters start with non-external stubs for `simulated`, `codex`, and `claude_code` so the provider-neutral lifecycle, callback security, profile scoping, and tests are stable before any real hosted or local agent execution is enabled.
 
 ## Full Work Hierarchy
 
@@ -173,6 +173,7 @@ Implemented endpoints:
 - `GET /api/v1/work-items/{workItemId}/comments`, `POST /api/v1/work-items/{workItemId}/comments`, `PATCH /api/v1/work-items/{workItemId}/comments/{commentId}`, and `DELETE /api/v1/work-items/{workItemId}/comments/{commentId}` manage work item comments.
 - `GET /api/v1/work-items/{workItemId}/links`, `POST /api/v1/work-items/{workItemId}/links`, and `DELETE /api/v1/work-items/{workItemId}/links/{linkId}` manage non-hierarchical work item links.
 - `GET /api/v1/work-items/{workItemId}/watchers`, `POST /api/v1/work-items/{workItemId}/watchers`, and `DELETE /api/v1/work-items/{workItemId}/watchers/{userId}` manage work item watchers.
+- `GET /api/v1/work-items/{workItemId}/work-logs`, `POST /api/v1/work-items/{workItemId}/work-logs`, `PATCH /api/v1/work-items/{workItemId}/work-logs/{workLogId}`, and `DELETE /api/v1/work-items/{workItemId}/work-logs/{workLogId}` manage time tracking entries with rich description payloads and soft delete.
 - `GET /api/v1/workspaces/{workspaceId}/labels`, `POST /api/v1/workspaces/{workspaceId}/labels`, `GET /api/v1/work-items/{workItemId}/labels`, `POST /api/v1/work-items/{workItemId}/labels`, and `DELETE /api/v1/work-items/{workItemId}/labels/{labelId}` manage workspace labels and work item label assignments.
 - `GET /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments`, `POST /api/v1/work-items/{workItemId}/attachments/files`, `GET /api/v1/work-items/{workItemId}/attachments/{attachmentId}/download`, and `DELETE /api/v1/work-items/{workItemId}/attachments/{attachmentId}` manage attachment metadata and file bytes for work items.
 - `GET /api/v1/work-items/{workItemId}/activity`, `GET /api/v1/workspaces/{workspaceId}/projects/{projectId}/activity`, and `GET /api/v1/workspaces/{workspaceId}/activity` expose durable activity projections for work-item, project, and workspace streams.
@@ -210,7 +211,8 @@ Security state:
 - Activity streams use service-layer permission checks for the requested workspace, project, or work item.
 - Audit log, audit retention, and domain event replay APIs are workspace-admin-only through method-level permission checks.
 - Agent management uses explicit service-layer permission checks. Workspace Admins and the seeded Agent Manager role can manage providers, credentials, profiles, assignments, tasks, and repository connections according to their role grants.
-- Agent callback endpoints are open at the HTTP security layer but require a valid signed callback JWT in `X-Trasck-Agent-Callback-Jwt`. The assertion is scoped to the workspace, provider, provider key, agent profile, and agent task before any state change is accepted.
+- Agent callback endpoints are open at the HTTP security layer but require a valid signed callback JWT in `X-Trasck-Agent-Callback-Jwt`. Callback JWTs use per-provider RS256 key material stored under provider config as JWKS-style public keys plus private signing material, with private keys redacted from API responses. The assertion is scoped to the workspace, provider, provider key, agent profile, and agent task before any state change is accepted.
+- Agent profiles can be workspace-wide or project-scoped through `agent_profile_projects`; scoped profiles cannot be assigned outside their allowed projects.
 
 Work item implementation state:
 
@@ -218,7 +220,9 @@ Work item implementation state:
 - Parent changes rebuild `work_item_closure` transactionally for the project.
 - Sequence allocation uses durable project and workspace sequence counter tables.
 - Work item rank uses fixed-width sortable strings.
-- Work item collaboration APIs cover comments, links, watchers, labels, attachment metadata, and attachment byte upload/download/delete. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, storage configuration, checksums, and common bad inputs before database constraints are hit.
+- Work item collaboration APIs cover comments, links, watchers, work logs, labels, attachment metadata, and attachment byte upload/download/delete. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, storage configuration, checksums, and common bad inputs before database constraints are hit.
+- Work log APIs write `work_logs` rows with positive minutes, work dates, optional start timestamps, Markdown/body-document descriptions, soft delete, and durable `work_item.work_logged`, `work_item.work_log_updated`, and `work_item.work_log_deleted` events.
+- Work item create/update writes reporting history for status, assignment, and estimate changes. Estimate history records `points`, `minutes`, and `remaining_minutes` changes in `work_item_estimate_history`.
 - Attachment byte storage is behind a provider-neutral storage interface. The first providers are local filesystem storage for development and S3-compatible object storage selected by workspace attachment storage configuration. Local filesystem roots default from `trasck.attachments.local-root`; uploaded files receive generated storage keys and SHA-256 checksums.
 - Work item and collaboration changes persist rows in `domain_events`, publish in-process Spring events after commit, and remain pending in the durable outbox until static or database-configured consumers complete delivery through `domain_event_deliveries`.
 - Static activity and audit projection consumers are implemented. Activity projection writes idempotent work-item, project, and workspace streams for important product events. Audit projection writes idempotent workspace audit entries for auth, token, user-management, retention-policy, and replay events, with redaction applied before values reach API responses.
@@ -228,16 +232,16 @@ Work item implementation state:
 AI agent implementation state:
 
 - The first provider-neutral agent service slice is implemented around the existing schema/JPA model.
-- `AgentProviderAdapter` is the adapter contract used by provider-specific implementations. The first implementation is `simulated`, which proves dispatch, retry, cancel, callback, review artifact, and projection behavior without shelling out or calling paid/external AI systems.
+- `AgentProviderAdapter` is the adapter contract used by provider-specific implementations. Current non-external implementations are `simulated`, `codex`, and `claude_code`, which prove dispatch, retry, cancel, callback, review artifact, and projection behavior without shelling out or calling paid/external AI systems.
 - Provider keys, provider types, dispatch modes, callback statuses, repository providers, and artifact types are normalized before storage or comparison.
-- Agent providers currently accept the `simulated` provider type. Codex, Claude Code, webhook, polling, hosted-service, and allowlisted local-runner adapters remain future provider implementations of the same contract.
+- Agent providers currently accept `simulated`, `codex`, and `claude_code` provider types. The Codex and Claude Code adapters are lifecycle stubs only; real CLI/API dispatch, webhook workers, polling, hosted-service adapters, and allowlisted local-runner execution remain future provider implementations of the same contract.
 - The first credential endpoint does not return raw secrets and stores a SHA-256 fingerprint for simulated credentials. Decryptable encrypted secret storage or external secret management is still required before real provider dispatch can use API tokens.
-- Agent profile creation creates an agent-backed `users` row and workspace membership, so assignment, permissions, reporting, and activity continue to use the existing user/role model.
+- Agent profile creation creates an agent-backed `users` row and workspace membership, so assignment, permissions, reporting, and activity continue to use the existing user/role model. Optional `projectIds` on agent profiles create project-scoped availability rows without changing the underlying user model.
 - Agent assignment and callback-authored comments verify the agent user's project permissions, so callbacks do not bypass the role model.
 - Repository connections support `generic_git`, `github`, and `gitlab`; GitHub/GitLab-specific metadata is stored inside provider-neutral `repository_connections.config.providerMetadata`.
 - Assigning a work item to an agent sets the work item assignee to the agent user, writes assignment history, creates a queued `agent_tasks` row, links repository context, records durable domain events, dispatches the adapter, and moves the task to `running`.
 - Agent callbacks support `running`, `waiting_for_input`, `failed`, and `completed`. A completed callback moves the task to `review_requested`, stores callback messages/artifacts, creates an `Agent Review Request` artifact, creates a work item comment authored by the agent user, and does not transition the work item to Done.
-- Human acceptance of the review result marks the agent task `completed`; workflow movement remains a separate human/workflow operation until workflow automation is added.
+- Human acceptance of the review result marks the agent task `completed`. If the accepting user can transition the work item and the assigned workflow has a direct transition from the current status to `Approval`, acceptance also performs that transition, writes status history, and records `work_item.agent_acceptance_transitioned`. It never moves work directly to Done.
 - Activity and audit projection consumers include agent provider setup, credential rotation, profile setup, assignment, task review/completion, and agent-created work item comments.
 
 ## Database Conventions
@@ -1109,6 +1113,8 @@ erDiagram
     AGENT_PROVIDERS ||--o{ AGENT_PROVIDER_CREDENTIALS : secures
     AGENT_PROVIDERS ||--o{ AGENT_PROFILES : powers
     USERS ||--o| AGENT_PROFILES : represents
+    AGENT_PROFILES ||--o{ AGENT_PROFILE_PROJECTS : scopes
+    PROJECTS ||--o{ AGENT_PROFILE_PROJECTS : allows
     WORKSPACES ||--o{ REPOSITORY_CONNECTIONS : connects
     PROJECTS ||--o{ REPOSITORY_CONNECTIONS : scopes
     WORK_ITEMS ||--o{ AGENT_TASKS : delegates
@@ -1159,6 +1165,12 @@ erDiagram
         jsonb config
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    AGENT_PROFILE_PROJECTS {
+        uuid agent_profile_id FK
+        uuid project_id FK
+        timestamptz created_at
     }
 
     REPOSITORY_CONNECTIONS {
@@ -1374,6 +1386,7 @@ erDiagram
 | `agent_providers` | Workspace-level provider adapter configuration for Codex, Claude Code, local runners, webhook workers, custom agents, and future providers. |
 | `agent_provider_credentials` | Encrypted provider credentials for dispatching to external or managed agents. |
 | `agent_profiles` | Assignable agent identities backed by `users` rows. |
+| `agent_profile_projects` | Optional project availability scope for agent profiles. Absence means workspace-wide availability. |
 | `repository_connections` | Workspace/project repository connections used by coding agents. |
 | `agent_tasks` | Execution records for work delegated to agents. |
 | `agent_task_events` | Agent execution timeline, progress, status, and diagnostic events. |
@@ -1505,6 +1518,7 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `agent_providers` | `id`, `workspace_id`, `provider_key`, `provider_type`, `display_name`, `dispatch_mode`, `callback_url`, `capability_schema`, `config`, `enabled`, `created_at`, `updated_at` |
 | `agent_provider_credentials` | `id`, `provider_id`, `credential_type`, `encrypted_secret`, `metadata`, `active`, `created_at`, `rotated_at` |
 | `agent_profiles` | `id`, `workspace_id`, `user_id`, `provider_id`, `display_name`, `status`, `max_concurrent_tasks`, `capabilities`, `config`, `created_at`, `updated_at` |
+| `agent_profile_projects` | `agent_profile_id`, `project_id`, `created_at` |
 | `repository_connections` | `id`, `workspace_id`, `project_id`, `provider`, `name`, `repository_url`, `default_branch`, `config`, `active`, `created_at`, `updated_at` |
 | `agent_tasks` | `id`, `workspace_id`, `work_item_id`, `agent_profile_id`, `provider_id`, `requested_by_id`, `status`, `dispatch_mode`, `external_task_id`, `context_snapshot`, `request_payload`, `result_payload`, `queued_at`, `started_at`, `completed_at`, `failed_at`, `canceled_at` |
 | `agent_task_events` | `id`, `agent_task_id`, `event_type`, `severity`, `message`, `metadata`, `created_at` |
@@ -1592,8 +1606,9 @@ AI agent rules:
 - An assignable agent must have a global `users` row with `account_type = AGENT` and exactly one active `agent_profiles` row per workspace/provider identity.
 - Agent users must use the same workspace/project membership and role checks as human users.
 - Agent provider adapters must be selected by `agent_providers.provider_type` and provider-specific `jsonb` config, not hardcoded into work item or workflow tables.
-- Provider credentials must be stored as encrypted database values first; secrets must not be copied into work item descriptions, comments, activity events, or agent context snapshots.
+- Provider credentials must be stored as encrypted database values before real external dispatch is enabled; secrets must not be copied into work item descriptions, comments, activity events, or agent context snapshots. Current simulated credentials are fingerprinted only, and callback signing private keys are generated per provider, stored in provider config for development, and redacted from API responses.
 - Assigning a work item to an agent creates an `agent_tasks` row. Reassigning the work item to a human does not delete the agent task history.
+- Agent profile project scopes are availability controls. They decide where an agent can be assigned, while actual task/comment access still comes from the backing agent user's role permissions.
 - Agent task context should be a point-in-time snapshot of the work item, linked requirements, attachments, repository references, and safe metadata needed for execution.
 - Agent task callbacks must be authenticated, idempotent, and scoped to the workspace/provider/task they update.
 - Agent task status changes must generate activity events. Provider setup, credential changes, permission changes, and privileged agent actions must generate audit log entries.
@@ -1653,6 +1668,7 @@ activity_events(entity_type, entity_id, created_at)
 audit_log_entries(workspace_id, created_at)
 agent_providers(workspace_id, provider_key)
 agent_profiles(workspace_id, user_id)
+agent_profile_projects(project_id)
 agent_tasks(workspace_id, status, queued_at)
 agent_tasks(work_item_id, queued_at)
 agent_task_events(agent_task_id, created_at)
@@ -1931,15 +1947,16 @@ Trasck should support AI-assisted execution without becoming dependent on any on
 Provider model:
 
 - `agent_providers.provider_type` selects an adapter such as `codex`, `claude_code`, `webhook`, `local_runner`, `hosted_service`, or `custom`.
-- The first provider adapter is the non-external `simulated` adapter. It proves the provider-neutral lifecycle without paid, shell, or vendor-specific execution. Codex, Claude Code, webhook workers, hosted services, polling agents, and hardened local runners should plug into the same contract later.
+- The first provider adapters are non-external `simulated`, `codex`, and `claude_code` adapters. They prove the provider-neutral lifecycle without paid, shell, or vendor-specific execution. Real Codex/Claude dispatch, webhook workers, hosted services, polling agents, and hardened local runners should plug into the same contract later.
 - `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff. Manual handoff is the default dispatch mode.
 - Provider-specific options belong in `agent_providers.config`; shared capability declarations belong in `capability_schema`.
-- Provider credentials should be encrypted database values first. Secrets must not be embedded directly in provider configs or agent task payloads.
+- Provider credentials should move to encrypted database values or external secret management before real provider dispatch. Secrets must not be embedded directly in agent task payloads, comments, activity, or audit output.
 
 Agent model:
 
 - Each assignable AI agent is represented by a normal `users` row with `account_type = AGENT`.
 - `agent_profiles` stores provider-specific capabilities, limits, and runtime options for that assignable agent.
+- `agent_profile_projects` optionally restricts an agent profile to specific projects. No rows means the profile is workspace-wide.
 - Agent users participate in workspace/project membership and role checks like human users.
 - Agent assignment should use the existing work item assignee model so boards, filters, reports, and notifications stay consistent.
 
@@ -1951,7 +1968,7 @@ Execution model:
 - `agent_messages` support clarifying questions and human replies.
 - `agent_artifacts` capture outputs such as branches, pull requests, patches, logs, generated docs, screenshots, or external task URLs.
 - `agent_task_repositories` attaches one or more repositories, base branches, working branches, and pull request URLs to the task.
-- Signed callback assertions are issued when Trasck dispatches or retries an agent task. Callbacks must present `X-Trasck-Agent-Callback-Jwt`; the token is verified and then checked against the provider key, provider ID, workspace ID, agent profile ID, and task ID before state changes are accepted.
+- Signed callback assertions are issued when Trasck dispatches or retries an agent task. Callbacks must present `X-Trasck-Agent-Callback-Jwt`; the RS256 token is verified with the provider's active public JWK and then checked against the provider key, provider ID, workspace ID, agent profile ID, and task ID before state changes are accepted.
 
 Provider contract:
 
@@ -2095,17 +2112,17 @@ Recommended order:
 4. Implement work item types, type rules, project type availability, priorities, resolutions, and workspace seed data.
 5. Implement workflows, statuses, transitions, and workflow assignments.
 6. Implement work items, hierarchy validation, closure-table maintenance, ranking, transitions, assignment, archived state, and domain events.
-7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/label/attachment storage slice, activity projections, audit projections, retention policy metadata, and replay wiring are implemented; work logs remain.
+7. Implement comments, links, watchers, labels, basic attachment metadata, work logs, attachment byte storage, activity events, and audit logs. The comment/link/watcher/work-log/label/attachment storage slice, activity projections, audit projections, retention policy metadata, and replay wiring are implemented.
 8. Implement boards, columns, iterations, releases, and roadmaps.
 9. Implement custom fields, screens, screen assignments, and field configurations.
-10. Implement reporting history and snapshots.
+10. Implement reporting history and snapshots. Initial status, assignment, and estimate history writes are implemented; report/dashboard read APIs and snapshot jobs remain.
 11. Implement notifications, automation, webhooks, and integrations.
-12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events. The first simulated provider-neutral service/API slice is implemented; provider-specific adapters, hardened local execution, external webhook delivery, richer retry/request-changes flows, and provider-key management remain.
+12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events. The simulated/Codex/Claude Code non-external service/API slice is implemented with project-scoped profiles and per-provider callback signing; real provider dispatch, hardened local execution, external webhook delivery, richer retry/request-changes flows, and secret/key management remain.
 13. Implement saved filters, dashboards, views, favorites, and recent items.
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, authenticated work item API flows with hierarchy validation, ranking, transitions, assignment history, closure rows, rich JSON documents, comments, links, watchers, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated AI agent lifecycle with provider/profile/repository setup, signed callbacks, review artifacts/comments, callback idempotency, acceptance, activity projection, and audit projection.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, authenticated work item API flows with hierarchy validation, ranking, transitions, assignment/estimate history, closure rows, rich JSON documents, comments, links, watchers, work logs, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated/Codex/Claude Code AI agent lifecycle with provider/profile/repository setup, project-scoped profiles, per-provider signed callbacks, review artifacts/comments, callback idempotency, acceptance-to-Approval transition, activity projection, and audit projection.
 
 Required backend tests:
 

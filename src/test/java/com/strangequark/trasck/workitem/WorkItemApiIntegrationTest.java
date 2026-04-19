@@ -108,6 +108,13 @@ class WorkItemApiIntegrationTest {
         assertThat(countWhere("work_item_closure", "descendant_work_item_id", storyId)).isEqualTo(2);
         assertThat(countWhere("work_item_status_history", "work_item_id", storyId)).isEqualTo(1);
 
+        JsonNode estimatedStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
+                .put("estimatePoints", 5.0)
+                .put("estimateMinutes", 480)
+                .put("remainingMinutes", 300));
+        assertThat(estimatedStory.at("/estimatePoints").decimalValue()).isEqualByComparingTo("5.0");
+        assertThat(countWhere("work_item_estimate_history", "work_item_id", storyId)).isEqualTo(3);
+
         HttpResponse<String> invalidChildResponse = post(
                 "/api/v1/projects/" + projectId + "/work-items",
                 workItemBody(actorId, "subtask", firstEpicId, "Invalid subtask", null)
@@ -187,6 +194,26 @@ class WorkItemApiIntegrationTest {
                 .put("userId", UUID.randomUUID().toString()));
         assertThat(invalidWatcher.statusCode()).isEqualTo(404);
 
+        ObjectNode workLogBody = objectMapper.createObjectNode()
+                .put("userId", actorId.toString())
+                .put("minutesSpent", 45)
+                .put("workDate", "2026-04-18")
+                .put("startedAt", "2026-04-18T14:00:00Z")
+                .put("descriptionMarkdown", "Paired on the implementation plan.");
+        workLogBody.set("descriptionDocument", objectMapper.createObjectNode()
+                .put("type", "doc")
+                .put("text", "Paired on the implementation plan."));
+        JsonNode workLog = postJson("/api/v1/work-items/" + storyId + "/work-logs", workLogBody);
+        UUID workLogId = uuid(workLog, "/id");
+        assertThat(workLog.at("/minutesSpent").asInt()).isEqualTo(45);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/work-logs")).hasSize(1);
+        HttpResponse<String> invalidWorkLog = post("/api/v1/work-items/" + storyId + "/work-logs", objectMapper.createObjectNode()
+                .put("minutesSpent", -1));
+        assertThat(invalidWorkLog.statusCode()).isEqualTo(400);
+        JsonNode updatedWorkLog = patch("/api/v1/work-items/" + storyId + "/work-logs/" + workLogId, objectMapper.createObjectNode()
+                .put("minutesSpent", 60));
+        assertThat(updatedWorkLog.at("/minutesSpent").asInt()).isEqualTo(60);
+
         JsonNode label = postJson("/api/v1/workspaces/" + workspaceId + "/labels", objectMapper.createObjectNode()
                 .put("name", "backend")
                 .put("color", "#3366ff"));
@@ -234,6 +261,9 @@ class WorkItemApiIntegrationTest {
         assertThat(getJson("/api/v1/work-items/" + storyId + "/labels")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/watchers/" + actorId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/watchers")).isEmpty();
+        assertThat(delete("/api/v1/work-items/" + storyId + "/work-logs/" + workLogId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/work-logs")).isEmpty();
+        assertThat(softDeleted("work_logs", workLogId)).isTrue();
         assertThat(delete("/api/v1/work-items/" + storyId + "/links/" + linkId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/links")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + commentId).statusCode()).isEqualTo(204);
@@ -241,7 +271,7 @@ class WorkItemApiIntegrationTest {
 
         domainEventOutboxDispatcher.dispatchPending();
         JsonNode workItemActivity = getJson("/api/v1/work-items/" + storyId + "/activity");
-        assertThat(eventTypes(workItemActivity)).contains("work_item.created", "work_item.comment_created", "work_item.attachment_removed");
+        assertThat(eventTypes(workItemActivity)).contains("work_item.created", "work_item.comment_created", "work_item.work_logged", "work_item.attachment_removed");
         JsonNode projectActivity = getJson("/api/v1/workspaces/" + workspaceId + "/projects/" + projectId + "/activity");
         assertThat(eventTypes(projectActivity)).contains("work_item.created", "work_item.updated");
         JsonNode workspaceActivity = getJson("/api/v1/workspaces/" + workspaceId + "/activity");
@@ -278,6 +308,9 @@ class WorkItemApiIntegrationTest {
                 "work_item.link_deleted",
                 "work_item.watcher_added",
                 "work_item.watcher_removed",
+                "work_item.work_logged",
+                "work_item.work_log_updated",
+                "work_item.work_log_deleted",
                 "work_item.label_added",
                 "work_item.label_removed",
                 "work_item.attachment_added",
@@ -481,6 +514,15 @@ class WorkItemApiIntegrationTest {
                 eventType
         );
         return count == null ? 0 : count;
+    }
+
+    private boolean softDeleted(String table, UUID id) {
+        Boolean deleted = jdbcTemplate.queryForObject(
+                "select deleted_at is not null from " + table + " where id = ?",
+                Boolean.class,
+                id
+        );
+        return Boolean.TRUE.equals(deleted);
     }
 
     private int countAncestor(UUID ancestorId, UUID descendantId) {
