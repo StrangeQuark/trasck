@@ -70,7 +70,8 @@ class AgentIntegrationTest {
                 .put("dispatchMode", "managed"), accessToken));
         UUID providerId = uuid(provider, "/id");
         assertThat(provider.at("/config/callbackJwt/algorithm").asText()).isEqualTo("RS256");
-        assertThat(provider.at("/config/callbackJwt/keys/0/privateKeyPem").asText()).isEqualTo("[REDACTED]");
+        assertThat(provider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
+        assertThat(provider.at("/config/callbackJwt/keys/0/publicJwk/kty").asText()).isEqualTo("RSA");
         assertThat(provider.toString()).doesNotContain("BEGIN PRIVATE KEY");
 
         JsonNode codexProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
@@ -85,6 +86,13 @@ class AgentIntegrationTest {
                 .put("displayName", "Claude Code")
                 .put("dispatchMode", "managed"), accessToken));
         assertThat(claudeProvider.at("/providerType").asText()).isEqualTo("claude_code");
+        JsonNode workerProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
+                .put("providerKey", "worker-main")
+                .put("providerType", "generic_worker")
+                .put("displayName", "Generic Worker")
+                .put("dispatchMode", "polling"), accessToken));
+        assertThat(workerProvider.at("/providerType").asText()).isEqualTo("generic_worker");
+        assertThat(workerProvider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
 
         JsonNode credential = read(post("/api/v1/agent-providers/" + providerId + "/credentials", objectMapper.createObjectNode()
                 .put("credentialType", "callback_signing")

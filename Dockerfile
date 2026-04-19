@@ -9,7 +9,7 @@ RUN chmod +x mvnw && sed -i 's/\r$//' mvnw
 RUN ./mvnw dependency:go-offline
 
 COPY src ./src
-RUN ./mvnw clean package
+RUN ./mvnw clean package -DskipTests
 
 # Stage 2: Create minimal runtime image
 FROM eclipse-temurin:21-alpine

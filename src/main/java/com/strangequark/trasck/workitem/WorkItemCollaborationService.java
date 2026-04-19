@@ -240,9 +240,10 @@ public class WorkItemCollaborationService {
     @Transactional
     public WorkLogResponse createWorkLog(UUID workItemId, WorkLogRequest request) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.update");
+        UUID actorId = currentUserService.requireUserId();
         WorkLogRequest createRequest = required(request, "request");
         UUID loggedUserId = firstNonNull(createRequest.userId(), actorId);
+        requireWorkLogCreatePermission(item, actorId, loggedUserId);
         activeUser(loggedUserId);
 
         WorkLog workLog = new WorkLog();
@@ -261,10 +262,11 @@ public class WorkItemCollaborationService {
     @Transactional
     public WorkLogResponse updateWorkLog(UUID workItemId, UUID workLogId, WorkLogRequest request) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.update");
+        UUID actorId = currentUserService.requireUserId();
         WorkLogRequest updateRequest = required(request, "request");
         WorkLog workLog = workLogRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(workLogId, workItemId)
                 .orElseThrow(() -> notFound("Work log not found"));
+        requireWorkLogMutationPermission(item, workLog, actorId, updateRequest.userId());
         if (updateRequest.userId() != null) {
             activeUser(updateRequest.userId());
             workLog.setUserId(updateRequest.userId());
@@ -292,9 +294,10 @@ public class WorkItemCollaborationService {
     @Transactional
     public void deleteWorkLog(UUID workItemId, UUID workLogId) {
         WorkItem item = readableWorkItem(workItemId);
-        UUID actorId = requireProjectPermission(item, "work_item.update");
+        UUID actorId = currentUserService.requireUserId();
         WorkLog workLog = workLogRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(workLogId, workItemId)
                 .orElseThrow(() -> notFound("Work log not found"));
+        requireWorkLogMutationPermission(item, workLog, actorId, null);
         workLog.setDeletedAt(OffsetDateTime.now());
         recordWorkLogEvent(item, "work_item.work_log_deleted", actorId, workLog);
     }
@@ -487,6 +490,18 @@ public class WorkItemCollaborationService {
         String permissionKey = actorId.equals(watcherUserId) ? "work_item.read" : "work_item.update";
         permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
         return actorId;
+    }
+
+    private void requireWorkLogCreatePermission(WorkItem item, UUID actorId, UUID loggedUserId) {
+        String permissionKey = actorId.equals(loggedUserId) ? "work_item.read" : "work_item.update";
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
+    }
+
+    private void requireWorkLogMutationPermission(WorkItem item, WorkLog workLog, UUID actorId, UUID requestedUserId) {
+        boolean selfEntry = actorId.equals(workLog.getUserId());
+        boolean reassignment = requestedUserId != null && !requestedUserId.equals(workLog.getUserId());
+        String permissionKey = selfEntry && !reassignment ? "work_item.read" : "work_item.update";
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
     }
 
     private LabelMutation resolveLabel(UUID workspaceId, WorkItemLabelRequest request) {

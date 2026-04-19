@@ -20,6 +20,7 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.Date;
 import java.util.UUID;
@@ -34,29 +35,40 @@ public class AgentCallbackJwtService {
     public static final String CALLBACK_HEADER = "X-Trasck-Agent-Callback-Jwt";
 
     private static final String CALLBACK_JWT_CONFIG = "callbackJwt";
+    private static final String CALLBACK_PRIVATE_KEY_CREDENTIAL_TYPE = "callback_private_key";
 
     private final ObjectMapper objectMapper;
+    private final AgentProviderCredentialRepository agentProviderCredentialRepository;
+    private final SecretCipherService secretCipherService;
     private final Duration ttl;
 
     public AgentCallbackJwtService(
             ObjectMapper objectMapper,
+            AgentProviderCredentialRepository agentProviderCredentialRepository,
+            SecretCipherService secretCipherService,
             @Value("${trasck.agents.callback-jwt-ttl:PT15M}") String callbackJwtTtl
     ) {
         this.objectMapper = objectMapper;
+        this.agentProviderCredentialRepository = agentProviderCredentialRepository;
+        this.secretCipherService = secretCipherService;
         this.ttl = Duration.parse(callbackJwtTtl);
     }
 
     public JsonNode ensureProviderKeyPair(AgentProvider provider) {
+        if (provider.getId() == null) {
+            throw new IllegalStateException("Agent provider must be persisted before callback key generation");
+        }
         ObjectNode config = objectConfig(provider.getConfig());
         JsonNode callbackConfig = config.path(CALLBACK_JWT_CONFIG);
         CallbackKeyMaterial existingKey = callbackConfig.isObject() && callbackConfig.path("currentKid").isTextual()
                 ? activeKeyOrNull(callbackConfig)
                 : null;
-        if (hasPrivateKey(existingKey)) {
+        if (existingKey != null && hasPrivateKeyCredential(provider, existingKey.keyId())) {
             return config;
         }
 
         CallbackKeyMaterial generated = generateKeyMaterial();
+        persistPrivateKeyCredential(provider, generated);
         ObjectNode callbackJwt = objectMapper.createObjectNode()
                 .put("algorithm", "RS256")
                 .put("currentKid", generated.keyId());
@@ -65,7 +77,6 @@ public class AgentCallbackJwtService {
                 .put("kid", generated.keyId())
                 .put("alg", "RS256")
                 .put("createdAt", Instant.now().toString())
-                .put("privateKeyPem", generated.privateKeyPem())
                 .set("publicJwk", generated.publicJwk()));
         callbackJwt.set("keys", keys);
         config.set(CALLBACK_JWT_CONFIG, callbackJwt);
@@ -74,9 +85,7 @@ public class AgentCallbackJwtService {
 
     public String issue(AgentTask task, AgentProvider provider, AgentProfile profile) {
         CallbackKeyMaterial key = activeKey(objectConfig(provider.getConfig()).path(CALLBACK_JWT_CONFIG));
-        if (key.privateKeyPem() == null) {
-            throw new IllegalStateException("Agent provider callback JWT key material is missing");
-        }
+        String privateKeyPem = privateKeyPem(provider, key.keyId());
         Instant issuedAt = Instant.now();
         return Jwts.builder()
                 .issuer(provider.getProviderKey())
@@ -91,7 +100,7 @@ public class AgentCallbackJwtService {
                 .id(UUID.randomUUID().toString())
                 .issuedAt(Date.from(issuedAt))
                 .expiration(Date.from(issuedAt.plus(ttl)))
-                .signWith(privateKey(key.privateKeyPem()))
+                .signWith(privateKey(privateKeyPem))
                 .compact();
     }
 
@@ -178,10 +187,6 @@ public class AgentCallbackJwtService {
         return key(callbackConfig, callbackConfig.path("currentKid").asText(null));
     }
 
-    private boolean hasPrivateKey(CallbackKeyMaterial key) {
-        return key != null && key.privateKeyPem() != null && !key.privateKeyPem().isBlank() && !"[REDACTED]".equals(key.privateKeyPem());
-    }
-
     private CallbackKeyMaterial activeKeyOrNull(JsonNode callbackConfig) {
         try {
             return activeKey(callbackConfig);
@@ -198,12 +203,43 @@ public class AgentCallbackJwtService {
             if (keyId.equals(key.path("kid").asText())) {
                 return new CallbackKeyMaterial(
                         keyId,
-                        key.path("privateKeyPem").asText(null),
+                        null,
                         key.path("publicJwk").deepCopy()
                 );
             }
         }
         throw unauthorized("Agent provider callback key is unknown");
+    }
+
+    private boolean hasPrivateKeyCredential(AgentProvider provider, String keyId) {
+        return agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(provider.getId(), CALLBACK_PRIVATE_KEY_CREDENTIAL_TYPE).stream()
+                .anyMatch(credential -> credential.getMetadata() != null && keyId.equals(credential.getMetadata().path("kid").asText()));
+    }
+
+    private void persistPrivateKeyCredential(AgentProvider provider, CallbackKeyMaterial key) {
+        agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(provider.getId(), CALLBACK_PRIVATE_KEY_CREDENTIAL_TYPE)
+                .forEach(existing -> {
+                    existing.setActive(false);
+                    existing.setRotatedAt(OffsetDateTime.now());
+                });
+        AgentProviderCredential credential = new AgentProviderCredential();
+        credential.setProviderId(provider.getId());
+        credential.setCredentialType(CALLBACK_PRIVATE_KEY_CREDENTIAL_TYPE);
+        credential.setEncryptedSecret(secretCipherService.encrypt(key.privateKeyPem()));
+        credential.setMetadata(objectMapper.createObjectNode()
+                .put("kid", key.keyId())
+                .put("alg", "RS256")
+                .put("use", "agent_callback_jwt"));
+        credential.setActive(true);
+        agentProviderCredentialRepository.save(credential);
+    }
+
+    private String privateKeyPem(AgentProvider provider, String keyId) {
+        return agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(provider.getId(), CALLBACK_PRIVATE_KEY_CREDENTIAL_TYPE).stream()
+                .filter(credential -> credential.getMetadata() != null && keyId.equals(credential.getMetadata().path("kid").asText()))
+                .findFirst()
+                .map(credential -> secretCipherService.decrypt(credential.getEncryptedSecret()))
+                .orElseThrow(() -> new IllegalStateException("Agent provider callback JWT key material is missing"));
     }
 
     private CallbackKeyMaterial generateKeyMaterial() {

@@ -1,0 +1,327 @@
+@baseUrl = http://localhost:6100
+@accessToken = replace-with-login-access-token
+@apiToken = replace-with-personal-or-service-token
+@csrfToken = replace-with-csrf-token
+@workspaceId = replace-with-workspace-id
+@projectId = replace-with-project-id
+@workItemId = replace-with-work-item-id
+@commentId = replace-with-comment-id
+@workLogId = replace-with-work-log-id
+@attachmentId = replace-with-attachment-id
+@providerId = replace-with-agent-provider-id
+@profileId = replace-with-agent-profile-id
+@repositoryConnectionId = replace-with-repository-connection-id
+@agentTaskId = replace-with-agent-task-id
+@agentCallbackToken = replace-with-agent-callback-token
+
+### Health
+GET {{baseUrl}}/api/trasck/health
+
+### First Setup
+POST {{baseUrl}}/api/v1/setup
+Content-Type: application/json
+
+{
+  "adminUser": {
+    "email": "admin@example.com",
+    "username": "admin",
+    "displayName": "Admin User",
+    "password": "correct-horse-battery-staple"
+  },
+  "organization": {
+    "name": "Trasck Local",
+    "slug": "trasck-local"
+  },
+  "workspace": {
+    "name": "Trasck Workspace",
+    "key": "TR",
+    "timezone": "America/Chicago",
+    "locale": "en-US",
+    "anonymousReadEnabled": false
+  },
+  "project": {
+    "name": "Trasck Project",
+    "key": "TRP",
+    "description": "Local project",
+    "visibility": "private"
+  }
+}
+
+### Login And Capture Bearer JWT
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "admin@example.com",
+  "password": "correct-horse-battery-staple"
+}
+
+### Get CSRF Token For Cookie-Authenticated Browser Calls
+GET {{baseUrl}}/api/v1/auth/csrf
+
+### Cookie + CSRF Example: Create Work Item
+POST {{baseUrl}}/api/v1/projects/{{projectId}}/work-items
+Content-Type: application/json
+X-XSRF-TOKEN: {{csrfToken}}
+
+{
+  "typeKey": "story",
+  "title": "Cookie-authenticated story",
+  "descriptionMarkdown": "This request uses the login cookie plus CSRF."
+}
+
+### Bearer JWT Example: Current User
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{accessToken}}
+
+### Create Personal API Token
+POST {{baseUrl}}/api/v1/auth/tokens/personal
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Local REST Client",
+  "scopes": [
+    "workspace.read",
+    "project.read",
+    "work_item.read",
+    "work_item.create",
+    "work_item.update",
+    "work_item.comment",
+    "work_item.link",
+    "report.read",
+    "agent.provider.manage",
+    "agent.provider.credential.manage",
+    "agent.profile.manage",
+    "agent.assign",
+    "agent.task.view",
+    "agent.task.accept_result",
+    "repository_connection.manage"
+  ]
+}
+
+### API Token Example: List Work Items
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/work-items
+Authorization: Bearer {{apiToken}}
+
+### Create Work Item With Bearer JWT
+POST {{baseUrl}}/api/v1/projects/{{projectId}}/work-items
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "typeKey": "story",
+  "title": "Implement project hierarchy",
+  "descriptionMarkdown": "Define organizations, workspaces, projects, epics, stories, and tasks.",
+  "estimatePoints": 5,
+  "estimateMinutes": 480,
+  "remainingMinutes": 480
+}
+
+### Get Work Item
+GET {{baseUrl}}/api/v1/work-items/{{workItemId}}
+Authorization: Bearer {{accessToken}}
+
+### Update Work Item
+PATCH {{baseUrl}}/api/v1/work-items/{{workItemId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Implement project hierarchy and reporting",
+  "remainingMinutes": 360
+}
+
+### Transition Work Item
+POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/transition
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "transitionKey": "open_to_ready"
+}
+
+### Add Comment
+POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/comments
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "bodyMarkdown": "This is ready for technical review.",
+  "visibility": "workspace"
+}
+
+### Update Comment
+PATCH {{baseUrl}}/api/v1/work-items/{{workItemId}}/comments/{{commentId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "bodyMarkdown": "Updated review note."
+}
+
+### Add Work Log For Yourself
+POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/work-logs
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "minutesSpent": 60,
+  "workDate": "2026-04-19",
+  "descriptionMarkdown": "Initial implementation pass."
+}
+
+### Update Your Work Log
+PATCH {{baseUrl}}/api/v1/work-items/{{workItemId}}/work-logs/{{workLogId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "minutesSpent": 75
+}
+
+### Add Watcher For Yourself
+POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/watchers
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Add Attachment Metadata
+POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/attachments
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "filename": "notes.md",
+  "contentType": "text/markdown",
+  "storageKey": "manual/notes.md",
+  "sizeBytes": 128,
+  "checksum": "sha256:replace-with-real-checksum",
+  "visibility": "restricted"
+}
+
+### Download Attachment Bytes
+GET {{baseUrl}}/api/v1/work-items/{{workItemId}}/attachments/{{attachmentId}}/download
+Authorization: Bearer {{accessToken}}
+
+### Reporting: Status History
+GET {{baseUrl}}/api/v1/reports/work-items/{{workItemId}}/status-history
+Authorization: Bearer {{accessToken}}
+
+### Reporting: Assignment History
+GET {{baseUrl}}/api/v1/reports/work-items/{{workItemId}}/assignment-history
+Authorization: Bearer {{accessToken}}
+
+### Reporting: Estimate History
+GET {{baseUrl}}/api/v1/reports/work-items/{{workItemId}}/estimate-history
+Authorization: Bearer {{accessToken}}
+
+### Reporting: Work Log Summary
+GET {{baseUrl}}/api/v1/reports/work-items/{{workItemId}}/work-log-summary
+Authorization: Bearer {{accessToken}}
+
+### Create Generic Worker Agent Provider
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-providers
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "providerKey": "worker-local",
+  "providerType": "generic_worker",
+  "displayName": "Generic Worker",
+  "dispatchMode": "polling",
+  "enabled": true
+}
+
+### Rotate Provider Credential
+POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "credentialType": "api_token",
+  "secret": "replace-with-provider-secret",
+  "metadata": {
+    "environment": "local"
+  }
+}
+
+### Create Agent Profile
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agents
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "providerId": "{{providerId}}",
+  "displayName": "Worker Agent",
+  "username": "worker-agent",
+  "maxConcurrentTasks": 1,
+  "projectIds": [
+    "{{projectId}}"
+  ]
+}
+
+### Add Repository Connection
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/repository-connections
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "projectId": "{{projectId}}",
+  "provider": "generic_git",
+  "name": "Trasck Backend",
+  "repositoryUrl": "https://github.com/StrangeQuark/trasck.git",
+  "defaultBranch": "main",
+  "providerMetadata": {
+    "webUrl": "https://github.com/StrangeQuark/trasck"
+  }
+}
+
+### Assign Work Item To Agent
+POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/assign-agent
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "agentProfileId": "{{profileId}}",
+  "repositoryConnectionIds": [
+    "{{repositoryConnectionId}}"
+  ],
+  "requestPayload": {
+    "instructions": "Implement the story and request review."
+  }
+}
+
+### Agent Callback
+POST {{baseUrl}}/api/v1/agent-callbacks/worker-local
+X-Trasck-Agent-Callback-Jwt: {{agentCallbackToken}}
+Content-Type: application/json
+
+{
+  "status": "completed",
+  "message": "Agent finished and requests review.",
+  "resultPayload": {
+    "summary": "Completed in worker."
+  },
+  "messages": [
+    {
+      "senderType": "agent",
+      "bodyMarkdown": "Ready for review."
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactType": "pull_request",
+      "name": "Worker pull request",
+      "externalUrl": "https://example.com/pull/1"
+    }
+  ]
+}
+
+### Accept Agent Result
+POST {{baseUrl}}/api/v1/agent-tasks/{{agentTaskId}}/accept-result
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}

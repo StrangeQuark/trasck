@@ -32,11 +32,7 @@ import com.strangequark.trasck.workflow.WorkflowTransition;
 import com.strangequark.trasck.workflow.WorkflowTransitionAction;
 import com.strangequark.trasck.workflow.WorkflowTransitionActionRepository;
 import com.strangequark.trasck.workflow.WorkflowTransitionRepository;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
-import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -80,6 +76,7 @@ public class AgentService {
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
     private final AgentCallbackJwtService callbackJwtService;
+    private final SecretCipherService secretCipherService;
     private final List<AgentProviderAdapter> adapters;
 
     public AgentService(
@@ -111,6 +108,7 @@ public class AgentService {
             PermissionService permissionService,
             DomainEventService domainEventService,
             AgentCallbackJwtService callbackJwtService,
+            SecretCipherService secretCipherService,
             List<AgentProviderAdapter> adapters
     ) {
         this.objectMapper = objectMapper;
@@ -141,6 +139,7 @@ public class AgentService {
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
         this.callbackJwtService = callbackJwtService;
+        this.secretCipherService = secretCipherService;
         this.adapters = adapters;
     }
 
@@ -175,10 +174,11 @@ public class AgentService {
         provider.setCallbackUrl(createRequest.callbackUrl());
         provider.setCapabilitySchema(toJson(createRequest.capabilitySchema()));
         provider.setConfig(toJson(createRequest.config()));
-        provider.setConfig(callbackJwtService.ensureProviderKeyPair(provider));
         provider.setEnabled(createRequest.enabled() == null || createRequest.enabled());
-        adapter(provider.getProviderType()).validateProvider(provider);
-        AgentProvider saved = agentProviderRepository.save(provider);
+        AgentProvider saved = agentProviderRepository.saveAndFlush(provider);
+        saved.setConfig(callbackJwtService.ensureProviderKeyPair(saved));
+        adapter(saved.getProviderType()).validateProvider(saved);
+        saved = agentProviderRepository.save(saved);
         recordWorkspaceEvent(workspaceId, "agent_provider", saved.getId(), "agent.provider.created", actorId, payloadForProvider(saved, actorId));
         return AgentProviderResponse.from(saved);
     }
@@ -229,7 +229,7 @@ public class AgentService {
         AgentProviderCredential credential = new AgentProviderCredential();
         credential.setProviderId(providerId);
         credential.setCredentialType(credentialType);
-        credential.setEncryptedSecret(fingerprintSecret(requiredText(createRequest.secret(), "secret")));
+        credential.setEncryptedSecret(secretCipherService.encrypt(requiredText(createRequest.secret(), "secret")));
         credential.setMetadata(toJson(createRequest.metadata()));
         credential.setActive(true);
         AgentProviderCredential saved = agentProviderCredentialRepository.save(credential);
@@ -947,8 +947,8 @@ public class AgentService {
 
     private String normalizeProviderType(String providerType) {
         String normalized = normalizeKey(firstText(providerType, "simulated"));
-        if (!List.of("simulated", "codex", "claude_code").contains(normalized)) {
-            throw badRequest("Agent provider type must be simulated, codex, or claude_code");
+        if (!List.of("simulated", "codex", "claude_code", "generic_worker").contains(normalized)) {
+            throw badRequest("Agent provider type must be simulated, codex, claude_code, or generic_worker");
         }
         return normalized;
     }
@@ -1043,15 +1043,6 @@ public class AgentService {
             suffix++;
         }
         return candidate;
-    }
-
-    private String fingerprintSecret(String secret) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8));
-            return "sha256:" + HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 is unavailable", ex);
-        }
     }
 
     private ResponseStatusException badRequest(String message) {
