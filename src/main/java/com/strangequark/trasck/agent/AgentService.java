@@ -18,17 +18,25 @@ import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistory;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistoryRepository;
+import com.strangequark.trasck.reporting.WorkItemStatusHistory;
+import com.strangequark.trasck.reporting.WorkItemStatusHistoryRepository;
 import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import com.strangequark.trasck.workflow.WorkflowAssignment;
+import com.strangequark.trasck.workflow.WorkflowAssignmentRepository;
+import com.strangequark.trasck.workflow.WorkflowStatus;
+import com.strangequark.trasck.workflow.WorkflowStatusRepository;
+import com.strangequark.trasck.workflow.WorkflowTransition;
+import com.strangequark.trasck.workflow.WorkflowTransitionAction;
+import com.strangequark.trasck.workflow.WorkflowTransitionActionRepository;
+import com.strangequark.trasck.workflow.WorkflowTransitionRepository;
 import java.time.OffsetDateTime;
-import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -44,6 +52,7 @@ public class AgentService {
     private final AgentProviderRepository agentProviderRepository;
     private final AgentProviderCredentialRepository agentProviderCredentialRepository;
     private final AgentProfileRepository agentProfileRepository;
+    private final AgentProfileProjectRepository agentProfileProjectRepository;
     private final RepositoryConnectionRepository repositoryConnectionRepository;
     private final AgentTaskRepository agentTaskRepository;
     private final AgentTaskEventRepository agentTaskEventRepository;
@@ -57,11 +66,17 @@ public class AgentService {
     private final RoleRepository roleRepository;
     private final WorkspaceMembershipRepository workspaceMembershipRepository;
     private final WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository;
+    private final WorkItemStatusHistoryRepository workItemStatusHistoryRepository;
+    private final WorkflowAssignmentRepository workflowAssignmentRepository;
+    private final WorkflowStatusRepository workflowStatusRepository;
+    private final WorkflowTransitionRepository workflowTransitionRepository;
+    private final WorkflowTransitionActionRepository workflowTransitionActionRepository;
     private final CommentRepository commentRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
     private final AgentCallbackJwtService callbackJwtService;
+    private final SecretCipherService secretCipherService;
     private final List<AgentProviderAdapter> adapters;
 
     public AgentService(
@@ -69,6 +84,7 @@ public class AgentService {
             AgentProviderRepository agentProviderRepository,
             AgentProviderCredentialRepository agentProviderCredentialRepository,
             AgentProfileRepository agentProfileRepository,
+            AgentProfileProjectRepository agentProfileProjectRepository,
             RepositoryConnectionRepository repositoryConnectionRepository,
             AgentTaskRepository agentTaskRepository,
             AgentTaskEventRepository agentTaskEventRepository,
@@ -82,17 +98,24 @@ public class AgentService {
             RoleRepository roleRepository,
             WorkspaceMembershipRepository workspaceMembershipRepository,
             WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository,
+            WorkItemStatusHistoryRepository workItemStatusHistoryRepository,
+            WorkflowAssignmentRepository workflowAssignmentRepository,
+            WorkflowStatusRepository workflowStatusRepository,
+            WorkflowTransitionRepository workflowTransitionRepository,
+            WorkflowTransitionActionRepository workflowTransitionActionRepository,
             CommentRepository commentRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService,
             AgentCallbackJwtService callbackJwtService,
+            SecretCipherService secretCipherService,
             List<AgentProviderAdapter> adapters
     ) {
         this.objectMapper = objectMapper;
         this.agentProviderRepository = agentProviderRepository;
         this.agentProviderCredentialRepository = agentProviderCredentialRepository;
         this.agentProfileRepository = agentProfileRepository;
+        this.agentProfileProjectRepository = agentProfileProjectRepository;
         this.repositoryConnectionRepository = repositoryConnectionRepository;
         this.agentTaskRepository = agentTaskRepository;
         this.agentTaskEventRepository = agentTaskEventRepository;
@@ -106,11 +129,17 @@ public class AgentService {
         this.roleRepository = roleRepository;
         this.workspaceMembershipRepository = workspaceMembershipRepository;
         this.workItemAssignmentHistoryRepository = workItemAssignmentHistoryRepository;
+        this.workItemStatusHistoryRepository = workItemStatusHistoryRepository;
+        this.workflowAssignmentRepository = workflowAssignmentRepository;
+        this.workflowStatusRepository = workflowStatusRepository;
+        this.workflowTransitionRepository = workflowTransitionRepository;
+        this.workflowTransitionActionRepository = workflowTransitionActionRepository;
         this.commentRepository = commentRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
         this.callbackJwtService = callbackJwtService;
+        this.secretCipherService = secretCipherService;
         this.adapters = adapters;
     }
 
@@ -146,8 +175,10 @@ public class AgentService {
         provider.setCapabilitySchema(toJson(createRequest.capabilitySchema()));
         provider.setConfig(toJson(createRequest.config()));
         provider.setEnabled(createRequest.enabled() == null || createRequest.enabled());
-        adapter(provider.getProviderType()).validateProvider(provider);
-        AgentProvider saved = agentProviderRepository.save(provider);
+        AgentProvider saved = agentProviderRepository.saveAndFlush(provider);
+        saved.setConfig(callbackJwtService.ensureProviderKeyPair(saved));
+        adapter(saved.getProviderType()).validateProvider(saved);
+        saved = agentProviderRepository.save(saved);
         recordWorkspaceEvent(workspaceId, "agent_provider", saved.getId(), "agent.provider.created", actorId, payloadForProvider(saved, actorId));
         return AgentProviderResponse.from(saved);
     }
@@ -173,6 +204,7 @@ public class AgentService {
         if (updateRequest.config() != null) {
             provider.setConfig(toJson(updateRequest.config()));
         }
+        provider.setConfig(callbackJwtService.ensureProviderKeyPair(provider));
         if (updateRequest.enabled() != null) {
             provider.setEnabled(updateRequest.enabled());
         }
@@ -197,7 +229,7 @@ public class AgentService {
         AgentProviderCredential credential = new AgentProviderCredential();
         credential.setProviderId(providerId);
         credential.setCredentialType(credentialType);
-        credential.setEncryptedSecret(fingerprintSecret(requiredText(createRequest.secret(), "secret")));
+        credential.setEncryptedSecret(secretCipherService.encrypt(requiredText(createRequest.secret(), "secret")));
         credential.setMetadata(toJson(createRequest.metadata()));
         credential.setActive(true);
         AgentProviderCredential saved = agentProviderCredentialRepository.save(credential);
@@ -214,7 +246,7 @@ public class AgentService {
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.profile.manage");
         return agentProfileRepository.findByWorkspaceIdOrderByCreatedAtAsc(workspaceId).stream()
-                .map(AgentProfileResponse::from)
+                .map(this::profileResponse)
                 .toList();
     }
 
@@ -244,8 +276,9 @@ public class AgentService {
         profile.setCapabilities(toJson(createRequest.capabilities()));
         profile.setConfig(toJson(createRequest.config()));
         AgentProfile saved = agentProfileRepository.save(profile);
+        replaceProfileProjects(saved, createRequest.projectIds());
         recordWorkspaceEvent(workspaceId, "agent_profile", saved.getId(), "agent.profile.created", actorId, payloadForProfile(saved, actorId));
-        return AgentProfileResponse.from(saved);
+        return profileResponse(saved);
     }
 
     @Transactional
@@ -270,8 +303,12 @@ public class AgentService {
             profile.setConfig(toJson(updateRequest.config()));
         }
         AgentProfile saved = agentProfileRepository.save(profile);
+        if (updateRequest.projectIds() != null) {
+            replaceProfileProjects(saved, updateRequest.projectIds());
+            recordWorkspaceEvent(saved.getWorkspaceId(), "agent_profile", saved.getId(), "agent.profile.project_scope_updated", actorId, payloadForProfile(saved, actorId));
+        }
         recordWorkspaceEvent(saved.getWorkspaceId(), "agent_profile", saved.getId(), "agent.profile.updated", actorId, payloadForProfile(saved, actorId));
-        return AgentProfileResponse.from(saved);
+        return profileResponse(saved);
     }
 
     @Transactional(readOnly = true)
@@ -324,6 +361,7 @@ public class AgentService {
         permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.update");
         AgentProfile profile = activeProfile(item.getWorkspaceId(), required(assignRequest.agentProfileId(), "agentProfileId"));
         AgentProvider provider = activeProvider(item.getWorkspaceId(), profile.getProviderId());
+        requireAgentAvailableForProject(profile, item);
         requireAgentProjectPermission(profile, item, "work_item.read", "Agent profile cannot access this work item");
         assertAgentCapacity(profile);
 
@@ -423,23 +461,29 @@ public class AgentService {
         AgentProfile profile = activeProfile(saved.getWorkspaceId(), saved.getAgentProfileId());
         AgentProvider provider = activeProvider(saved.getWorkspaceId(), saved.getProviderId());
         recordAgentTaskEvent(saved, item, provider, profile, "agent.task.completed", actorId, null);
+        transitionAcceptedWorkToApproval(saved, item, actorId);
         return response(saved, null);
     }
 
     @Transactional
     public AgentTaskResponse handleCallback(String providerKey, String assertion, AgentTaskCallbackRequest request) {
         AgentTaskCallbackRequest callback = required(request, "request");
-        AgentCallbackJwtService.AgentCallbackClaims claims = callbackJwtService.parse(assertion);
-        if (!normalizeKey(providerKey).equals(claims.providerKey())) {
+        AgentCallbackJwtService.AgentCallbackClaims untrustedClaims = callbackJwtService.peek(assertion);
+        if (!normalizeKey(providerKey).equals(untrustedClaims.providerKey())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Agent callback provider mismatch");
         }
-        AgentTask task = agentTaskRepository.findByIdAndWorkspaceId(claims.taskId(), claims.workspaceId())
+        AgentTask task = agentTaskRepository.findByIdAndWorkspaceId(untrustedClaims.taskId(), untrustedClaims.workspaceId())
                 .orElseThrow(() -> notFound("Agent task not found"));
-        if (!claims.providerId().equals(task.getProviderId()) || !claims.agentProfileId().equals(task.getAgentProfileId())) {
+        AgentProvider provider = activeProvider(task.getWorkspaceId(), task.getProviderId());
+        AgentCallbackJwtService.AgentCallbackClaims claims = callbackJwtService.parse(provider, assertion);
+        if (!normalizeKey(providerKey).equals(claims.providerKey())
+                || !claims.taskId().equals(task.getId())
+                || !claims.workspaceId().equals(task.getWorkspaceId())
+                || !claims.providerId().equals(task.getProviderId())
+                || !claims.agentProfileId().equals(task.getAgentProfileId())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Agent callback task mismatch");
         }
         AgentProfile profile = activeProfile(task.getWorkspaceId(), task.getAgentProfileId());
-        AgentProvider provider = activeProvider(task.getWorkspaceId(), task.getProviderId());
         WorkItem item = activeWorkItem(task.getWorkItemId());
         String status = normalizeCallbackStatus(callback.status());
         ObjectNode metadata = objectMapper.createObjectNode()
@@ -490,6 +534,8 @@ public class AgentService {
     }
 
     private String dispatch(AgentTask task, WorkItem item, AgentProvider provider, AgentProfile profile, UUID actorId, boolean retry) {
+        provider.setConfig(callbackJwtService.ensureProviderKeyPair(provider));
+        agentProviderRepository.save(provider);
         AgentDispatchResult result = retry
                 ? adapter(provider.getProviderType()).retry(task, provider, profile)
                 : adapter(provider.getProviderType()).dispatch(task, provider, profile);
@@ -597,6 +643,30 @@ public class AgentService {
         );
     }
 
+    private AgentProfileResponse profileResponse(AgentProfile profile) {
+        List<UUID> projectIds = agentProfileProjectRepository.findByIdAgentProfileIdOrderByCreatedAtAsc(profile.getId()).stream()
+                .map(scope -> scope.getId().getProjectId())
+                .toList();
+        return AgentProfileResponse.from(profile, projectIds);
+    }
+
+    private void replaceProfileProjects(AgentProfile profile, List<UUID> projectIds) {
+        agentProfileProjectRepository.deleteByIdAgentProfileId(profile.getId());
+        if (projectIds == null || projectIds.isEmpty()) {
+            return;
+        }
+        Set<UUID> distinctProjectIds = new LinkedHashSet<>(projectIds);
+        for (UUID projectId : distinctProjectIds) {
+            Project project = activeProject(required(projectId, "projectId"));
+            if (!profile.getWorkspaceId().equals(project.getWorkspaceId())) {
+                throw badRequest("Agent profile project scope must stay within the profile workspace");
+            }
+            AgentProfileProject scope = new AgentProfileProject();
+            scope.setId(new AgentProfileProjectId(profile.getId(), project.getId()));
+            agentProfileProjectRepository.save(scope);
+        }
+    }
+
     private void appendTaskEvent(AgentTask task, String eventType, String severity, String message, JsonNode metadata) {
         AgentTaskEvent event = new AgentTaskEvent();
         event.setAgentTaskId(task.getId());
@@ -629,6 +699,10 @@ public class AgentService {
         domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), eventType, payload);
     }
 
+    private void recordEvent(WorkItem item, String eventType, UUID actorId) {
+        domainEventService.record(item.getWorkspaceId(), "work_item", item.getId(), eventType, workItemPayload(item, actorId));
+    }
+
     private void recordWorkspaceEvent(UUID workspaceId, String aggregateType, UUID aggregateId, String eventType, UUID actorId, ObjectNode payload) {
         payload.put("workspaceId", workspaceId.toString()).put("actorUserId", actorId.toString());
         domainEventService.record(workspaceId, aggregateType, aggregateId, eventType, payload);
@@ -643,11 +717,15 @@ public class AgentService {
     }
 
     private ObjectNode payloadForProfile(AgentProfile profile, UUID actorId) {
-        return objectMapper.createObjectNode()
+        ObjectNode payload = objectMapper.createObjectNode()
                 .put("agentProfileId", profile.getId().toString())
                 .put("agentUserId", profile.getUserId().toString())
                 .put("providerId", profile.getProviderId().toString())
                 .put("actorUserId", actorId.toString());
+        payload.set("projectIds", objectMapper.valueToTree(agentProfileProjectRepository.findByIdAgentProfileIdOrderByCreatedAtAsc(profile.getId()).stream()
+                .map(scope -> scope.getId().getProjectId())
+                .toList()));
+        return payload;
     }
 
     private ObjectNode workItemPayload(WorkItem item, UUID actorId) {
@@ -676,6 +754,9 @@ public class AgentService {
                 .put("agentUserId", profile.getUserId().toString())
                 .put("providerId", provider.getId().toString())
                 .put("providerType", provider.getProviderType());
+        snapshot.set("agentProjectIds", objectMapper.valueToTree(agentProfileProjectRepository.findByIdAgentProfileIdOrderByCreatedAtAsc(profile.getId()).stream()
+                .map(scope -> scope.getId().getProjectId())
+                .toList()));
         if (item.getDescriptionMarkdown() != null) {
             snapshot.put("descriptionMarkdown", item.getDescriptionMarkdown());
         }
@@ -694,6 +775,65 @@ public class AgentService {
         workItemAssignmentHistoryRepository.save(history);
     }
 
+    private void writeStatusHistory(UUID workItemId, UUID fromStatusId, UUID toStatusId, UUID actorId) {
+        WorkItemStatusHistory history = new WorkItemStatusHistory();
+        history.setWorkItemId(workItemId);
+        history.setFromStatusId(fromStatusId);
+        history.setToStatusId(toStatusId);
+        history.setChangedById(actorId);
+        workItemStatusHistoryRepository.save(history);
+    }
+
+    private void transitionAcceptedWorkToApproval(AgentTask task, WorkItem item, UUID actorId) {
+        if (!permissionService.hasProjectPermission(actorId, item.getProjectId(), "work_item.transition")) {
+            appendTaskEvent(task, "approval_transition_skipped", "warning", "Accepting user cannot transition the work item to Approval.", actorPayload(actorId));
+            return;
+        }
+        WorkflowAssignment assignment = workflowAssignmentRepository.findByProjectIdAndWorkItemTypeId(item.getProjectId(), item.getTypeId())
+                .orElse(null);
+        if (assignment == null) {
+            appendTaskEvent(task, "approval_transition_skipped", "warning", "No workflow assignment was available for approval transition.", actorPayload(actorId));
+            return;
+        }
+        WorkflowStatus approval = workflowStatusRepository.findByWorkflowIdAndKeyIgnoreCase(assignment.getWorkflowId(), "approval")
+                .orElse(null);
+        if (approval == null || approval.getId().equals(item.getStatusId())) {
+            return;
+        }
+        WorkflowTransition transition = workflowTransitionRepository.findByWorkflowIdAndFromStatusIdAndToStatusId(
+                        assignment.getWorkflowId(),
+                        item.getStatusId(),
+                        approval.getId()
+                )
+                .orElse(null);
+        if (transition == null) {
+            appendTaskEvent(task, "approval_transition_skipped", "info", "No direct transition to Approval was available from the current status.", actorPayload(actorId));
+            return;
+        }
+
+        UUID fromStatusId = item.getStatusId();
+        item.setStatusId(approval.getId());
+        item.setUpdatedById(actorId);
+        applyTransitionActions(item, transition.getId());
+        WorkItem saved = workItemRepository.saveAndFlush(item);
+        writeStatusHistory(saved.getId(), fromStatusId, saved.getStatusId(), actorId);
+        appendTaskEvent(task, "approval_transitioned", "info", "Accepted agent result moved the work item to Approval.", actorPayload(actorId));
+        recordEvent(saved, "work_item.status_changed", actorId);
+        ObjectNode payload = workItemPayload(saved, actorId)
+                .put("agentTaskId", task.getId().toString())
+                .put("transitionKey", transition.getKey())
+                .put("toStatusKey", approval.getKey());
+        domainEventService.record(saved.getWorkspaceId(), "work_item", saved.getId(), "work_item.agent_acceptance_transitioned", payload);
+    }
+
+    private void applyTransitionActions(WorkItem item, UUID transitionId) {
+        for (WorkflowTransitionAction action : workflowTransitionActionRepository.findByTransitionIdAndEnabledTrueOrderByPositionAsc(transitionId)) {
+            if ("set_resolution".equals(action.getActionType()) && action.getConfig() != null && action.getConfig().hasNonNull("resolutionId")) {
+                item.setResolutionId(UUID.fromString(action.getConfig().get("resolutionId").asText()));
+            }
+        }
+    }
+
     private void assertAgentCapacity(AgentProfile profile) {
         long activeCount = agentTaskRepository.countByAgentProfileIdAndStatusIn(profile.getId(), ACTIVE_TASK_STATUSES);
         if (activeCount >= profile.getMaxConcurrentTasks()) {
@@ -704,6 +844,13 @@ public class AgentService {
     private void requireAgentProjectPermission(AgentProfile profile, WorkItem item, String permissionKey, String message) {
         if (!permissionService.hasProjectPermission(profile.getUserId(), item.getProjectId(), permissionKey)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, message);
+        }
+    }
+
+    private void requireAgentAvailableForProject(AgentProfile profile, WorkItem item) {
+        if (agentProfileProjectRepository.existsByIdAgentProfileId(profile.getId())
+                && !agentProfileProjectRepository.existsByIdAgentProfileIdAndIdProjectId(profile.getId(), item.getProjectId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent profile is not available for this project");
         }
     }
 
@@ -800,8 +947,8 @@ public class AgentService {
 
     private String normalizeProviderType(String providerType) {
         String normalized = normalizeKey(firstText(providerType, "simulated"));
-        if (!"simulated".equals(normalized)) {
-            throw badRequest("Only the simulated agent provider adapter is available in this pass");
+        if (!List.of("simulated", "codex", "claude_code", "generic_worker").contains(normalized)) {
+            throw badRequest("Agent provider type must be simulated, codex, claude_code, or generic_worker");
         }
         return normalized;
     }
@@ -896,15 +1043,6 @@ public class AgentService {
             suffix++;
         }
         return candidate;
-    }
-
-    private String fingerprintSecret(String secret) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8));
-            return "sha256:" + HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 is unavailable", ex);
-        }
     }
 
     private ResponseStatusException badRequest(String message) {

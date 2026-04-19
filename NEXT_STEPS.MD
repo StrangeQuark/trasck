@@ -4,13 +4,13 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend slices.
 
-1. Should the next agent adapter pass add a provider-specific adapter first, such as Codex, Claude Code, or webhook workers, or harden an allowlisted local runner first?
+1. For the generic worker protocol, should the first real worker transport be pull-based polling, backend push/webhook delivery, or both behind the same protocol?
     - Answer:
-2. Should agent callback JWT signing stay as a shared HS256 application secret for now, or move to per-provider asymmetric keys/JWKS before any real external provider is enabled?
+2. Should encrypted provider secret rotation get admin re-encrypt/rotate APIs before external providers are enabled, or wait until the first real adapter needs them?
     - Answer:
-3. Should accepting an agent result only mark the agent task complete, or should it also queue/perform a workflow transition toward Approval once workflow automation exists?
+3. For dashboard/report APIs, should the first aggregate surface be project-level, team/iteration-level, or both using the same query model?
     - Answer:
-4. Should agent profiles remain workspace-level with repository/task validation, or should Trasck add project-scoped agent availability and capability rules before provider-specific adapters?
+4. Should self-service time tracking get dedicated permissions such as `work_log.create_own` and `work_log.update_own` before custom role-management screens exist?
     - Answer:
 
 ## Current State
@@ -21,64 +21,78 @@ The first-run-only setup API creates an admin user, organization, workspace, pro
 
 Authentication and authorization foundations are implemented. Username/password login returns a JWT and sets the same value in an HTTP-only cookie. Direct API callers can use JWTs, revocable personal tokens, or revocable workspace service tokens as `Authorization: Bearer`. Cookie-authenticated unsafe browser requests use Spring cookie CSRF protection. Invitation-based registration supports workspace-only and workspace-plus-project membership. Workspace-admin direct user creation, signed verified OAuth identity linking, full Spring OAuth redirect startup for GitHub/Google/GitLab/Microsoft, provider-specific verified-email resolution, method-level admin permissions, explicit service-level work item permission checks, enforced API token scopes, token list/revoke flows, dedicated service-token listing, and durable hybrid outbox delivery are in place.
 
-The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, list, assign, rank, transition, and archive work items through REST APIs. Work item detail data now includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired, default local storage is seeded from configuration, comment edit/delete uses the author-or-admin permission shape, watcher self-service works with read permission, and these APIs publish durable domain events with HTTP integration coverage.
+The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, list, assign, rank, transition, and archive work items through REST APIs. Work item detail data now includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired, default local storage is seeded from configuration, comment edit/delete uses the author-or-admin permission shape, watcher self-service works with read permission, work-log self-service works for a user's own time entries with read permission, and these APIs publish durable domain events with HTTP integration coverage.
+
+Reporting foundations now include status, assignment, and estimate history writes plus dedicated read APIs for work item status history, assignment history, estimate history, and work-log summaries. These endpoints require `report.read` on the work item's project. Dashboard/report aggregate APIs, date-range filtering, cross-project reporting, and snapshot jobs remain future work.
 
 Activity and audit foundations are implemented. Static durable consumers project domain events into work-item/project/workspace activity streams and workspace audit logs. Audit retention policy metadata is configurable per workspace. Admin replay can reset and dispatch selected durable consumers, defaulting to activity and audit projection. Activity/audit projection tests cover visibility, redaction, and idempotent replay.
 
 Core JPA mappings now include useful associations for common navigation paths such as workspace/project, project/work item, work item/type/status/priority, and workflow/status/transition while preserving scalar UUID fields where they keep command code explicit.
 
-The first provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated agent providers, rotate provider credentials without exposing raw secrets, create assignable agent profiles backed by agent users, add generic Git/GitHub/GitLab repository connections, assign work items to agents, receive signed JWT callbacks, create review artifacts/comments from completed callbacks, accept agent results, and project agent events into activity/audit streams. Assignment and callback-authored comments verify the agent user's project permissions. The simulated adapter proves queued-to-running lifecycle behavior without shell commands or paid/external AI execution.
+The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, rotate provider credentials without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add generic Git/GitHub/GitLab repository connections, assign work items to agents, receive per-provider RS256/JWKS-style signed callbacks, create review artifacts/comments from completed callbacks, accept agent results, and project agent events into activity/audit streams. Provider credentials and callback private keys are stored as encrypted database secrets through a cipher abstraction that can later move to Vault/KMS/Secrets Manager. Assignment and callback-authored comments verify the agent user's project permissions. Current adapters prove queued-to-running lifecycle behavior without shell commands or paid/external AI execution. Accepting an agent result can move a work item to Approval when a direct workflow transition exists and the accepting user has transition permission.
+
+Local runtime polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed.
 
 ## Primary Next Steps
 
-### 1. Add Work Logs And Reporting History Foundations
+### 1. Harden Generic Worker Protocol And Agent Adapter Contracts
 
-Goal: complete the remaining collaboration/time-tracking slice and start producing the history needed for useful reports.
-
-Planned work:
-
-- Add work log create/update/delete/list APIs with permission checks and rich description payloads.
-- Publish durable domain events for work log changes.
-- Add first reporting consumers for work item status/assignment/estimate history where those are not already covered.
-- Add tests for time tracking permissions, soft delete behavior, activity projection, and reportable history.
-
-Done when:
-
-- Users can track time on work items.
-- Time tracking changes are visible in activity and safe for later reporting.
-- Reporting history has a clear source of truth for the first dashboard/list views.
-
-### 2. Add API Documentation And Local Runtime Polish
-
-Goal: make the backend ready for a meaningful manual pass before frontend work depends on it heavily.
+Goal: prepare the provider-neutral agent foundation for real Codex, Claude Code, self-hosted, or future agents without weakening normal project-management behavior.
 
 Planned work:
 
-- Add OpenAPI documentation or checked-in HTTP examples for setup, auth, tokens, work items, collaboration, and attachments.
-- Add Docker Compose/local profile guidance for predictable backend plus PostgreSQL startup.
-- Clean up remaining default warnings where practical, including open-in-view configuration and duplicate `org.json.JSONObject` dependencies.
-- Add endpoint examples that show cookie CSRF and Bearer/API-token usage separately.
-
-Done when:
-
-- A developer can start the backend locally, run the core flows, and understand the required auth headers/cookies without reading implementation code.
-
-### 3. Harden And Expand Agent Adapter Contracts
-
-Goal: prepare the provider-neutral agent foundation for real adapters without weakening normal project-management behavior.
-
-Planned work:
-
-- Decide whether the next adapter is provider-specific, webhook/polling, or a hardened allowlisted local runner.
-- Add adapter contract tests for dispatch, retry, cancel, callback validation, failure handling, and artifact mapping.
-- Add callback signing hardening if external providers are next, including per-provider keys or asymmetric assertions if selected.
-- Add request-changes/waiting-for-input flows so humans can interact with an agent task without accepting or canceling it.
+- Decide the first real worker transport shape from the questions above.
+- Define worker protocol endpoints and payloads for task claim/dispatch, heartbeat, cancel, retry, callback, logs, messages, and artifacts.
+- Add adapter contract tests for dispatch, retry, cancel, callback validation, failure handling, artifact mapping, and idempotency.
+- Add request-changes and human waiting-for-input flows so people can interact with an agent task without accepting or canceling it.
 - Add explicit tests proving agent users cannot exceed their workspace/project role permissions.
 
 Done when:
 
-- A real provider can be added by implementing an adapter and tests without changing work item, workflow, or reporting code.
-- Callback trust, secret handling, and agent permissions are strong enough for a non-simulated provider.
+- A real provider or worker can dispatch through the adapter contract without changing work item, workflow, or reporting code.
+- Callback trust, secret handling, and agent permissions are strong enough for non-stub provider execution.
+
+### 2. Add Dashboard And Reporting APIs
+
+Goal: turn stored history and work-log data into useful project-management report surfaces.
+
+Planned work:
+
+- Add aggregate APIs for project/team throughput, cycle time inputs, estimate/time summaries, and work aging.
+- Add date ranges, grouping controls, deleted-work-log behavior, and cross-project ordering.
+- Decide which metrics calculate on demand first versus which need persisted scheduled snapshots.
+- Connect report outputs to the existing dashboard/widget schema instead of requiring the frontend to read raw history endpoints.
+
+Done when:
+
+- The backend can answer basic dashboard questions without frontend code reading raw tables directly.
+- The reporting model has a clear path from history rows to dashboard widgets.
+
+### 3. Operational Hardening
+
+Goal: tighten production-facing backend behavior before a broad manual test.
+
+Planned work:
+
+- Add key/secret rotation controls for provider credentials and callback signing keys.
+- Add token expiry integration tests and any remaining token lifecycle edge cases.
+- Add durable outbox consumer tests for failure, retry, disabled consumers, unknown replay consumers, and multi-consumer delivery.
+- Add S3-compatible attachment storage tests using a controlled local fake, MinIO, or LocalStack.
+- Add physical audit retention pruning/export jobs after the retention policy metadata has a scheduled executor.
+
+Done when:
+
+- The main backend flows can be exercised manually with fewer hidden operational gaps.
+
+## Future Dashboard/Report APIs
+
+Keep this section until dashboard work is implemented.
+
+- Project dashboard summary: open work, blocked work, recent transitions, work by type/status/priority, and active agents.
+- Team/iteration dashboard summary: committed work, completed work, carryover, velocity inputs, and cycle-time inputs.
+- Time and estimate reporting: work-log totals by user/project/work item, remaining-time trends, and estimate-vs-actual summaries.
+- Flow reporting: cumulative flow, cycle time, lead time, throughput, aging WIP, and stale work items.
+- Saved dashboard widgets should read from reporting APIs, not raw domain tables.
 
 ## Before Full User Testing
 
@@ -87,21 +101,18 @@ The following work should be completed before the application is ready for a mea
 ### Backend Readiness
 
 - Expand permission checks beyond work items and user-management endpoints as more APIs are exposed.
-- Add provider-specific agent adapters or a hardened allowlisted local runner after the simulated adapter contract is stable.
-- Replace simulated credential fingerprinting with decryptable encrypted secret storage or external secret management before real provider API dispatch.
-- Harden signed agent callbacks for external providers with the chosen per-provider/shared/asymmetric key strategy.
+- Add real dispatch through the generic worker protocol, provider-hosted APIs, or hardened CLI workers after the non-external adapter contract is stable.
+- Add key rotation and operational controls for per-provider callback signing keys and provider credentials.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, and external callback failures as those flows are added.
 - Add physical audit retention pruning/export jobs after the retention policy metadata has a scheduled executor.
 - Add token expiry integration tests and any remaining token lifecycle edge cases.
-- Add work log APIs and reporting history consumers for time tracking.
-- Add OpenAPI documentation or HTTP example files for the main workflows.
-- Add Docker Compose/local profile support for running the backend with PostgreSQL in a predictable local setup.
-- Clean up remaining default warnings where practical, including open-in-view configuration and duplicate `org.json.JSONObject` dependencies.
+- Add dashboard aggregate APIs and snapshot jobs for status, assignment, estimate, cycle time, flow, and time tracking history.
 
 ### Product Configuration Readiness
 
 - Decide which remaining configuration after core system fields is globally seeded, workspace-seeded, or project-seeded.
 - Decide when to introduce configurable custom fields, screens, and screen assignments beyond the current core system field model.
+- Decide whether work-log self-service should remain permission-shaped through `work_item.read`/`work_item.update` or get dedicated time-tracking permissions.
 
 ### Test Readiness
 
@@ -114,8 +125,8 @@ The following work should be completed before the application is ready for a mea
 - Add automation tests once the first automation executor exists.
 - Add agent adapter contract tests covering dispatch, callback, messages, artifacts, cancellation, retry, failure, completion, and idempotency without invoking paid or external execution.
 - Add agent permission tests proving agents cannot exceed their workspace/project role.
-- Add secret-redaction tests proving provider credentials do not leak into context snapshots, comments, activity events, or audit entries.
-- Add reporting snapshot tests after work item updates begin writing reportable state.
+- Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, comments, activity events, audit entries, or API responses.
+- Add reporting snapshot tests for persisted status, assignment, estimate, and time-tracking history.
 
 ### Frontend Readiness
 
@@ -124,7 +135,7 @@ The following work should be completed before the application is ready for a mea
 - Build the full initial frontend flow for setup, project navigation, backlog management, board interaction, and issue detail editing.
 - Add browser CSRF token handling for cookie-authenticated unsafe requests.
 - Add API token administration screens for personal and service tokens.
-- Add collaboration panels for comments, links, watchers, labels, and attachments.
+- Add collaboration panels for comments, links, watchers, work logs, labels, and attachments.
 - Add agent-aware assignee display, including agent badges without changing the normal assignee workflow.
 - Add an agent task panel on work item detail for status, progress events, questions, artifacts, branches, and pull requests.
 - Add admin screens for provider configuration, agent profiles, credentials, capabilities, repository connections, and concurrency limits.

@@ -6,12 +6,12 @@ For the front end of the Trasck project, see: [trasck-frontend](https://github.c
 
 ## Features
 - Ready-to-run Docker environment
-- Postman collection for testing and exploration
+- Checked-in HTTP examples for testing and exploration
   <br><br><br>
 
 ## Technology Stack
-- Java 17+
-- Spring Boot
+- Java 21
+- Spring Boot 4
 - PostgreSQL
 - Docker & Docker Compose
 - JPA (Hibernate)
@@ -22,7 +22,7 @@ For the front end of the Trasck project, see: [trasck-frontend](https://github.c
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- Java 17+ (for development or test execution outside Docker)
+- Java 21 (for development or test execution outside Docker)
   <br><br>
 
 ### Running the Application
@@ -31,7 +31,7 @@ Clone the repository and start the service using Docker Compose:
 ```
 git clone https://github.com/StrangeQuark/trasck.git
 cd trasck
-docker-compose up --build
+docker compose up --build
 ```
 <br>
 
@@ -42,13 +42,18 @@ The `.env` file is required to provide necessary configuration such as encryptio
 <br><br>
 
 ## API Documentation
-A Postman collection is included in the root of the project:
+Runtime notes and HTTP examples are included in `docs/`:
 
-- `trasck.postman_collection.json`
+- `docs/LOCAL_RUNTIME.md`
+- `docs/http/trasck-api-examples.http`
   <br><br>
 
 ## Testing
-Unit tests are provided for all repository and service-layer logic.
+Run the backend test suite with:
+
+```
+sh mvnw test
+```
 <br><br>
 
 ## Deployment
@@ -60,7 +65,7 @@ This project includes a `Jenkinsfile` for use in CI/CD pipelines. Jenkins must b
   <br><br>
 
 ## License
-This project is licensed under the GNU General Public License. See `LICENSE.md` for details.
+This project is licensed under the GNU General Public License. See `LICENSE` for details.
 <br><br>
 
 ## Contributing

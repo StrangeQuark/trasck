@@ -26,8 +26,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 class AgentIntegrationTest {
 
-    private static final String CALLBACK_JWT_SECRET = "test-agent-callback-secret-that-is-long-enough";
-
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:13.1-alpine")
             .withDatabaseName("trasck_agent_test")
@@ -52,7 +50,6 @@ class AgentIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
-        registry.add("trasck.agents.callback-jwt-secret", () -> CALLBACK_JWT_SECRET);
         registry.add("trasck.events.outbox.fixed-delay-ms", () -> "600000");
     }
 
@@ -72,6 +69,30 @@ class AgentIntegrationTest {
                 .put("displayName", "Simulated Codex")
                 .put("dispatchMode", "managed"), accessToken));
         UUID providerId = uuid(provider, "/id");
+        assertThat(provider.at("/config/callbackJwt/algorithm").asText()).isEqualTo("RS256");
+        assertThat(provider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
+        assertThat(provider.at("/config/callbackJwt/keys/0/publicJwk/kty").asText()).isEqualTo("RSA");
+        assertThat(provider.toString()).doesNotContain("BEGIN PRIVATE KEY");
+
+        JsonNode codexProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
+                .put("providerKey", "codex-main")
+                .put("providerType", "codex")
+                .put("displayName", "Codex")
+                .put("dispatchMode", "managed"), accessToken));
+        assertThat(codexProvider.at("/providerType").asText()).isEqualTo("codex");
+        JsonNode claudeProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
+                .put("providerKey", "claude-main")
+                .put("providerType", "claude_code")
+                .put("displayName", "Claude Code")
+                .put("dispatchMode", "managed"), accessToken));
+        assertThat(claudeProvider.at("/providerType").asText()).isEqualTo("claude_code");
+        JsonNode workerProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
+                .put("providerKey", "worker-main")
+                .put("providerType", "generic_worker")
+                .put("displayName", "Generic Worker")
+                .put("dispatchMode", "polling"), accessToken));
+        assertThat(workerProvider.at("/providerType").asText()).isEqualTo("generic_worker");
+        assertThat(workerProvider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
 
         JsonNode credential = read(post("/api/v1/agent-providers/" + providerId + "/credentials", objectMapper.createObjectNode()
                 .put("credentialType", "callback_signing")
@@ -79,14 +100,17 @@ class AgentIntegrationTest {
                 .set("metadata", objectMapper.createObjectNode().put("purpose", "test")), accessToken));
         assertThat(credential.toString()).doesNotContain("raw-secret-that-must-not-be-returned").doesNotContain("encryptedSecret");
 
-        JsonNode profile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", objectMapper.createObjectNode()
+        ObjectNode profileRequest = objectMapper.createObjectNode()
                 .put("providerId", providerId.toString())
                 .put("displayName", "Sim Agent")
                 .put("username", "sim-agent")
                 .put("roleId", memberRoleId.toString())
-                .put("maxConcurrentTasks", 1), accessToken));
+                .put("maxConcurrentTasks", 1);
+        profileRequest.set("projectIds", objectMapper.createArrayNode().add(projectId.toString()));
+        JsonNode profile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", profileRequest, accessToken));
         UUID profileId = uuid(profile, "/id");
         UUID agentUserId = uuid(profile, "/userId");
+        assertThat(profile.at("/projectIds")).hasSize(1);
 
         ObjectNode providerMetadata = objectMapper.createObjectNode()
                 .put("owner", "strangequark")
@@ -107,6 +131,13 @@ class AgentIntegrationTest {
                 .put("title", "Let an agent implement this")
                 .put("reporterId", adminUserId.toString()), accessToken));
         UUID workItemId = uuid(workItem, "/id");
+        read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "open_to_ready"), accessToken));
+        read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "ready_to_in_progress"), accessToken));
+        JsonNode reviewWorkItem = read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "in_progress_to_in_review"), accessToken));
+        assertThat(uuid(reviewWorkItem, "/statusId")).isEqualTo(statusId(setup, "in_review"));
 
         ObjectNode assignRequest = objectMapper.createObjectNode()
                 .put("agentProfileId", profileId.toString());
@@ -151,10 +182,11 @@ class AgentIntegrationTest {
 
         JsonNode acceptedTask = read(post("/api/v1/agent-tasks/" + taskId + "/accept-result", objectMapper.createObjectNode(), accessToken));
         assertThat(acceptedTask.at("/status").asText()).isEqualTo("completed");
+        assertThat(uuid(read(get("/api/v1/work-items/" + workItemId, accessToken)), "/statusId")).isEqualTo(statusId(setup, "approval"));
 
         domainEventOutboxDispatcher.dispatchPending();
         JsonNode activity = read(get("/api/v1/work-items/" + workItemId + "/activity?limit=100", accessToken));
-        assertThat(eventTypes(activity)).contains("work_item.agent_assigned", "agent.task.review_requested", "work_item.comment_created");
+        assertThat(eventTypes(activity)).contains("work_item.agent_assigned", "agent.task.review_requested", "work_item.comment_created", "work_item.agent_acceptance_transitioned");
         JsonNode audit = read(get("/api/v1/workspaces/" + workspaceId + "/audit-log?limit=100", accessToken));
         assertThat(eventTypes(audit, "action")).contains("agent.provider.created", "agent.provider.credential_created", "agent.profile.created", "agent.task.completed");
     }
@@ -242,6 +274,15 @@ class AgentIntegrationTest {
             }
         }
         throw new IllegalStateException("Role not found: " + key);
+    }
+
+    private UUID statusId(JsonNode setup, String key) {
+        for (JsonNode status : setup.at("/seedData/workflow/statuses")) {
+            if (key.equals(status.at("/key").asText())) {
+                return UUID.fromString(status.at("/id").asText());
+            }
+        }
+        throw new IllegalStateException("Status not found: " + key);
     }
 
     private String[] eventTypes(JsonNode entries) {
