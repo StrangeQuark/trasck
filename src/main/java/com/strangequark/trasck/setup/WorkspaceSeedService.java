@@ -131,7 +131,8 @@ public class WorkspaceSeedService {
             "workspace_owner", List.of("*"),
             "workspace_admin", List.of("workspace.admin", "workspace.read", "user.manage", "project.create", "project.admin", "project.read",
                     "work_item.create", "work_item.read", "work_item.update", "work_item.delete", "work_item.transition",
-                    "work_item.comment", "work_item.link", "workflow.admin", "board.admin", "automation.admin", "report.read",
+                    "work_item.comment", "work_item.link", "work_log.create_own", "work_log.update_own", "work_log.delete_own",
+                    "workflow.admin", "board.admin", "automation.admin", "report.read",
                     "agent.provider.manage", "agent.provider.credential.manage", "agent.profile.manage", "agent.assign",
                     "agent.task.view", "agent.task.cancel", "agent.task.retry", "agent.task.view_logs",
                     "agent.task.accept_result", "repository_connection.manage"),
@@ -140,10 +141,12 @@ public class WorkspaceSeedService {
                     "agent.task.cancel", "agent.task.retry", "agent.task.view_logs", "agent.task.accept_result",
                     "repository_connection.manage"),
             "member", List.of("workspace.read", "project.read", "work_item.create", "work_item.read", "work_item.update",
-                    "work_item.transition", "work_item.comment", "work_item.link", "report.read"),
+                    "work_item.transition", "work_item.comment", "work_item.link",
+                    "work_log.create_own", "work_log.update_own", "work_log.delete_own", "report.read"),
             "viewer", List.of("workspace.read", "project.read", "work_item.read", "report.read"),
             "project_admin", List.of("project.admin", "project.read", "work_item.create", "work_item.read", "work_item.update",
-                    "work_item.delete", "work_item.transition", "work_item.comment", "work_item.link", "board.admin", "report.read")
+                    "work_item.delete", "work_item.transition", "work_item.comment", "work_item.link",
+                    "work_log.create_own", "work_log.update_own", "work_log.delete_own", "board.admin", "report.read")
     );
 
     private final ObjectMapper objectMapper;

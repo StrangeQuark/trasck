@@ -266,7 +266,7 @@ public class WorkItemCollaborationService {
         WorkLogRequest updateRequest = required(request, "request");
         WorkLog workLog = workLogRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(workLogId, workItemId)
                 .orElseThrow(() -> notFound("Work log not found"));
-        requireWorkLogMutationPermission(item, workLog, actorId, updateRequest.userId());
+        requireWorkLogMutationPermission(item, workLog, actorId, updateRequest.userId(), "work_log.update_own");
         if (updateRequest.userId() != null) {
             activeUser(updateRequest.userId());
             workLog.setUserId(updateRequest.userId());
@@ -297,7 +297,7 @@ public class WorkItemCollaborationService {
         UUID actorId = currentUserService.requireUserId();
         WorkLog workLog = workLogRepository.findByIdAndWorkItemIdAndDeletedAtIsNull(workLogId, workItemId)
                 .orElseThrow(() -> notFound("Work log not found"));
-        requireWorkLogMutationPermission(item, workLog, actorId, null);
+        requireWorkLogMutationPermission(item, workLog, actorId, null, "work_log.delete_own");
         workLog.setDeletedAt(OffsetDateTime.now());
         recordWorkLogEvent(item, "work_item.work_log_deleted", actorId, workLog);
     }
@@ -493,14 +493,14 @@ public class WorkItemCollaborationService {
     }
 
     private void requireWorkLogCreatePermission(WorkItem item, UUID actorId, UUID loggedUserId) {
-        String permissionKey = actorId.equals(loggedUserId) ? "work_item.read" : "work_item.update";
+        String permissionKey = actorId.equals(loggedUserId) ? "work_log.create_own" : "work_item.update";
         permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
     }
 
-    private void requireWorkLogMutationPermission(WorkItem item, WorkLog workLog, UUID actorId, UUID requestedUserId) {
+    private void requireWorkLogMutationPermission(WorkItem item, WorkLog workLog, UUID actorId, UUID requestedUserId, String ownPermissionKey) {
         boolean selfEntry = actorId.equals(workLog.getUserId());
         boolean reassignment = requestedUserId != null && !requestedUserId.equals(workLog.getUserId());
-        String permissionKey = selfEntry && !reassignment ? "work_item.read" : "work_item.update";
+        String permissionKey = selfEntry && !reassignment ? ownPermissionKey : "work_item.update";
         permissionService.requireProjectPermission(actorId, item.getProjectId(), permissionKey);
     }
 

@@ -9,10 +9,12 @@
 @workLogId = replace-with-work-log-id
 @attachmentId = replace-with-attachment-id
 @providerId = replace-with-agent-provider-id
+@credentialId = replace-with-agent-provider-credential-id
 @profileId = replace-with-agent-profile-id
 @repositoryConnectionId = replace-with-repository-connection-id
 @agentTaskId = replace-with-agent-task-id
 @agentCallbackToken = replace-with-agent-callback-token
+@agentWorkerToken = replace-with-worker-token
 
 ### Health
 GET {{baseUrl}}/api/trasck/health
@@ -89,6 +91,9 @@ Content-Type: application/json
     "work_item.update",
     "work_item.comment",
     "work_item.link",
+    "work_log.create_own",
+    "work_log.update_own",
+    "work_log.delete_own",
     "report.read",
     "agent.provider.manage",
     "agent.provider.credential.manage",
@@ -234,18 +239,43 @@ Content-Type: application/json
   "enabled": true
 }
 
-### Rotate Provider Credential
+### Create Worker Token Credential
 POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-  "credentialType": "api_token",
-  "secret": "replace-with-provider-secret",
+  "credentialType": "worker_token",
+  "secret": "{{agentWorkerToken}}",
   "metadata": {
-    "environment": "local"
+    "purpose": "generic-worker-auth"
   }
 }
+
+### List Redacted Provider Credentials
+GET {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials
+Authorization: Bearer {{accessToken}}
+
+### Re-encrypt Provider Credentials
+POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials/reencrypt
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Deactivate Provider Credential
+POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials/{{credentialId}}/deactivate
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Rotate Provider Callback Signing Key
+POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/callback-keys/rotate
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
 
 ### Create Agent Profile
 POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agents
@@ -291,6 +321,77 @@ Content-Type: application/json
   "requestPayload": {
     "instructions": "Implement the story and request review."
   }
+}
+
+### Build Backend Push Dispatch Payload
+POST {{baseUrl}}/api/v1/agent-tasks/{{agentTaskId}}/worker-dispatch
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Worker Polls For A Task
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-workers/worker-local/tasks/claim
+X-Trasck-Worker-Token: {{agentWorkerToken}}
+Content-Type: application/json
+
+{
+  "workerId": "local-worker-1",
+  "capabilities": [
+    "code"
+  ]
+}
+
+### Worker Heartbeat
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-workers/worker-local/tasks/{{agentTaskId}}/heartbeat
+X-Trasck-Worker-Token: {{agentWorkerToken}}
+Content-Type: application/json
+
+{
+  "workerId": "local-worker-1",
+  "status": "waiting_for_input",
+  "message": "Need clarification."
+}
+
+### Add Human Message To Agent Task
+POST {{baseUrl}}/api/v1/agent-tasks/{{agentTaskId}}/messages
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "bodyMarkdown": "Use the default implementation path."
+}
+
+### Request Changes From Agent
+POST {{baseUrl}}/api/v1/agent-tasks/{{agentTaskId}}/request-changes
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "message": "Please add tests before review."
+}
+
+### Worker Progress Log
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-workers/worker-local/tasks/{{agentTaskId}}/logs
+X-Trasck-Worker-Token: {{agentWorkerToken}}
+Content-Type: application/json
+
+{
+  "workerId": "local-worker-1",
+  "eventType": "worker_progress",
+  "severity": "info",
+  "message": "Tests are running."
+}
+
+### Worker Adds Artifact
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-workers/worker-local/tasks/{{agentTaskId}}/artifacts
+X-Trasck-Worker-Token: {{agentWorkerToken}}
+Content-Type: application/json
+
+{
+  "artifactType": "branch",
+  "name": "worker/implementation",
+  "externalUrl": "https://example.com/worker/implementation"
 }
 
 ### Agent Callback

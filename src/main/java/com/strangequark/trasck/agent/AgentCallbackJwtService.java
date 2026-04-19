@@ -83,6 +83,32 @@ public class AgentCallbackJwtService {
         return config;
     }
 
+    public JsonNode rotateProviderKeyPair(AgentProvider provider) {
+        if (provider.getId() == null) {
+            throw new IllegalStateException("Agent provider must be persisted before callback key rotation");
+        }
+        ObjectNode config = objectConfig(provider.getConfig());
+        JsonNode callbackConfig = config.path(CALLBACK_JWT_CONFIG);
+        CallbackKeyMaterial generated = generateKeyMaterial();
+        persistPrivateKeyCredential(provider, generated);
+
+        ObjectNode callbackJwt = objectMapper.createObjectNode()
+                .put("algorithm", "RS256")
+                .put("currentKid", generated.keyId());
+        ArrayNode keys = objectMapper.createArrayNode();
+        if (callbackConfig.path("keys").isArray()) {
+            callbackConfig.path("keys").forEach(key -> keys.add(key.deepCopy()));
+        }
+        keys.add(objectMapper.createObjectNode()
+                .put("kid", generated.keyId())
+                .put("alg", "RS256")
+                .put("createdAt", Instant.now().toString())
+                .set("publicJwk", generated.publicJwk()));
+        callbackJwt.set("keys", keys);
+        config.set(CALLBACK_JWT_CONFIG, callbackJwt);
+        return config;
+    }
+
     public String issue(AgentTask task, AgentProvider provider, AgentProfile profile) {
         CallbackKeyMaterial key = activeKey(objectConfig(provider.getConfig()).path(CALLBACK_JWT_CONFIG));
         String privateKeyPem = privateKeyPem(provider, key.keyId());

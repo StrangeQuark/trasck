@@ -45,7 +45,7 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 33. Personal and service API token scopes are enforced in addition to role permissions. A token can reduce access but cannot grant permissions beyond the backing user's workspace/project roles.
 34. Service-token-backed `service` users should be managed through dedicated service-token/admin surfaces by default, not mixed into normal human user/member lists.
 35. Work item attachment bytes use a provider-neutral storage interface. Local filesystem storage is the default development provider; S3-compatible object storage is selected through workspace storage configuration.
-36. AI provider adapters start with non-external stubs for `simulated`, `codex`, and `claude_code` so the provider-neutral lifecycle, callback security, profile scoping, and tests are stable before any real hosted or local agent execution is enabled.
+36. AI provider adapters start with non-external stubs for `simulated`, `codex`, `claude_code`, and `generic_worker` so the provider-neutral lifecycle, callback security, profile scoping, worker protocol, and tests are stable before any real hosted or local agent execution is enabled.
 
 ## Full Work Hierarchy
 
@@ -180,12 +180,13 @@ Implemented endpoints:
 - `GET /api/v1/workspaces/{workspaceId}/audit-log` exposes admin-only audit log entries for a workspace.
 - `GET /api/v1/workspaces/{workspaceId}/audit-retention-policy` and `PUT /api/v1/workspaces/{workspaceId}/audit-retention-policy` manage configurable workspace audit retention policy metadata.
 - `POST /api/v1/workspaces/{workspaceId}/domain-events/replay` lets workspace admins replay selected domain events through selected durable consumers, defaulting to the activity and audit projection consumers.
-- `GET /api/v1/workspaces/{workspaceId}/agent-providers`, `POST /api/v1/workspaces/{workspaceId}/agent-providers`, `PATCH /api/v1/agent-providers/{providerId}`, and `POST /api/v1/agent-providers/{providerId}/credentials` manage provider-neutral agent providers and rotated credentials.
+- `GET /api/v1/workspaces/{workspaceId}/agent-providers`, `POST /api/v1/workspaces/{workspaceId}/agent-providers`, `PATCH /api/v1/agent-providers/{providerId}`, `POST /api/v1/agent-providers/{providerId}/credentials`, `GET /api/v1/agent-providers/{providerId}/credentials`, `POST /api/v1/agent-providers/{providerId}/credentials/{credentialId}/deactivate`, `POST /api/v1/agent-providers/{providerId}/credentials/reencrypt`, and `POST /api/v1/agent-providers/{providerId}/callback-keys/rotate` manage provider-neutral agent providers, encrypted credentials, and callback signing keys.
 - `GET /api/v1/workspaces/{workspaceId}/agents`, `POST /api/v1/workspaces/{workspaceId}/agents`, and `PATCH /api/v1/agents/{profileId}` manage assignable agent profiles backed by `users.account_type = agent`.
 - `GET /api/v1/workspaces/{workspaceId}/repository-connections` and `POST /api/v1/workspaces/{workspaceId}/repository-connections` manage generic Git, GitHub, and GitLab repository connections with provider metadata.
 - `POST /api/v1/work-items/{workItemId}/assign-agent` assigns a work item to a configured agent and creates an agent task.
-- `GET /api/v1/agent-tasks/{taskId}`, `POST /api/v1/agent-tasks/{taskId}/cancel`, `POST /api/v1/agent-tasks/{taskId}/retry`, and `POST /api/v1/agent-tasks/{taskId}/accept-result` expose agent task review and lifecycle commands.
+- `GET /api/v1/agent-tasks/{taskId}`, `POST /api/v1/agent-tasks/{taskId}/messages`, `POST /api/v1/agent-tasks/{taskId}/request-changes`, `POST /api/v1/agent-tasks/{taskId}/cancel`, `POST /api/v1/agent-tasks/{taskId}/retry`, `POST /api/v1/agent-tasks/{taskId}/accept-result`, and `POST /api/v1/agent-tasks/{taskId}/worker-dispatch` expose agent task review, collaboration, and lifecycle commands.
 - `POST /api/v1/agent-callbacks/{providerKey}` accepts provider-neutral signed JWT callback assertions for agent task status, messages, artifacts, and review requests.
+- `POST /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/claim`, `/tasks/{taskId}/heartbeat`, `/logs`, `/messages`, `/artifacts`, `/cancel`, and `/retry` expose the first generic-worker protocol endpoints. These routes are open at the HTTP security layer but require a valid `X-Trasck-Worker-Token` matching an active encrypted provider `worker_token` credential.
 - `GET /api/v1/reports/work-items/{workItemId}/status-history`, `/assignment-history`, `/estimate-history`, and `/work-log-summary` expose first reporting/history read APIs for a work item.
 
 Implemented seed data:
@@ -208,12 +209,12 @@ Security state:
 - Service token records can be listed through dedicated admin/token APIs without exposing hashes or raw token values. Service users remain implementation identities behind those token-management surfaces by default.
 - Invitations can grant workspace membership only, or workspace membership plus project-specific membership when `projectId` and `projectRoleId` are included.
 - Anonymous public project reads still perform domain-level visibility checks; security configuration alone is not the access-control source of truth.
-- Comment edits/deletes are author-or-admin shaped: authors need `work_item.comment`; users editing/deleting someone else's comment need `work_item.update`. Watcher self-service add/remove requires `work_item.read`; managing watchers for other users requires `work_item.update`. Work-log self-service allows users with `work_item.read` to create, edit, and delete their own time entries; logging or mutating time for another user requires `work_item.update`.
+- Comment edits/deletes are author-or-admin shaped: authors need `work_item.comment`; users editing/deleting someone else's comment need `work_item.update`. Watcher self-service add/remove requires `work_item.read`; managing watchers for other users requires `work_item.update`. Work-log self-service uses dedicated `work_log.create_own`, `work_log.update_own`, and `work_log.delete_own` permissions for a user's own time entries; logging or mutating time for another user requires `work_item.update`.
 - Reporting/history read APIs require `report.read` on the work item's project.
 - Activity streams use service-layer permission checks for the requested workspace, project, or work item.
 - Audit log, audit retention, and domain event replay APIs are workspace-admin-only through method-level permission checks.
 - Agent management uses explicit service-layer permission checks. Workspace Admins and the seeded Agent Manager role can manage providers, credentials, profiles, assignments, tasks, and repository connections according to their role grants.
-- Agent callback endpoints are open at the HTTP security layer but require a valid signed callback JWT in `X-Trasck-Agent-Callback-Jwt`. Callback JWTs use per-provider RS256 keys. Provider config stores JWKS-style public key material only; private signing keys are encrypted in `agent_provider_credentials` through the secret-cipher abstraction. The assertion is scoped to the workspace, provider, provider key, agent profile, and agent task before any state change is accepted.
+- Agent callback endpoints are open at the HTTP security layer but require a valid signed callback JWT in `X-Trasck-Agent-Callback-Jwt`. Callback JWTs use per-provider RS256 keys. Provider config stores JWKS-style public key material only; private signing keys are encrypted in `agent_provider_credentials` through the secret-cipher abstraction. The assertion is scoped to the workspace, provider, provider key, agent profile, and agent task before any state change is accepted. Generic worker endpoints are also open at the HTTP security layer and authenticate with `X-Trasck-Worker-Token` against active encrypted provider credentials.
 - Agent profiles can be workspace-wide or project-scoped through `agent_profile_projects`; scoped profiles cannot be assigned outside their allowed projects.
 
 Work item implementation state:
@@ -223,7 +224,7 @@ Work item implementation state:
 - Sequence allocation uses durable project and workspace sequence counter tables.
 - Work item rank uses fixed-width sortable strings.
 - Work item collaboration APIs cover comments, links, watchers, work logs, labels, attachment metadata, and attachment byte upload/download/delete. They validate active work items, permissions, linked/target records, rich JSON document request/response payloads, storage configuration, checksums, and common bad inputs before database constraints are hit.
-- Work log APIs write `work_logs` rows with positive minutes, work dates, optional start timestamps, Markdown/body-document descriptions, soft delete, and durable `work_item.work_logged`, `work_item.work_log_updated`, and `work_item.work_log_deleted` events.
+- Work log APIs write `work_logs` rows with positive minutes, work dates, optional start timestamps, Markdown/body-document descriptions, soft delete, dedicated own-entry permissions, and durable `work_item.work_logged`, `work_item.work_log_updated`, and `work_item.work_log_deleted` events.
 - Work item create/update writes reporting history for status, assignment, and estimate changes. Estimate history records `points`, `minutes`, and `remaining_minutes` changes in `work_item_estimate_history`.
 - Reporting read APIs expose status history, assignment history, estimate history, and non-deleted work-log totals through project-scoped `report.read` checks. Dashboard/report aggregate APIs and snapshot jobs remain future work.
 - Attachment byte storage is behind a provider-neutral storage interface. The first providers are local filesystem storage for development and S3-compatible object storage selected by workspace attachment storage configuration. Local filesystem roots default from `trasck.attachments.local-root`; uploaded files receive generated storage keys and SHA-256 checksums.
@@ -237,13 +238,14 @@ AI agent implementation state:
 - The first provider-neutral agent service slice is implemented around the existing schema/JPA model.
 - `AgentProviderAdapter` is the adapter contract used by provider-specific implementations. Current non-external implementations are `simulated`, `codex`, `claude_code`, and `generic_worker`, which prove dispatch, retry, cancel, callback, review artifact, and projection behavior without shelling out or calling paid/external AI systems.
 - Provider keys, provider types, dispatch modes, callback statuses, repository providers, and artifact types are normalized before storage or comparison.
-- Agent providers currently accept `simulated`, `codex`, `claude_code`, and `generic_worker` provider types. The Codex and Claude Code adapters are lifecycle stubs only. The generic worker adapter establishes a provider-neutral protocol payload (`trasck.worker.v1`) that can later support CLI workers, polling workers, hosted APIs, and webhook-based execution without coupling work item code to a vendor.
-- Provider credentials and callback private keys are stored as AES-GCM encrypted database secrets through `SecretCipherService`. The first implementation is database-backed and intentionally abstracted so Vault/KMS/Secrets Manager can replace the cipher/storage path later without changing agent callback logic.
+- Agent providers currently accept `simulated`, `codex`, `claude_code`, and `generic_worker` provider types. The Codex and Claude Code adapters are lifecycle stubs only. The generic worker adapter establishes a provider-neutral protocol payload (`trasck.worker.v1`) and now supports both pull polling and backend-generated webhook push payloads without coupling work item code to a vendor.
+- Provider credentials and callback private keys are stored as AES-GCM encrypted database secrets through `SecretCipherService`. Admin APIs can list redacted credentials, deactivate non-callback credentials, re-encrypt provider credentials with the current cipher, and rotate per-provider callback signing keys. The first implementation is database-backed and intentionally abstracted so Vault/KMS/Secrets Manager can replace the cipher/storage path later without changing agent callback logic.
 - Agent profile creation creates an agent-backed `users` row and workspace membership, so assignment, permissions, reporting, and activity continue to use the existing user/role model. Optional `projectIds` on agent profiles create project-scoped availability rows without changing the underlying user model.
 - Agent assignment and callback-authored comments verify the agent user's project permissions, so callbacks do not bypass the role model.
+- Generic worker protocol endpoints authenticate with active encrypted `worker_token` credentials and support task claim, heartbeat, progress logs, agent messages, artifacts, cancel acknowledgement, retry, and admin-generated dispatch payloads.
 - Repository connections support `generic_git`, `github`, and `gitlab`; GitHub/GitLab-specific metadata is stored inside provider-neutral `repository_connections.config.providerMetadata`.
 - Assigning a work item to an agent sets the work item assignee to the agent user, writes assignment history, creates a queued `agent_tasks` row, links repository context, records durable domain events, dispatches the adapter, and moves the task to `running`.
-- Agent callbacks support `running`, `waiting_for_input`, `failed`, and `completed`. A completed callback moves the task to `review_requested`, stores callback messages/artifacts, creates an `Agent Review Request` artifact, creates a work item comment authored by the agent user, and does not transition the work item to Done.
+- Agent callbacks support `running`, `waiting_for_input`, `failed`, and `completed`. A completed callback moves the task to `review_requested`, stores callback messages/artifacts, creates an `Agent Review Request` artifact, creates a work item comment authored by the agent user, and does not transition the work item to Done. Human messages and request-changes commands let users resume or redirect tasks that are running, waiting for input, or awaiting review without accepting or canceling the task.
 - Human acceptance of the review result marks the agent task `completed`. If the accepting user can transition the work item and the assigned workflow has a direct transition from the current status to `Approval`, acceptance also performs that transition, writes status history, and records `work_item.agent_acceptance_transitioned`. It never moves work directly to Done.
 - Activity and audit projection consumers include agent provider setup, credential rotation, profile setup, assignment, task review/completion, and agent-created work item comments.
 
@@ -1761,6 +1763,10 @@ DELETE /api/v1/work-items/{id}/links/{linkId}
 GET    /api/v1/work-items/{id}/watchers
 POST   /api/v1/work-items/{id}/watchers
 DELETE /api/v1/work-items/{id}/watchers/{userId}
+GET    /api/v1/work-items/{id}/work-logs
+POST   /api/v1/work-items/{id}/work-logs
+PATCH  /api/v1/work-items/{id}/work-logs/{workLogId}
+DELETE /api/v1/work-items/{id}/work-logs/{workLogId}
 GET    /api/v1/work-items/{id}/labels
 POST   /api/v1/work-items/{id}/labels
 DELETE /api/v1/work-items/{id}/labels/{labelId}
@@ -1792,16 +1798,30 @@ GET    /api/v1/workspaces/{workspaceId}/agent-providers
 POST   /api/v1/workspaces/{workspaceId}/agent-providers
 PATCH  /api/v1/agent-providers/{providerId}
 POST   /api/v1/agent-providers/{providerId}/credentials
+GET    /api/v1/agent-providers/{providerId}/credentials
+POST   /api/v1/agent-providers/{providerId}/credentials/{credentialId}/deactivate
+POST   /api/v1/agent-providers/{providerId}/credentials/reencrypt
+POST   /api/v1/agent-providers/{providerId}/callback-keys/rotate
 GET    /api/v1/workspaces/{workspaceId}/agents
 POST   /api/v1/workspaces/{workspaceId}/agents
 PATCH  /api/v1/agents/{profileId}
 GET    /api/v1/workspaces/{workspaceId}/repository-connections
 POST   /api/v1/workspaces/{workspaceId}/repository-connections
 GET    /api/v1/agent-tasks/{id}
+POST   /api/v1/agent-tasks/{id}/messages
+POST   /api/v1/agent-tasks/{id}/request-changes
 POST   /api/v1/agent-tasks/{id}/cancel
 POST   /api/v1/agent-tasks/{id}/retry
 POST   /api/v1/agent-tasks/{id}/accept-result
+POST   /api/v1/agent-tasks/{id}/worker-dispatch
 POST   /api/v1/agent-callbacks/{providerKey}
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/claim
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/heartbeat
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/logs
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/messages
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/artifacts
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/cancel
+POST   /api/v1/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/retry
 ```
 
 ## Event And Audit Model
@@ -1950,10 +1970,10 @@ Trasck should support AI-assisted execution without becoming dependent on any on
 Provider model:
 
 - `agent_providers.provider_type` selects an adapter such as `codex`, `claude_code`, `webhook`, `local_runner`, `hosted_service`, or `custom`.
-- The first provider adapters are non-external `simulated`, `codex`, and `claude_code` adapters. They prove the provider-neutral lifecycle without paid, shell, or vendor-specific execution. Real Codex/Claude dispatch, webhook workers, hosted services, polling agents, and hardened local runners should plug into the same contract later.
+- The first provider adapters are non-external `simulated`, `codex`, `claude_code`, and `generic_worker` adapters. They prove the provider-neutral lifecycle without paid, shell, or vendor-specific execution. The generic worker protocol already supports polling and backend push payload shapes; real Codex/Claude dispatch, hosted services, and hardened local runners should plug into the same contract later.
 - `agent_providers.dispatch_mode` controls how work reaches the agent. Supported modes should include webhook push, agent polling, managed execution, and manual handoff. Manual handoff is the default dispatch mode.
 - Provider-specific options belong in `agent_providers.config`; shared capability declarations belong in `capability_schema`.
-- Provider credentials should move to encrypted database values or external secret management before real provider dispatch. Secrets must not be embedded directly in agent task payloads, comments, activity, or audit output.
+- Provider credentials are encrypted database values today and should be movable to external secret management before production external dispatch. Secrets must not be embedded directly in agent task payloads, comments, activity, or audit output.
 
 Agent model:
 
@@ -1971,7 +1991,8 @@ Execution model:
 - `agent_messages` support clarifying questions and human replies.
 - `agent_artifacts` capture outputs such as branches, pull requests, patches, logs, generated docs, screenshots, or external task URLs.
 - `agent_task_repositories` attaches one or more repositories, base branches, working branches, and pull request URLs to the task.
-- Signed callback assertions are issued when Trasck dispatches or retries an agent task. Callbacks must present `X-Trasck-Agent-Callback-Jwt`; the RS256 token is verified with the provider's active public JWK and then checked against the provider key, provider ID, workspace ID, agent profile ID, and task ID before state changes are accepted.
+- Signed callback assertions are issued when Trasck dispatches or retries an agent task. Callbacks must present `X-Trasck-Agent-Callback-Jwt`; the RS256 token is verified with the provider's public JWK set and then checked against the provider key, provider ID, workspace ID, agent profile ID, and task ID before state changes are accepted.
+- Generic worker endpoints use `X-Trasck-Worker-Token` for worker-to-Trasck protocol calls. Worker tokens are stored as active encrypted provider credentials and are separate from signed callback JWTs.
 
 Provider contract:
 
@@ -2120,12 +2141,12 @@ Recommended order:
 9. Implement custom fields, screens, screen assignments, and field configurations.
 10. Implement reporting history and snapshots. Initial status, assignment, and estimate history writes plus work-item history/work-log summary read APIs are implemented; dashboard aggregate APIs and snapshot jobs remain.
 11. Implement notifications, automation, webhooks, and integrations.
-12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events. The simulated/Codex/Claude Code/generic-worker non-external service/API slice is implemented with project-scoped profiles, encrypted provider secrets, and encrypted per-provider callback signing keys; real provider dispatch, worker transport endpoints, hardened local execution, external webhook delivery, richer retry/request-changes flows, and operational key rotation remain.
+12. Implement provider-neutral AI agent foundations: provider adapters, agent profiles, repository connections, agent tasks, callbacks, messages, artifacts, permissions, and audit events. The simulated/Codex/Claude Code/generic-worker non-external service/API slice is implemented with project-scoped profiles, encrypted provider secrets, encrypted per-provider callback signing keys, worker-token polling/webhook protocol endpoints, request-changes/human-message flows, credential re-encryption, credential deactivation, and callback key rotation; real provider dispatch, hardened local execution, external webhook delivery, and richer adapter contract coverage remain.
 13. Implement saved filters, dashboards, views, favorites, and recent items.
 
 ## Testing Requirements
 
-Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, self-service work logs, work-item reporting/history read APIs, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, authenticated work item API flows with hierarchy validation, ranking, transitions, assignment/estimate history, closure rows, rich JSON documents, comments, links, watchers, work logs, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated/Codex/Claude Code/generic-worker AI agent lifecycle with provider/profile/repository setup, project-scoped profiles, encrypted per-provider signed callbacks, review artifacts/comments, callback idempotency, acceptance-to-Approval transition, activity projection, and audit projection.
+Current backend coverage includes PostgreSQL/Testcontainers verification for Flyway/JPA persistence, richer core JPA associations, the first setup flow, deterministic seed data, anonymous public project visibility, first-run-only setup enforcement, username/password login, cookie and Bearer-token auth, cookie CSRF enforcement, personal API token creation/authentication/listing, service token creation/authentication/listing, token scope denial, workspace and project-specific invitation registration, workspace-admin user creation, full OAuth redirect startup, signed OAuth identity linking, provider-specific verified-email resolution rules, static and configured durable event delivery publication, permission denial, watcher self-service, dedicated-permission self-service work logs, work-item reporting/history read APIs, activity stream projection, audit projection with redaction, audit retention policy updates, admin event replay idempotency, authenticated work item API flows with hierarchy validation, ranking, transitions, assignment/estimate history, closure rows, rich JSON documents, comments, links, watchers, work logs, labels, attachment metadata, local attachment upload/download/delete cleanup, domain events, and the first simulated/Codex/Claude Code/generic-worker AI agent lifecycle with provider/profile/repository setup, project-scoped profiles, encrypted per-provider signed callbacks, generic worker claim/heartbeat/log/message/artifact/cancel/retry flows, credential maintenance, callback key rotation, request-changes/human-message flows, agent permission denial, review artifacts/comments, callback idempotency, acceptance-to-Approval transition, activity projection, and audit projection.
 
 Required backend tests:
 

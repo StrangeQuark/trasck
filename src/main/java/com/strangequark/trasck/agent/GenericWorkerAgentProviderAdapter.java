@@ -48,7 +48,12 @@ public class GenericWorkerAgentProviderAdapter implements AgentProviderAdapter {
                 .put("dispatchMode", provider.getDispatchMode())
                 .put("callbackHeaderName", AgentCallbackJwtService.CALLBACK_HEADER)
                 .put("externalDispatch", false)
+                .put("pollingSupported", true)
+                .put("webhookPushSupported", true)
                 .put("agentTaskId", task.getId().toString());
+        if (provider.getCallbackUrl() != null && !provider.getCallbackUrl().isBlank()) {
+            payload.put("pushTargetUrl", provider.getCallbackUrl());
+        }
         return new AgentDispatchResult("worker-" + task.getId(), payload);
     }
 }
