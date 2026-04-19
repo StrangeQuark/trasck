@@ -68,6 +68,14 @@ public class WorkItemController {
         return workItemService.assign(workItemId, request);
     }
 
+    @PostMapping("/work-items/{workItemId}/team")
+    public WorkItemResponse setTeam(
+            @PathVariable UUID workItemId,
+            @RequestBody WorkItemTeamRequest request
+    ) {
+        return workItemService.setTeam(workItemId, request);
+    }
+
     @PostMapping("/work-items/{workItemId}/rank")
     public WorkItemResponse rank(
             @PathVariable UUID workItemId,

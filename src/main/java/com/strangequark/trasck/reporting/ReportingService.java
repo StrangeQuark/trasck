@@ -13,6 +13,8 @@ import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
 import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
+import com.strangequark.trasck.workspace.Workspace;
+import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -48,10 +50,13 @@ public class ReportingService {
     private final WorkItemStatusHistoryRepository workItemStatusHistoryRepository;
     private final WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository;
     private final WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository;
+    private final WorkItemTeamHistoryRepository workItemTeamHistoryRepository;
     private final WorkLogRepository workLogRepository;
+    private final WorkspaceRepository workspaceRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final NamedParameterJdbcTemplate namedJdbcTemplate;
+    private final ReportingSnapshotService reportingSnapshotService;
 
     public ReportingService(
             WorkItemRepository workItemRepository,
@@ -62,10 +67,13 @@ public class ReportingService {
             WorkItemStatusHistoryRepository workItemStatusHistoryRepository,
             WorkItemAssignmentHistoryRepository workItemAssignmentHistoryRepository,
             WorkItemEstimateHistoryRepository workItemEstimateHistoryRepository,
+            WorkItemTeamHistoryRepository workItemTeamHistoryRepository,
             WorkLogRepository workLogRepository,
+            WorkspaceRepository workspaceRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
-            NamedParameterJdbcTemplate namedJdbcTemplate
+            NamedParameterJdbcTemplate namedJdbcTemplate,
+            ReportingSnapshotService reportingSnapshotService
     ) {
         this.workItemRepository = workItemRepository;
         this.projectRepository = projectRepository;
@@ -75,10 +83,13 @@ public class ReportingService {
         this.workItemStatusHistoryRepository = workItemStatusHistoryRepository;
         this.workItemAssignmentHistoryRepository = workItemAssignmentHistoryRepository;
         this.workItemEstimateHistoryRepository = workItemEstimateHistoryRepository;
+        this.workItemTeamHistoryRepository = workItemTeamHistoryRepository;
         this.workLogRepository = workLogRepository;
+        this.workspaceRepository = workspaceRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.namedJdbcTemplate = namedJdbcTemplate;
+        this.reportingSnapshotService = reportingSnapshotService;
     }
 
     @Transactional(readOnly = true)
@@ -105,6 +116,15 @@ public class ReportingService {
         requireReportRead(item);
         return workItemEstimateHistoryRepository.findByWorkItemIdOrderByChangedAtAsc(item.getId()).stream()
                 .map(WorkItemEstimateHistoryResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkItemTeamHistoryResponse> teamHistory(UUID workItemId) {
+        WorkItem item = reportableWorkItem(workItemId);
+        requireReportRead(item);
+        return workItemTeamHistoryRepository.findByWorkItemIdOrderByChangedAtAsc(item.getId()).stream()
+                .map(WorkItemTeamHistoryResponse::from)
                 .toList();
     }
 
@@ -181,6 +201,21 @@ public class ReportingService {
         );
     }
 
+    @Transactional
+    public ReportingSnapshotRunResponse runWorkspaceSnapshots(UUID workspaceId, String snapshotDate) {
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
+        if (workspace.getDeletedAt() != null || !"active".equals(workspace.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found");
+        }
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
+        LocalDate effectiveSnapshotDate = hasText(snapshotDate)
+                ? parseDate(snapshotDate, "date")
+                : LocalDate.now(ZoneOffset.UTC);
+        return reportingSnapshotService.runWorkspaceSnapshots(workspaceId, effectiveSnapshotDate);
+    }
+
     private WorkItem reportableWorkItem(UUID workItemId) {
         return workItemRepository.findByIdAndDeletedAtIsNull(workItemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Work item not found"));
@@ -227,6 +262,14 @@ public class ReportingService {
             return OffsetDateTime.parse(value.trim()).withOffsetSameInstant(ZoneOffset.UTC);
         } catch (DateTimeParseException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " must be an ISO-8601 offset date-time");
+        }
+    }
+
+    private LocalDate parseDate(String value, String fieldName) {
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " must be an ISO-8601 date");
         }
     }
 
@@ -437,6 +480,20 @@ public class ReportingService {
     }
 
     private ProjectReportSummaryResponse.CycleTimeMetricsResponse cycleTimeMetrics(ScopedReportQuery query) {
+        ProjectReportSummaryResponse.CycleTimeMetricsResponse snapshotMetrics = namedJdbcTemplate.queryForObject(query.cte() + """
+                select count(*) as completed_work_items,
+                       coalesce(round(avg(ctr.lead_time_minutes)), 0)::bigint as average_lead_time_minutes
+                from scoped_work_items wi
+                join cycle_time_records ctr on ctr.work_item_id = wi.id
+                where ctr.completed_at >= :from
+                  and ctr.completed_at < :to
+                """, query.params(), (rs, rowNum) -> new ProjectReportSummaryResponse.CycleTimeMetricsResponse(
+                rs.getLong("completed_work_items"),
+                rs.getLong("average_lead_time_minutes")
+        ));
+        if (snapshotMetrics.completedWorkItems() > 0) {
+            return snapshotMetrics;
+        }
         return namedJdbcTemplate.queryForObject(query.cte() + """
                 select count(*) as completed_work_items,
                        coalesce(round(avg(extract(epoch from (coalesce(wi.resolved_at, completed.completed_at) - wi.created_at)) / 60.0)), 0)::bigint as average_lead_time_minutes
@@ -521,6 +578,10 @@ public class ReportingService {
 
     private BigDecimal decimal(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private record ReportWindow(OffsetDateTime from, OffsetDateTime to, LocalDate fromDate, LocalDate toDateExclusive) {

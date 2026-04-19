@@ -41,6 +41,9 @@ public class AgentProviderCredential {
     @Column(name = "active")
     private Boolean active;
 
+    @Column(name = "expires_at")
+    private OffsetDateTime expiresAt;
+
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
@@ -93,6 +96,14 @@ public class AgentProviderCredential {
 
     public void setActive(Boolean active) {
         this.active = active;
+    }
+
+    public OffsetDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(OffsetDateTime expiresAt) {
+        this.expiresAt = expiresAt;
     }
 
     public OffsetDateTime getCreatedAt() {

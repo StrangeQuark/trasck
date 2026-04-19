@@ -10,6 +10,7 @@ public record AgentProviderCredentialResponse(
         String credentialType,
         Object metadata,
         Boolean active,
+        OffsetDateTime expiresAt,
         OffsetDateTime createdAt,
         OffsetDateTime rotatedAt
 ) {
@@ -20,6 +21,7 @@ public record AgentProviderCredentialResponse(
                 credential.getCredentialType(),
                 JsonValues.toJavaValue(credential.getMetadata()),
                 credential.getActive(),
+                credential.getExpiresAt(),
                 credential.getCreatedAt(),
                 credential.getRotatedAt()
         );
