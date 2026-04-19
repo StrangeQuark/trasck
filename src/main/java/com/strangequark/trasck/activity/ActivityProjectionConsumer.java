@@ -53,6 +53,21 @@ public class ActivityProjectionConsumer implements DomainEventConsumer {
             createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
             return;
         }
+        if ("iteration".equals(event.getAggregateType())) {
+            createIfMissing(event, actorId, "iteration", event.getAggregateId(), metadata);
+            createIfMissing(event, actorId, "work_item", uuid(event.getPayload(), "workItemId"), metadata);
+            createIfMissing(event, actorId, "project", uuid(event.getPayload(), "projectId"), metadata);
+            createIfMissing(event, actorId, "team", uuid(event.getPayload(), "teamId"), metadata);
+            createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
+            return;
+        }
+        if ("team".equals(event.getAggregateType()) || "project_team".equals(event.getAggregateType())) {
+            createIfMissing(event, actorId, "team", uuid(event.getPayload(), "teamId"), metadata);
+            createIfMissing(event, actorId, "project", uuid(event.getPayload(), "projectId"), metadata);
+            createIfMissing(event, actorId, event.getAggregateType(), event.getAggregateId(), metadata);
+            createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
+            return;
+        }
         createIfMissing(event, actorId, event.getAggregateType(), event.getAggregateId(), metadata);
         createIfMissing(event, actorId, "workspace", event.getWorkspaceId(), metadata);
     }
@@ -70,7 +85,10 @@ public class ActivityProjectionConsumer implements DomainEventConsumer {
                 || eventType.startsWith("work_item.agent_")
                 || eventType.startsWith("agent.profile.")
                 || eventType.startsWith("agent.provider.")
-                || eventType.startsWith("repository_connection.");
+                || eventType.startsWith("repository_connection.")
+                || eventType.startsWith("team.")
+                || eventType.startsWith("project_team.")
+                || eventType.startsWith("iteration.");
     }
 
     private void createIfMissing(DomainEvent event, UUID actorId, String entityType, UUID entityId, JsonNode metadata) {

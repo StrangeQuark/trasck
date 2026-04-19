@@ -239,7 +239,9 @@ public class AgentService {
         config.setConfig(objectMapper.createObjectNode()
                 .put("providerId", provider.getId().toString())
                 .put("providerKey", provider.getProviderKey())
-                .put("callbackUrl", firstText(provider.getCallbackUrl(), "")));
+                .put("callbackUrl", firstText(provider.getCallbackUrl(), ""))
+                .put("maxAttempts", workerWebhookMaxAttempts(provider))
+                .put("deadLetterOnExhaustion", workerWebhookDeadLetterOnExhaustion(provider)));
         config.setEnabled(shouldPublishWorkerWebhookDispatch(provider));
         eventConsumerConfigRepository.save(config);
     }
@@ -253,6 +255,38 @@ public class AgentService {
                 && "webhook_push".equals(provider.getDispatchMode())
                 && Boolean.TRUE.equals(provider.getEnabled())
                 && hasText(provider.getCallbackUrl());
+    }
+
+    private int workerWebhookMaxAttempts(AgentProvider provider) {
+        JsonNode webhookConfig = workerWebhookConfig(provider);
+        if (webhookConfig.hasNonNull("maxAttempts")) {
+            return Math.max(1, webhookConfig.path("maxAttempts").asInt(5));
+        }
+        JsonNode providerConfig = provider.getConfig();
+        if (providerConfig != null && providerConfig.hasNonNull("workerWebhookMaxAttempts")) {
+            return Math.max(1, providerConfig.path("workerWebhookMaxAttempts").asInt(5));
+        }
+        return 5;
+    }
+
+    private boolean workerWebhookDeadLetterOnExhaustion(AgentProvider provider) {
+        JsonNode webhookConfig = workerWebhookConfig(provider);
+        if (webhookConfig.hasNonNull("deadLetterOnExhaustion")) {
+            return webhookConfig.path("deadLetterOnExhaustion").asBoolean(true);
+        }
+        JsonNode providerConfig = provider.getConfig();
+        if (providerConfig != null && providerConfig.hasNonNull("workerWebhookDeadLetterOnExhaustion")) {
+            return providerConfig.path("workerWebhookDeadLetterOnExhaustion").asBoolean(true);
+        }
+        return true;
+    }
+
+    private JsonNode workerWebhookConfig(AgentProvider provider) {
+        JsonNode providerConfig = provider.getConfig();
+        if (providerConfig == null || !providerConfig.path("workerWebhook").isObject()) {
+            return objectMapper.createObjectNode();
+        }
+        return providerConfig.path("workerWebhook");
     }
 
     @Transactional

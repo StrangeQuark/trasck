@@ -303,6 +303,61 @@ class WorkItemApiIntegrationTest {
         assertThat(teamIterationSummary.at("/estimateAndTime/estimatePoints").decimalValue()).isEqualByComparingTo("5.0");
         assertThat(teamIterationSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
 
+        UUID programId = seedProgram(workspaceId, projectId);
+        JsonNode workspacePortfolioSummary = getJson("/api/v1/reports/workspaces/" + workspaceId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z&projectIds=" + projectId);
+        assertThat(workspacePortfolioSummary.at("/scope/scopeType").asText()).isEqualTo("workspace");
+        assertThat(workspacePortfolioSummary.at("/scope/projectIds")).hasSize(1);
+        assertThat(workspacePortfolioSummary.at("/workItems/total").asLong()).isEqualTo(3);
+        assertThat(workspacePortfolioSummary.at("/byProject")).isNotEmpty();
+        assertThat(workspacePortfolioSummary.at("/byTeam")).isNotEmpty();
+        assertThat(workspacePortfolioSummary.at("/byType")).isNotEmpty();
+        JsonNode programPortfolioSummary = getJson("/api/v1/reports/programs/" + programId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
+        assertThat(programPortfolioSummary.at("/scope/scopeType").asText()).isEqualTo("program");
+        assertThat(uuid(programPortfolioSummary, "/scope/programId")).isEqualTo(programId);
+        assertThat(programPortfolioSummary.at("/byProject")).isNotEmpty();
+
+        ObjectNode dashboardLayout = objectMapper.createObjectNode()
+                .put("columns", 12)
+                .put("density", "comfortable");
+        JsonNode dashboard = postJson("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
+                .put("name", "Delivery Team Dashboard")
+                .put("visibility", "team")
+                .put("teamId", reportingScope.teamId().toString())
+                .set("layout", dashboardLayout));
+        UUID dashboardId = uuid(dashboard, "/id");
+        assertThat(uuid(dashboard, "/teamId")).isEqualTo(reportingScope.teamId());
+        assertThat(dashboard.at("/visibility").asText()).isEqualTo("team");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/dashboards")).hasSize(1);
+        JsonNode updatedDashboard = patch("/api/v1/dashboards/" + dashboardId, objectMapper.createObjectNode()
+                .put("name", "Delivery Team Reporting"));
+        assertThat(updatedDashboard.at("/name").asText()).isEqualTo("Delivery Team Reporting");
+
+        ObjectNode widgetQuery = objectMapper.createObjectNode()
+                .put("projectId", projectId.toString())
+                .put("teamId", reportingScope.teamId().toString())
+                .put("iterationId", reportingScope.iterationId().toString());
+        ObjectNode widgetConfig = objectMapper.createObjectNode()
+                .put("reportType", "project_dashboard_summary");
+        widgetConfig.set("query", widgetQuery);
+        JsonNode widget = postJson("/api/v1/dashboards/" + dashboardId + "/widgets", objectMapper.createObjectNode()
+                .put("widgetType", "work_item_summary")
+                .put("title", "Committed Work")
+                .put("positionX", 0)
+                .put("positionY", 0)
+                .put("width", 4)
+                .put("height", 2)
+                .set("config", widgetConfig));
+        UUID widgetId = uuid(widget, "/id");
+        assertThat(widget.at("/config/reportType").asText()).isEqualTo("project_dashboard_summary");
+        JsonNode renderedDashboard = getJson("/api/v1/dashboards/" + dashboardId + "/render?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z");
+        assertThat(renderedDashboard.at("/dashboard/widgets")).hasSize(1);
+        assertThat(renderedDashboard.at("/widgets/0/data/total").asLong()).isEqualTo(1);
+        JsonNode updatedWidget = patch("/api/v1/dashboards/" + dashboardId + "/widgets/" + widgetId, objectMapper.createObjectNode()
+                .put("title", "Committed Work Items"));
+        assertThat(updatedWidget.at("/title").asText()).isEqualTo("Committed Work Items");
+        assertThat(delete("/api/v1/dashboards/" + dashboardId + "/widgets/" + widgetId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/dashboards/" + dashboardId).statusCode()).isEqualTo(204);
+
         JsonNode statusHistory = getJson("/api/v1/reports/work-items/" + storyId + "/status-history");
         assertThat(statusHistory).hasSize(6);
         JsonNode assignmentHistory = getJson("/api/v1/reports/work-items/" + storyId + "/assignment-history");
@@ -534,6 +589,25 @@ class WorkItemApiIntegrationTest {
                 userId
         );
         return new ReportingScopeSeed(teamId, iterationId);
+    }
+
+    private UUID seedProgram(UUID workspaceId, UUID projectId) {
+        UUID programId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "insert into programs (id, workspace_id, name, description, status) values (?, ?, ?, ?, ?)",
+                programId,
+                workspaceId,
+                "Portfolio " + programId.toString().substring(0, 8),
+                "Program for cross-project reporting.",
+                "active"
+        );
+        jdbcTemplate.update(
+                "insert into program_projects (program_id, project_id, position) values (?, ?, ?)",
+                programId,
+                projectId,
+                0
+        );
+        return programId;
     }
 
     private JsonNode postJson(String path, JsonNode body) throws Exception {

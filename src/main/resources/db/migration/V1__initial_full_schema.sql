@@ -782,7 +782,7 @@ create table domain_event_deliveries (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     unique (domain_event_id, consumer_key),
-    constraint ck_domain_event_deliveries_status check (delivery_status in ('pending', 'processing', 'delivered', 'failed'))
+    constraint ck_domain_event_deliveries_status check (delivery_status in ('pending', 'processing', 'delivered', 'failed', 'dead_lettered'))
 );
 
 create table event_consumer_configs (
@@ -1221,21 +1221,31 @@ create table dashboards (
     id uuid primary key default gen_random_uuid(),
     workspace_id uuid not null references workspaces(id) on delete cascade,
     owner_id uuid references users(id) on delete set null,
+    team_id uuid references teams(id) on delete set null,
     name varchar(160) not null,
     visibility varchar(40) not null default 'private',
     layout jsonb not null default '{}'::jsonb,
-    constraint ck_dashboards_visibility check (visibility in ('private', 'workspace', 'public'))
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint ck_dashboards_visibility check (visibility in ('private', 'team', 'workspace', 'public')),
+    constraint ck_dashboards_team_visibility check (
+        (visibility = 'team' and team_id is not null)
+        or (visibility <> 'team' and team_id is null)
+    )
 );
 
 create table dashboard_widgets (
     id uuid primary key default gen_random_uuid(),
     dashboard_id uuid not null references dashboards(id) on delete cascade,
     widget_type varchar(120) not null,
+    title varchar(160),
     config jsonb not null default '{}'::jsonb,
     position_x integer not null default 0,
     position_y integer not null default 0,
     width integer not null default 1,
-    height integer not null default 1
+    height integer not null default 1,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
 );
 
 create table views (
@@ -1297,7 +1307,8 @@ insert into permissions (key, name, description, category) values
     ('agent.task.view_logs', 'View agent task logs', 'View AI agent task events and diagnostic details.', 'agent'),
     ('agent.task.accept_result', 'Accept agent task results', 'Accept AI agent results and continue workflow.', 'agent'),
     ('repository_connection.manage', 'Manage repository connections', 'Create and update source repository connections.', 'agent'),
-    ('report.read', 'Read reports', 'View reports and dashboards.', 'reporting')
+    ('report.read', 'Read reports', 'View reports and dashboards.', 'reporting'),
+    ('report.manage', 'Manage reports', 'Create and manage shared dashboards and report configuration.', 'reporting')
 on conflict (key) do nothing;
 
 create or replace function set_updated_at()
@@ -1418,6 +1429,8 @@ create trigger trg_repository_connections_updated_at before update on repository
 create trigger trg_domain_event_deliveries_updated_at before update on domain_event_deliveries for each row execute function set_updated_at();
 create trigger trg_event_consumer_configs_updated_at before update on event_consumer_configs for each row execute function set_updated_at();
 create trigger trg_audit_retention_policies_updated_at before update on audit_retention_policies for each row execute function set_updated_at();
+create trigger trg_dashboards_updated_at before update on dashboards for each row execute function set_updated_at();
+create trigger trg_dashboard_widgets_updated_at before update on dashboard_widgets for each row execute function set_updated_at();
 
 create index ix_users_account_type on users(account_type);
 create index ix_workspaces_organization_key on workspaces(organization_id, key);
@@ -1501,5 +1514,7 @@ create index ix_external_references_entity on external_references(entity_type, e
 create index ix_import_job_records_job_status on import_job_records(import_job_id, status);
 create index ix_saved_filters_workspace_owner on saved_filters(workspace_id, owner_id);
 create index ix_dashboards_workspace_owner on dashboards(workspace_id, owner_id);
+create index ix_dashboards_workspace_team on dashboards(workspace_id, team_id);
+create index ix_dashboard_widgets_dashboard_position on dashboard_widgets(dashboard_id, position_y, position_x);
 create index ix_views_workspace_owner on views(workspace_id, owner_id);
 create index ix_recent_items_user_viewed_at on recent_items(user_id, viewed_at desc);
