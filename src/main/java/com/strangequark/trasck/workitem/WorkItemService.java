@@ -14,6 +14,9 @@ import com.strangequark.trasck.reporting.WorkItemEstimateHistory;
 import com.strangequark.trasck.reporting.WorkItemEstimateHistoryRepository;
 import com.strangequark.trasck.reporting.WorkItemStatusHistory;
 import com.strangequark.trasck.reporting.WorkItemStatusHistoryRepository;
+import com.strangequark.trasck.team.ProjectTeamRepository;
+import com.strangequark.trasck.team.Team;
+import com.strangequark.trasck.team.TeamRepository;
 import com.strangequark.trasck.workflow.WorkflowAssignment;
 import com.strangequark.trasck.workflow.WorkflowAssignmentRepository;
 import com.strangequark.trasck.workflow.WorkflowStatus;
@@ -43,6 +46,8 @@ public class WorkItemService {
     private final WorkItemTypeRuleRepository workItemTypeRuleRepository;
     private final WorkItemClosureRepository workItemClosureRepository;
     private final PriorityRepository priorityRepository;
+    private final TeamRepository teamRepository;
+    private final ProjectTeamRepository projectTeamRepository;
     private final WorkflowAssignmentRepository workflowAssignmentRepository;
     private final WorkflowStatusRepository workflowStatusRepository;
     private final WorkflowTransitionRepository workflowTransitionRepository;
@@ -66,6 +71,8 @@ public class WorkItemService {
             WorkItemTypeRuleRepository workItemTypeRuleRepository,
             WorkItemClosureRepository workItemClosureRepository,
             PriorityRepository priorityRepository,
+            TeamRepository teamRepository,
+            ProjectTeamRepository projectTeamRepository,
             WorkflowAssignmentRepository workflowAssignmentRepository,
             WorkflowStatusRepository workflowStatusRepository,
             WorkflowTransitionRepository workflowTransitionRepository,
@@ -88,6 +95,8 @@ public class WorkItemService {
         this.workItemTypeRuleRepository = workItemTypeRuleRepository;
         this.workItemClosureRepository = workItemClosureRepository;
         this.priorityRepository = priorityRepository;
+        this.teamRepository = teamRepository;
+        this.projectTeamRepository = projectTeamRepository;
         this.workflowAssignmentRepository = workflowAssignmentRepository;
         this.workflowStatusRepository = workflowStatusRepository;
         this.workflowTransitionRepository = workflowTransitionRepository;
@@ -127,6 +136,7 @@ public class WorkItemService {
         item.setParentId(parent == null ? null : parent.getId());
         item.setStatusId(status.getId());
         item.setPriorityId(resolvePriorityId(project.getWorkspaceId(), createRequest.priorityId(), createRequest.priorityKey()));
+        item.setTeamId(resolveTeamId(project, createRequest.teamId()));
         item.setAssigneeId(createRequest.assigneeId());
         item.setReporterId(reporterId);
         item.setCreatedById(actorId);
@@ -207,6 +217,11 @@ public class WorkItemService {
 
         if (updateRequest.priorityId() != null || hasText(updateRequest.priorityKey())) {
             item.setPriorityId(resolvePriorityId(project.getWorkspaceId(), updateRequest.priorityId(), updateRequest.priorityKey()));
+        }
+        if (Boolean.TRUE.equals(updateRequest.clearTeam())) {
+            item.setTeamId(null);
+        } else if (updateRequest.teamId() != null) {
+            item.setTeamId(resolveTeamId(project, updateRequest.teamId()));
         }
         if (hasText(updateRequest.title())) {
             item.setTitle(updateRequest.title().trim());
@@ -438,6 +453,21 @@ public class WorkItemService {
                     .getId();
         }
         return priorityRepository.findByWorkspaceIdAndIsDefaultTrue(workspaceId).map(Priority::getId).orElse(null);
+    }
+
+    private UUID resolveTeamId(Project project, UUID teamId) {
+        if (teamId == null) {
+            return null;
+        }
+        Team team = teamRepository.findByIdAndWorkspaceId(teamId, project.getWorkspaceId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Team not found in this workspace"));
+        if (!"active".equals(team.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Team is not active");
+        }
+        if (!projectTeamRepository.existsByIdProjectIdAndIdTeamId(project.getId(), team.getId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Team is not assigned to this project");
+        }
+        return team.getId();
     }
 
     private void applyTransitionActions(WorkItem item, UUID transitionId) {

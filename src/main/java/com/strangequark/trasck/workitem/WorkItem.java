@@ -54,6 +54,9 @@ public class WorkItem {
     @Column(name = "resolution_id")
     private UUID resolutionId;
 
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @Column(name = "assignee_id")
     private UUID assigneeId;
 
@@ -207,6 +210,14 @@ public class WorkItem {
 
     public void setResolutionId(UUID resolutionId) {
         this.resolutionId = resolutionId;
+    }
+
+    public UUID getTeamId() {
+        return teamId;
+    }
+
+    public void setTeamId(UUID teamId) {
+        this.teamId = teamId;
     }
 
     public UUID getAssigneeId() {

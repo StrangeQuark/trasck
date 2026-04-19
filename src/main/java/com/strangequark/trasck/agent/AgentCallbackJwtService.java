@@ -88,7 +88,6 @@ public class AgentCallbackJwtService {
             throw new IllegalStateException("Agent provider must be persisted before callback key rotation");
         }
         ObjectNode config = objectConfig(provider.getConfig());
-        JsonNode callbackConfig = config.path(CALLBACK_JWT_CONFIG);
         CallbackKeyMaterial generated = generateKeyMaterial();
         persistPrivateKeyCredential(provider, generated);
 
@@ -96,9 +95,6 @@ public class AgentCallbackJwtService {
                 .put("algorithm", "RS256")
                 .put("currentKid", generated.keyId());
         ArrayNode keys = objectMapper.createArrayNode();
-        if (callbackConfig.path("keys").isArray()) {
-            callbackConfig.path("keys").forEach(key -> keys.add(key.deepCopy()));
-        }
         keys.add(objectMapper.createObjectNode()
                 .put("kid", generated.keyId())
                 .put("alg", "RS256")

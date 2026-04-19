@@ -226,6 +226,14 @@ Authorization: Bearer {{accessToken}}
 GET {{baseUrl}}/api/v1/reports/work-items/{{workItemId}}/work-log-summary
 Authorization: Bearer {{accessToken}}
 
+### Reporting: Project Dashboard Summary
+GET {{baseUrl}}/api/v1/reports/projects/{{projectId}}/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z
+Authorization: Bearer {{accessToken}}
+
+### Reporting: Team Iteration Dashboard Summary
+GET {{baseUrl}}/api/v1/reports/projects/{{projectId}}/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z&teamId={{teamId}}&iterationId={{iterationId}}
+Authorization: Bearer {{accessToken}}
+
 ### Create Generic Worker Agent Provider
 POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-providers
 Authorization: Bearer {{accessToken}}
@@ -248,6 +256,7 @@ Content-Type: application/json
   "credentialType": "worker_token",
   "secret": "{{agentWorkerToken}}",
   "metadata": {
+    "workerId": "worker-1",
     "purpose": "generic-worker-auth"
   }
 }

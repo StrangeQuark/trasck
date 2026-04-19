@@ -101,21 +101,34 @@ class AgentIntegrationTest {
                 .put("secret", "raw-secret-that-must-not-be-returned")
                 .set("metadata", objectMapper.createObjectNode().put("purpose", "test")), accessToken));
         assertThat(credential.toString()).doesNotContain("raw-secret-that-must-not-be-returned").doesNotContain("encryptedSecret");
+        assertThat(post("/api/v1/agent-providers/" + workerProviderId + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "worker_token")
+                .put("secret", "missing-worker-id")
+                .set("metadata", objectMapper.createObjectNode().put("purpose", "worker-auth")), accessToken).statusCode()).isEqualTo(400);
         JsonNode workerCredential = read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials", objectMapper.createObjectNode()
                 .put("credentialType", "worker_token")
                 .put("secret", "worker-secret")
-                .set("metadata", objectMapper.createObjectNode().put("purpose", "worker-auth")), accessToken));
+                .set("metadata", objectMapper.createObjectNode()
+                        .put("workerId", "worker-1")
+                        .put("purpose", "worker-auth")), accessToken));
         assertThat(workerCredential.toString()).doesNotContain("worker-secret").doesNotContain("encryptedSecret");
+        JsonNode secondWorkerCredential = read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "worker_token")
+                .put("secret", "worker-two-secret")
+                .set("metadata", objectMapper.createObjectNode()
+                        .put("workerId", "worker-2")
+                        .put("purpose", "worker-auth")), accessToken));
+        assertThat(secondWorkerCredential.toString()).doesNotContain("worker-two-secret").doesNotContain("encryptedSecret");
         JsonNode temporaryCredential = read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials", objectMapper.createObjectNode()
                 .put("credentialType", "temporary_api_token")
                 .put("secret", "temporary-secret"), accessToken));
-        assertThat(read(get("/api/v1/agent-providers/" + workerProviderId + "/credentials", accessToken))).hasSizeGreaterThanOrEqualTo(3);
-        assertThat(read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials/reencrypt", objectMapper.createObjectNode(), accessToken))).hasSizeGreaterThanOrEqualTo(3);
+        assertThat(read(get("/api/v1/agent-providers/" + workerProviderId + "/credentials", accessToken))).hasSizeGreaterThanOrEqualTo(4);
+        assertThat(read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials/reencrypt", objectMapper.createObjectNode(), accessToken))).hasSizeGreaterThanOrEqualTo(4);
         assertThat(read(post("/api/v1/agent-providers/" + workerProviderId + "/credentials/" + uuid(temporaryCredential, "/id") + "/deactivate", objectMapper.createObjectNode(), accessToken))
                 .at("/active").asBoolean()).isFalse();
         JsonNode rotatedWorkerProvider = read(post("/api/v1/agent-providers/" + workerProviderId + "/callback-keys/rotate", objectMapper.createObjectNode(), accessToken));
-        assertThat(rotatedWorkerProvider.at("/config/callbackJwt/keys")).hasSize(2);
-        assertThat(rotatedWorkerProvider.at("/config/callbackJwt/keys/1/privateKeyPem").isMissingNode()).isTrue();
+        assertThat(rotatedWorkerProvider.at("/config/callbackJwt/keys")).hasSize(1);
+        assertThat(rotatedWorkerProvider.at("/config/callbackJwt/keys/0/privateKeyPem").isMissingNode()).isTrue();
 
         ObjectNode profileRequest = objectMapper.createObjectNode()
                 .put("providerId", providerId.toString())
@@ -197,6 +210,16 @@ class AgentIntegrationTest {
         assertThat(callbackToken).isNotBlank();
         assertThat(read(get("/api/v1/work-items/" + workItemId, accessToken)).at("/assigneeId").asText()).isEqualTo(agentUserId.toString());
         assertThat(read(get("/api/v1/agent-tasks/" + taskId, accessToken)).at("/events")).isNotEmpty();
+        JsonNode rotatedSimProvider = read(post("/api/v1/agent-providers/" + providerId + "/callback-keys/rotate", objectMapper.createObjectNode(), accessToken));
+        assertThat(rotatedSimProvider.at("/config/callbackJwt/keys")).hasSize(1);
+        HttpResponse<String> expiredKeyCallback = postCallback("/api/v1/agent-callbacks/sim-codex", objectMapper.createObjectNode()
+                .put("status", "completed")
+                .put("message", "old key"), callbackToken);
+        assertThat(expiredKeyCallback.statusCode()).isEqualTo(401);
+        read(post("/api/v1/agent-tasks/" + taskId + "/cancel", objectMapper.createObjectNode(), accessToken));
+        JsonNode retriedTask = read(post("/api/v1/agent-tasks/" + taskId + "/retry", objectMapper.createObjectNode(), accessToken));
+        callbackToken = retriedTask.at("/callbackToken").asText();
+        assertThat(callbackToken).isNotBlank();
 
         ObjectNode workerAssignRequest = objectMapper.createObjectNode()
                 .put("agentProfileId", workerProfileId.toString());
@@ -211,6 +234,8 @@ class AgentIntegrationTest {
         assertThat(pushDispatch.at("/callbackToken").asText()).isNotBlank();
         assertThat(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
                 .put("workerId", "worker-1"), "bad-secret").statusCode()).isEqualTo(401);
+        assertThat(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
+                .put("workerId", "worker-2"), "worker-secret").statusCode()).isEqualTo(401);
         JsonNode claimedTask = read(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
                 .put("workerId", "worker-1"), "worker-secret"));
         assertThat(uuid(claimedTask, "/taskId")).isEqualTo(workerTaskId);
