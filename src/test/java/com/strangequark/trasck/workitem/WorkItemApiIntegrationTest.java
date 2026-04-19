@@ -177,8 +177,13 @@ class WorkItemApiIntegrationTest {
         assertThat(uuid(doneStory, "/statusId")).isEqualTo(statusId(setup, "done"));
         assertThat(countWhere("work_item_status_history", "work_item_id", storyId)).isEqualTo(6);
 
-        JsonNode projectWorkItems = getJson("/api/v1/projects/" + projectId + "/work-items");
-        assertThat(projectWorkItems).hasSize(3);
+        JsonNode projectWorkItems = getJson("/api/v1/projects/" + projectId + "/work-items?limit=2");
+        assertThat(projectWorkItems.at("/items")).hasSize(2);
+        assertThat(projectWorkItems.at("/hasMore").asBoolean()).isTrue();
+        assertThat(projectWorkItems.at("/nextCursor").asText()).isNotBlank();
+        JsonNode nextProjectWorkItems = getJson("/api/v1/projects/" + projectId + "/work-items?limit=2&cursor=" + projectWorkItems.at("/nextCursor").asText());
+        assertThat(nextProjectWorkItems.at("/items")).hasSize(1);
+        assertThat(nextProjectWorkItems.at("/hasMore").asBoolean()).isFalse();
 
         ObjectNode commentBody = objectMapper.createObjectNode()
                 .put("bodyMarkdown", "This story needs collaboration coverage.")
@@ -470,6 +475,7 @@ class WorkItemApiIntegrationTest {
         assertThat(get("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(404);
         accessToken = teamMemberToken;
         assertThat(get("/api/v1/dashboards/" + permissionTeamDashboardId).statusCode()).isEqualTo(200);
+        assertThat(getJson("/api/v1/teams/" + reportingScope.teamId() + "/dashboards")).hasSize(1);
         accessToken = adminAccessToken;
         JsonNode projectInvitation = postJson("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
                 .put("email", "project-reporter-" + UUID.randomUUID() + "@example.com")
@@ -489,6 +495,9 @@ class WorkItemApiIntegrationTest {
         assertThat(get("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(200);
+        assertThat(getJson("/api/v1/projects/" + projectId + "/dashboards")).isNotEmpty();
+        assertThat(getJson("/api/v1/projects/" + projectId + "/saved-filters")).isNotEmpty();
+        assertThat(getJson("/api/v1/projects/" + projectId + "/report-query-catalog")).isNotEmpty();
         assertThat(post("/api/v1/workspaces/" + workspaceId + "/dashboards", objectMapper.createObjectNode()
                 .put("name", "Project-only workspace dashboard")
                 .put("visibility", "workspace")).statusCode()).isEqualTo(403);
@@ -911,7 +920,8 @@ class WorkItemApiIntegrationTest {
 
     private List<String> eventTypes(JsonNode events) {
         List<String> types = new ArrayList<>();
-        events.forEach(event -> types.add(event.at("/eventType").asText()));
+        JsonNode entries = events.has("items") ? events.at("/items") : events;
+        entries.forEach(event -> types.add(event.at("/eventType").asText()));
         return types;
     }
 

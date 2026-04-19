@@ -10,6 +10,7 @@
 @commentId = replace-with-comment-id
 @workLogId = replace-with-work-log-id
 @attachmentId = replace-with-attachment-id
+@exportJobId = replace-with-export-job-id
 @dashboardId = replace-with-dashboard-id
 @dashboardWidgetId = replace-with-dashboard-widget-id
 @savedFilterId = replace-with-saved-filter-id
@@ -21,9 +22,16 @@
 @agentTaskId = replace-with-agent-task-id
 @agentCallbackToken = replace-with-agent-callback-token
 @agentWorkerToken = replace-with-worker-token
+@cursor = replace-with-next-cursor
 
 ### Health
 GET {{baseUrl}}/api/trasck/health
+
+### OpenAPI
+GET {{baseUrl}}/v3/api-docs
+
+### Swagger UI
+GET {{baseUrl}}/swagger-ui.html
 
 ### First Setup
 POST {{baseUrl}}/api/v1/setup
@@ -111,8 +119,12 @@ Content-Type: application/json
   ]
 }
 
-### API Token Example: List Work Items
-GET {{baseUrl}}/api/v1/projects/{{projectId}}/work-items
+### API Token Example: List Work Items Cursor Page
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/work-items?limit=50
+Authorization: Bearer {{apiToken}}
+
+### API Token Example: Next Work Items Page
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/work-items?limit=50&cursor={{cursor}}
 Authorization: Bearer {{apiToken}}
 
 ### Create Work Item With Bearer JWT
@@ -131,6 +143,18 @@ Content-Type: application/json
 
 ### Get Work Item
 GET {{baseUrl}}/api/v1/work-items/{{workItemId}}
+Authorization: Bearer {{accessToken}}
+
+### Work Item Activity Cursor Page
+GET {{baseUrl}}/api/v1/work-items/{{workItemId}}/activity?limit=50
+Authorization: Bearer {{accessToken}}
+
+### Project Activity Cursor Page
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/projects/{{projectId}}/activity?limit=50
+Authorization: Bearer {{accessToken}}
+
+### Workspace Activity Cursor Page
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/activity?limit=50
 Authorization: Bearer {{accessToken}}
 
 ### Update Work Item
@@ -318,6 +342,34 @@ Content-Type: application/json
 GET {{baseUrl}}/api/v1/dashboards/{{dashboardId}}/render?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z
 Authorization: Bearer {{accessToken}}
 
+### List Project Dashboards
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/dashboards
+Authorization: Bearer {{accessToken}}
+
+### List Team Dashboards
+GET {{baseUrl}}/api/v1/teams/{{teamId}}/dashboards
+Authorization: Bearer {{accessToken}}
+
+### List Project Saved Filters
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/saved-filters
+Authorization: Bearer {{accessToken}}
+
+### List Team Saved Filters
+GET {{baseUrl}}/api/v1/teams/{{teamId}}/saved-filters
+Authorization: Bearer {{accessToken}}
+
+### List Project Report Query Catalog
+GET {{baseUrl}}/api/v1/projects/{{projectId}}/report-query-catalog
+Authorization: Bearer {{accessToken}}
+
+### List Team Report Query Catalog
+GET {{baseUrl}}/api/v1/teams/{{teamId}}/report-query-catalog
+Authorization: Bearer {{accessToken}}
+
+### Audit Log Cursor Page
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/audit-log?limit=50
+Authorization: Bearer {{accessToken}}
+
 ### Update Audit Retention Policy
 PUT {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/audit-retention-policy
 Authorization: Bearer {{accessToken}}
@@ -341,6 +393,18 @@ Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {}
+
+### List Export Jobs Cursor Page
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/export-jobs?exportType=audit_retention&limit=50
+Authorization: Bearer {{accessToken}}
+
+### Get Export Job Metadata
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/export-jobs/{{exportJobId}}
+Authorization: Bearer {{accessToken}}
+
+### Download Export Job File
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/export-jobs/{{exportJobId}}/download
+Authorization: Bearer {{accessToken}}
 
 ### Create Generic Worker Agent Provider
 POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-providers

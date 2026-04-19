@@ -29,6 +29,16 @@ public class DashboardController {
         return dashboardService.list(workspaceId);
     }
 
+    @GetMapping("/projects/{projectId}/dashboards")
+    public List<DashboardResponse> listByProject(@PathVariable UUID projectId) {
+        return dashboardService.listByProject(projectId);
+    }
+
+    @GetMapping("/teams/{teamId}/dashboards")
+    public List<DashboardResponse> listByTeam(@PathVariable UUID teamId) {
+        return dashboardService.listByTeam(teamId);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/dashboards")
     public ResponseEntity<DashboardResponse> create(
             @PathVariable UUID workspaceId,

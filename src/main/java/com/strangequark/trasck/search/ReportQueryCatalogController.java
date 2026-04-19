@@ -28,6 +28,16 @@ public class ReportQueryCatalogController {
         return reportQueryCatalogService.list(workspaceId);
     }
 
+    @GetMapping("/projects/{projectId}/report-query-catalog")
+    public List<ReportQueryCatalogResponse> listByProject(@PathVariable UUID projectId) {
+        return reportQueryCatalogService.listByProject(projectId);
+    }
+
+    @GetMapping("/teams/{teamId}/report-query-catalog")
+    public List<ReportQueryCatalogResponse> listByTeam(@PathVariable UUID teamId) {
+        return reportQueryCatalogService.listByTeam(teamId);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/report-query-catalog")
     public ResponseEntity<ReportQueryCatalogResponse> create(
             @PathVariable UUID workspaceId,

@@ -28,6 +28,16 @@ public class SavedFilterController {
         return savedFilterService.list(workspaceId);
     }
 
+    @GetMapping("/projects/{projectId}/saved-filters")
+    public List<SavedFilterResponse> listByProject(@PathVariable UUID projectId) {
+        return savedFilterService.listByProject(projectId);
+    }
+
+    @GetMapping("/teams/{teamId}/saved-filters")
+    public List<SavedFilterResponse> listByTeam(@PathVariable UUID teamId) {
+        return savedFilterService.listByTeam(teamId);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/saved-filters")
     public ResponseEntity<SavedFilterResponse> create(
             @PathVariable UUID workspaceId,

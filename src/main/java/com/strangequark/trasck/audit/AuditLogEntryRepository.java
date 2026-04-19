@@ -14,6 +14,36 @@ public interface AuditLogEntryRepository extends JpaRepository<AuditLogEntry, UU
 
     List<AuditLogEntry> findByWorkspaceIdOrderByCreatedAtDesc(UUID workspaceId, Pageable pageable);
 
+    @Query(value = """
+            select *
+            from audit_log_entries
+            where workspace_id = :workspaceId
+            order by created_at desc, id desc
+            limit :limit
+            """, nativeQuery = true)
+    List<AuditLogEntry> findFirstCursorPage(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("limit") int limit
+    );
+
+    @Query(value = """
+            select *
+            from audit_log_entries
+            where workspace_id = :workspaceId
+              and (
+                  created_at < :cursorCreatedAt
+                  or (created_at = :cursorCreatedAt and id::text < :cursorId)
+              )
+            order by created_at desc, id desc
+            limit :limit
+            """, nativeQuery = true)
+    List<AuditLogEntry> findCursorPageAfter(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("cursorCreatedAt") OffsetDateTime cursorCreatedAt,
+            @Param("cursorId") String cursorId,
+            @Param("limit") int limit
+    );
+
     long countByWorkspaceIdAndCreatedAtBefore(UUID workspaceId, OffsetDateTime cutoff);
 
     List<AuditLogEntry> findByWorkspaceIdAndCreatedAtBeforeOrderByCreatedAtAsc(UUID workspaceId, OffsetDateTime cutoff, Pageable pageable);
