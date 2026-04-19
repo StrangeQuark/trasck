@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.api.CursorPageResponse;
 import com.strangequark.trasck.api.PageCursorCodec;
+import com.strangequark.trasck.customfield.CustomFieldSearchFilter;
 import com.strangequark.trasck.customfield.CustomFieldService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
@@ -32,7 +33,10 @@ import com.strangequark.trasck.workflow.WorkflowTransitionActionRepository;
 import com.strangequark.trasck.workflow.WorkflowTransitionRepository;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -177,25 +181,33 @@ public class WorkItemService {
         }
         writeInitialEstimateHistory(saved, actorId);
         recordEvent(saved, "work_item.created", actorId);
+        customFieldService.applyRequestedValues(saved, createRequest.customFields(), actorId);
+        customFieldService.enforceRequiredScreenFields(saved, "create");
         return WorkItemResponse.from(saved);
     }
 
     @Transactional(readOnly = true)
-    public CursorPageResponse<WorkItemResponse> listByProject(UUID projectId, Integer limit, String cursor, String customFieldKey, String customFieldValue) {
+    public CursorPageResponse<WorkItemResponse> listByProject(
+            UUID projectId,
+            Integer limit,
+            String cursor,
+            String customFieldKey,
+            String customFieldOperator,
+            String customFieldValue,
+            String customFieldValueTo
+    ) {
         UUID actorId = currentUserService.requireUserId();
         Project project = activeProject(projectId);
         permissionService.requireProjectPermission(actorId, projectId, "work_item.read");
         int pageLimit = normalizePageLimit(limit);
         PageCursorCodec.RankCursor decoded = hasText(cursor) ? PageCursorCodec.decodeRank(cursor) : null;
         List<WorkItem> page;
-        if (hasText(customFieldKey) || hasText(customFieldValue)) {
+        if (hasText(customFieldKey) || hasText(customFieldOperator) || hasText(customFieldValue) || hasText(customFieldValueTo)) {
             if (!hasText(customFieldKey) || customFieldValue == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "customFieldKey and customFieldValue must be provided together");
             }
-            UUID customFieldId = customFieldService.resolveSearchableFieldIdForProject(project, customFieldKey);
-            page = decoded == null
-                    ? workItemRepository.findProjectFirstCursorPageByCustomField(projectId, customFieldId, customFieldValue, pageLimit + 1)
-                    : workItemRepository.findProjectCursorPageAfterByCustomField(projectId, customFieldId, customFieldValue, decoded.rank(), decoded.id(), pageLimit + 1);
+            CustomFieldSearchFilter filter = customFieldService.resolveSearchableFieldForProject(project, customFieldKey, customFieldOperator, customFieldValue, customFieldValueTo);
+            page = listByCustomFieldFilter(projectId, filter, decoded, pageLimit + 1);
         } else {
             page = decoded == null
                     ? workItemRepository.findProjectFirstCursorPage(projectId, pageLimit + 1)
@@ -308,6 +320,8 @@ public class WorkItemService {
         writeEstimateHistoryIfChanged(saved.getId(), "points", oldEstimatePoints, saved.getEstimatePoints(), actorId);
         writeEstimateHistoryIfChanged(saved.getId(), "minutes", toBigDecimal(oldEstimateMinutes), toBigDecimal(saved.getEstimateMinutes()), actorId);
         writeEstimateHistoryIfChanged(saved.getId(), "remaining_minutes", toBigDecimal(oldRemainingMinutes), toBigDecimal(saved.getRemainingMinutes()), actorId);
+        customFieldService.applyRequestedValues(saved, updateRequest.customFields(), actorId);
+        customFieldService.enforceRequiredScreenFields(saved, "edit");
         recordEvent(saved, "work_item.updated", actorId);
         return WorkItemResponse.from(saved);
     }
@@ -408,6 +422,137 @@ public class WorkItemService {
         WorkItem saved = workItemRepository.saveAndFlush(item);
         rebuildClosure(saved.getProjectId());
         recordEvent(saved, "work_item.archived", actorId);
+    }
+
+    private List<WorkItem> listByCustomFieldFilter(
+            UUID projectId,
+            CustomFieldSearchFilter filter,
+            PageCursorCodec.RankCursor cursor,
+            int limit
+    ) {
+        CustomFieldSqlPredicate predicate = customFieldSqlPredicate(filter);
+        List<Object> parameters = new ArrayList<>();
+        parameters.add(projectId);
+        parameters.add(filter.customFieldId());
+        parameters.addAll(predicate.parameters());
+        String cursorPredicate = "";
+        if (cursor != null) {
+            cursorPredicate = """
+                    and (
+                        wi.rank > ?
+                        or (wi.rank = ? and wi.id::text > ?)
+                    )
+                    """;
+            parameters.add(cursor.rank());
+            parameters.add(cursor.rank());
+            parameters.add(cursor.id());
+        }
+        parameters.add(limit);
+        String sql = """
+                select wi.id
+                from work_items wi
+                join custom_field_values cfv on cfv.work_item_id = wi.id
+                where wi.project_id = ?
+                  and wi.deleted_at is null
+                  and cfv.custom_field_id = ?
+                  and %s
+                %s
+                order by wi.rank asc, wi.id asc
+                limit ?
+                """.formatted(predicate.sql(), cursorPredicate);
+        List<UUID> ids = jdbcTemplate.query(
+                sql,
+                ps -> {
+                    for (int i = 0; i < parameters.size(); i++) {
+                        ps.setObject(i + 1, parameters.get(i));
+                    }
+                },
+                (rs, rowNum) -> (UUID) rs.getObject("id")
+        );
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, WorkItem> byId = new LinkedHashMap<>();
+        workItemRepository.findAllById(ids).forEach(item -> byId.put(item.getId(), item));
+        return ids.stream()
+                .map(byId::get)
+                .filter(item -> item != null)
+                .toList();
+    }
+
+    private CustomFieldSqlPredicate customFieldSqlPredicate(CustomFieldSearchFilter filter) {
+        String expression = "cfv.value #>> '{}'";
+        return switch (filter.fieldType()) {
+            case "text", "textarea", "single_select", "user", "url" -> scalarTextPredicate(expression, filter.operator(), filter.values());
+            case "number", "integer" -> comparablePredicate("cast(" + expression + " as numeric)", "numeric", filter.operator(), filter.values());
+            case "date" -> comparablePredicate("cast(" + expression + " as date)", "date", filter.operator(), filter.values());
+            case "datetime" -> comparablePredicate("cast(" + expression + " as timestamptz)", "timestamptz", filter.operator(), filter.values());
+            case "boolean" -> booleanPredicate(expression, filter.operator(), filter.values());
+            case "multi_select" -> multiSelectPredicate(filter.operator(), filter.values());
+            case "json" -> jsonPredicate(filter.operator(), filter.values());
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported custom field type");
+        };
+    }
+
+    private CustomFieldSqlPredicate scalarTextPredicate(String expression, String operator, List<String> values) {
+        return switch (operator) {
+            case "eq" -> new CustomFieldSqlPredicate(expression + " = ?", List.of(values.get(0)));
+            case "ne" -> new CustomFieldSqlPredicate("coalesce(" + expression + ", '') <> ?", List.of(values.get(0)));
+            case "contains" -> new CustomFieldSqlPredicate("position(lower(?) in lower(coalesce(" + expression + ", ''))) > 0", List.of(values.get(0)));
+            case "not_contains" -> new CustomFieldSqlPredicate("position(lower(?) in lower(coalesce(" + expression + ", ''))) = 0", List.of(values.get(0)));
+            case "in" -> new CustomFieldSqlPredicate(expression + " in (" + placeholders(values.size()) + ")", List.copyOf(values));
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported custom field operator");
+        };
+    }
+
+    private CustomFieldSqlPredicate comparablePredicate(String expression, String castType, String operator, List<String> values) {
+        return switch (operator) {
+            case "eq" -> new CustomFieldSqlPredicate(expression + " = cast(? as " + castType + ")", List.of(values.get(0)));
+            case "ne" -> new CustomFieldSqlPredicate(expression + " <> cast(? as " + castType + ")", List.of(values.get(0)));
+            case "gt" -> new CustomFieldSqlPredicate(expression + " > cast(? as " + castType + ")", List.of(values.get(0)));
+            case "gte" -> new CustomFieldSqlPredicate(expression + " >= cast(? as " + castType + ")", List.of(values.get(0)));
+            case "lt" -> new CustomFieldSqlPredicate(expression + " < cast(? as " + castType + ")", List.of(values.get(0)));
+            case "lte" -> new CustomFieldSqlPredicate(expression + " <= cast(? as " + castType + ")", List.of(values.get(0)));
+            case "between" -> new CustomFieldSqlPredicate(
+                    expression + " between cast(? as " + castType + ") and cast(? as " + castType + ")",
+                    List.of(values.get(0), values.get(1))
+            );
+            case "in" -> new CustomFieldSqlPredicate(expression + " in (" + castPlaceholders(values.size(), castType) + ")", List.copyOf(values));
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported custom field operator");
+        };
+    }
+
+    private CustomFieldSqlPredicate booleanPredicate(String expression, String operator, List<String> values) {
+        return switch (operator) {
+            case "eq" -> new CustomFieldSqlPredicate("cast(" + expression + " as boolean) = cast(? as boolean)", List.of(values.get(0)));
+            case "ne" -> new CustomFieldSqlPredicate("cast(" + expression + " as boolean) <> cast(? as boolean)", List.of(values.get(0)));
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported custom field operator");
+        };
+    }
+
+    private CustomFieldSqlPredicate multiSelectPredicate(String operator, List<String> values) {
+        return switch (operator) {
+            case "contains" -> new CustomFieldSqlPredicate("jsonb_exists(cfv.value, ?)", List.of(values.get(0)));
+            case "not_contains" -> new CustomFieldSqlPredicate("not jsonb_exists(cfv.value, ?)", List.of(values.get(0)));
+            case "in" -> new CustomFieldSqlPredicate("jsonb_exists_any(cfv.value, array[" + placeholders(values.size()) + "]::text[])", List.copyOf(values));
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported custom field operator");
+        };
+    }
+
+    private CustomFieldSqlPredicate jsonPredicate(String operator, List<String> values) {
+        return switch (operator) {
+            case "eq" -> new CustomFieldSqlPredicate("cfv.value = cast(? as jsonb)", List.of(values.get(0)));
+            case "ne" -> new CustomFieldSqlPredicate("cfv.value <> cast(? as jsonb)", List.of(values.get(0)));
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported custom field operator");
+        };
+    }
+
+    private String placeholders(int count) {
+        return String.join(", ", java.util.Collections.nCopies(count, "?"));
+    }
+
+    private String castPlaceholders(int count, String castType) {
+        return String.join(", ", java.util.Collections.nCopies(count, "cast(? as " + castType + ")"));
     }
 
     private Project activeProject(UUID projectId) {
@@ -723,5 +868,8 @@ public class WorkItemService {
 
     private UUID firstNonNull(UUID first, UUID second) {
         return first == null ? second : first;
+    }
+
+    private record CustomFieldSqlPredicate(String sql, List<?> parameters) {
     }
 }

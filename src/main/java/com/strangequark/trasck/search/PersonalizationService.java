@@ -6,6 +6,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.project.Project;
+import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.team.Team;
+import com.strangequark.trasck.team.TeamMembershipRepository;
+import com.strangequark.trasck.team.TeamRepository;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
@@ -28,6 +33,9 @@ public class PersonalizationService {
     private final FavoriteRepository favoriteRepository;
     private final RecentItemRepository recentItemRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final ProjectRepository projectRepository;
+    private final TeamRepository teamRepository;
+    private final TeamMembershipRepository teamMembershipRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -39,6 +47,9 @@ public class PersonalizationService {
             FavoriteRepository favoriteRepository,
             RecentItemRepository recentItemRepository,
             WorkspaceRepository workspaceRepository,
+            ProjectRepository projectRepository,
+            TeamRepository teamRepository,
+            TeamMembershipRepository teamMembershipRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService,
@@ -49,6 +60,9 @@ public class PersonalizationService {
         this.favoriteRepository = favoriteRepository;
         this.recentItemRepository = recentItemRepository;
         this.workspaceRepository = workspaceRepository;
+        this.projectRepository = projectRepository;
+        this.teamRepository = teamRepository;
+        this.teamMembershipRepository = teamMembershipRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -60,8 +74,33 @@ public class PersonalizationService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.read");
+        boolean canManageReports = canManageReports(actorId, workspaceId);
         return savedViewRepository.findVisibleCandidates(workspaceId, actorId).stream()
-                .filter(view -> canReadView(actorId, view))
+                .filter(view -> canReadView(actorId, view, canManageReports))
+                .map(SavedViewResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<SavedViewResponse> listViewsByProject(UUID projectId) {
+        UUID actorId = currentUserService.requireUserId();
+        Project project = activeProject(projectId);
+        permissionService.requireProjectPermission(actorId, project.getId(), "report.read");
+        boolean canManageReports = canManageReports(actorId, project.getWorkspaceId());
+        return savedViewRepository.findByWorkspaceIdAndVisibilityAndProjectIdOrderByNameAsc(project.getWorkspaceId(), "project", project.getId()).stream()
+                .filter(view -> canReadView(actorId, view, canManageReports))
+                .map(SavedViewResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<SavedViewResponse> listViewsByTeam(UUID teamId) {
+        UUID actorId = currentUserService.requireUserId();
+        Team team = activeTeam(teamId);
+        permissionService.requireWorkspacePermission(actorId, team.getWorkspaceId(), "report.read");
+        boolean canManageReports = canManageReports(actorId, team.getWorkspaceId());
+        return savedViewRepository.findByWorkspaceIdAndVisibilityAndTeamIdOrderByNameAsc(team.getWorkspaceId(), "team", team.getId()).stream()
+                .filter(view -> canReadView(actorId, view, canManageReports))
                 .map(SavedViewResponse::from)
                 .toList();
     }
@@ -81,10 +120,14 @@ public class PersonalizationService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         String visibility = normalizeVisibility(createRequest.visibility());
-        requireViewCreatePermission(actorId, workspaceId, visibility);
+        UUID projectId = normalizeProjectId(workspaceId, visibility, createRequest.projectId());
+        UUID teamId = normalizeTeamId(workspaceId, visibility, createRequest.teamId());
+        requireSharedViewPermission(actorId, workspaceId, visibility, projectId);
         SavedView view = new SavedView();
         view.setWorkspaceId(workspaceId);
         view.setOwnerId(actorId);
+        view.setProjectId(projectId);
+        view.setTeamId(teamId);
         view.setName(requiredText(createRequest.name(), "name"));
         view.setViewType(requiredText(createRequest.viewType(), "viewType").toLowerCase());
         view.setConfig(validatedConfig(createRequest.config()));
@@ -104,7 +147,21 @@ public class PersonalizationService {
         String targetVisibility = hasText(updateRequest.visibility())
                 ? normalizeVisibility(updateRequest.visibility())
                 : view.getVisibility();
-        requireViewCreatePermission(actorId, view.getWorkspaceId(), targetVisibility);
+        UUID requestedProjectId = updateRequest.projectId();
+        if (requestedProjectId == null && "project".equals(targetVisibility) && "project".equals(view.getVisibility())) {
+            requestedProjectId = view.getProjectId();
+        }
+        UUID requestedTeamId = updateRequest.teamId();
+        if (requestedTeamId == null && "team".equals(targetVisibility) && "team".equals(view.getVisibility())) {
+            requestedTeamId = view.getTeamId();
+        }
+        UUID targetProjectId = hasText(updateRequest.visibility()) || updateRequest.projectId() != null
+                ? normalizeProjectId(view.getWorkspaceId(), targetVisibility, requestedProjectId)
+                : view.getProjectId();
+        UUID targetTeamId = hasText(updateRequest.visibility()) || updateRequest.teamId() != null
+                ? normalizeTeamId(view.getWorkspaceId(), targetVisibility, requestedTeamId)
+                : view.getTeamId();
+        requireSharedViewPermission(actorId, view.getWorkspaceId(), targetVisibility, targetProjectId);
         if (hasText(updateRequest.name())) {
             view.setName(updateRequest.name().trim());
         }
@@ -115,6 +172,8 @@ public class PersonalizationService {
             view.setConfig(validatedConfig(updateRequest.config()));
         }
         view.setVisibility(targetVisibility);
+        view.setProjectId(targetProjectId);
+        view.setTeamId(targetTeamId);
         SavedView saved = savedViewRepository.save(view);
         recordViewEvent(saved, "view.updated", actorId);
         return SavedViewResponse.from(saved);
@@ -223,34 +282,128 @@ public class PersonalizationService {
     }
 
     private void requireReadableView(UUID actorId, SavedView view) {
-        if (!canReadView(actorId, view)) {
+        if (!canReadView(actorId, view, canManageReports(actorId, view.getWorkspaceId()))) {
             throw notFound("Saved view not found");
         }
     }
 
-    private boolean canReadView(UUID actorId, SavedView view) {
-        if (actorId.equals(view.getOwnerId())) {
-            return permissionService.canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read");
+    private boolean canReadView(UUID actorId, SavedView view, boolean canManageReports) {
+        if (canManageReports) {
+            return true;
         }
-        return ("workspace".equals(view.getVisibility()) || "public".equals(view.getVisibility()))
-                && permissionService.canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read");
+        if (actorId.equals(view.getOwnerId())) {
+            if ("project".equals(view.getVisibility()) && view.getProjectId() != null) {
+                return canUseProject(actorId, view.getProjectId(), "report.read")
+                        || canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read");
+            }
+            return canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read");
+        }
+        if ("workspace".equals(view.getVisibility()) || "public".equals(view.getVisibility())) {
+            return canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read");
+        }
+        if ("project".equals(view.getVisibility()) && view.getProjectId() != null) {
+            return canUseProject(actorId, view.getProjectId(), "report.read");
+        }
+        return "team".equals(view.getVisibility())
+                && view.getTeamId() != null
+                && canUseWorkspace(actorId, view.getWorkspaceId(), "report.read")
+                && teamMembershipRepository.existsByTeamIdAndUserIdAndLeftAtIsNull(view.getTeamId(), actorId);
     }
 
     private void requireWritableView(UUID actorId, SavedView view) {
         if ("private".equals(view.getVisibility())
                 && actorId.equals(view.getOwnerId())
-                && permissionService.canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read")) {
+                && canUseWorkspace(actorId, view.getWorkspaceId(), "workspace.read")) {
             return;
         }
-        permissionService.requireWorkspacePermission(actorId, view.getWorkspaceId(), "workspace.admin");
+        if ("project".equals(view.getVisibility())
+                && view.getProjectId() != null
+                && canUseProject(actorId, view.getProjectId(), "report.manage")) {
+            return;
+        }
+        if (canManageReports(actorId, view.getWorkspaceId())) {
+            return;
+        }
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You do not have permission to manage this saved view");
     }
 
-    private void requireViewCreatePermission(UUID actorId, UUID workspaceId, String visibility) {
+    private void requireSharedViewPermission(UUID actorId, UUID workspaceId, String visibility, UUID projectId) {
         if ("private".equals(visibility)) {
             permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.read");
             return;
         }
-        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        if ("project".equals(visibility)) {
+            permissionService.requireProjectPermission(actorId, required(projectId, "projectId"), "report.manage");
+            return;
+        }
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.manage");
+    }
+
+    private Project activeProject(UUID projectId) {
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+                .orElseThrow(() -> notFound("Project not found"));
+        if (!"active".equals(project.getStatus())) {
+            throw notFound("Project not found");
+        }
+        activeWorkspace(project.getWorkspaceId());
+        return project;
+    }
+
+    private Team activeTeam(UUID teamId) {
+        Team team = teamRepository.findById(teamId).orElseThrow(() -> notFound("Team not found"));
+        if (!"active".equals(team.getStatus())) {
+            throw notFound("Team not found");
+        }
+        activeWorkspace(team.getWorkspaceId());
+        return team;
+    }
+
+    private UUID normalizeProjectId(UUID workspaceId, String visibility, UUID projectId) {
+        if (!"project".equals(visibility)) {
+            if (projectId != null) {
+                throw badRequest("projectId is only valid for project saved views");
+            }
+            return null;
+        }
+        if (projectId == null) {
+            throw badRequest("projectId is required for project saved views");
+        }
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+                .orElseThrow(() -> badRequest("Project not found in this workspace"));
+        if (!workspaceId.equals(project.getWorkspaceId()) || !"active".equals(project.getStatus())) {
+            throw badRequest("Project not found in this workspace");
+        }
+        return project.getId();
+    }
+
+    private UUID normalizeTeamId(UUID workspaceId, String visibility, UUID teamId) {
+        if (!"team".equals(visibility)) {
+            if (teamId != null) {
+                throw badRequest("teamId is only valid for team saved views");
+            }
+            return null;
+        }
+        if (teamId == null) {
+            throw badRequest("teamId is required for team saved views");
+        }
+        Team team = teamRepository.findByIdAndWorkspaceId(teamId, workspaceId)
+                .orElseThrow(() -> badRequest("Team not found in this workspace"));
+        if (!"active".equals(team.getStatus())) {
+            throw badRequest("Team is not active");
+        }
+        return team.getId();
+    }
+
+    private boolean canManageReports(UUID actorId, UUID workspaceId) {
+        return permissionService.canUseWorkspace(actorId, workspaceId, "report.manage");
+    }
+
+    private boolean canUseWorkspace(UUID actorId, UUID workspaceId, String permissionKey) {
+        return permissionService.canUseWorkspace(actorId, workspaceId, permissionKey);
+    }
+
+    private boolean canUseProject(UUID actorId, UUID projectId, String permissionKey) {
+        return permissionService.canUseProject(actorId, projectId, permissionKey);
     }
 
     private void assertEntityInWorkspace(UUID workspaceId, String entityType, UUID entityId) {
@@ -362,8 +515,8 @@ public class PersonalizationService {
 
     private String normalizeVisibility(String visibility) {
         String normalized = hasText(visibility) ? visibility.trim().toLowerCase() : "private";
-        if (!List.of("private", "workspace", "public").contains(normalized)) {
-            throw badRequest("visibility must be private, workspace, or public");
+        if (!List.of("private", "team", "project", "workspace", "public").contains(normalized)) {
+            throw badRequest("visibility must be private, team, project, workspace, or public");
         }
         return normalized;
     }
@@ -382,6 +535,12 @@ public class PersonalizationService {
                 .put("viewType", view.getViewType())
                 .put("visibility", view.getVisibility())
                 .put("actorUserId", actorId.toString());
+        if (view.getProjectId() != null) {
+            payload.put("projectId", view.getProjectId().toString());
+        }
+        if (view.getTeamId() != null) {
+            payload.put("teamId", view.getTeamId().toString());
+        }
         domainEventService.record(view.getWorkspaceId(), "view", view.getId(), eventType, payload);
     }
 

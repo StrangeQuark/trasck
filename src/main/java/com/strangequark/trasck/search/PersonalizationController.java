@@ -28,6 +28,16 @@ public class PersonalizationController {
         return personalizationService.listViews(workspaceId);
     }
 
+    @GetMapping("/projects/{projectId}/personalization/views")
+    public List<SavedViewResponse> listProjectViews(@PathVariable UUID projectId) {
+        return personalizationService.listViewsByProject(projectId);
+    }
+
+    @GetMapping("/teams/{teamId}/personalization/views")
+    public List<SavedViewResponse> listTeamViews(@PathVariable UUID teamId) {
+        return personalizationService.listViewsByTeam(teamId);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/personalization/views")
     public ResponseEntity<SavedViewResponse> createView(
             @PathVariable UUID workspaceId,

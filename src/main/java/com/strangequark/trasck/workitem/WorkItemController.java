@@ -49,9 +49,11 @@ public class WorkItemController {
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) String customFieldKey,
-            @RequestParam(required = false) String customFieldValue
+            @RequestParam(required = false) String customFieldOperator,
+            @RequestParam(required = false) String customFieldValue,
+            @RequestParam(required = false) String customFieldValueTo
     ) {
-        return workItemService.listByProject(projectId, limit, cursor, customFieldKey, customFieldValue);
+        return workItemService.listByProject(projectId, limit, cursor, customFieldKey, customFieldOperator, customFieldValue, customFieldValueTo);
     }
 
     @GetMapping("/work-items/{workItemId}")
