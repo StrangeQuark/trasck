@@ -77,6 +77,30 @@ public class ReportQueryCatalogService {
     }
 
     @Transactional(readOnly = true)
+    public List<ReportQueryCatalogResponse> listByProject(UUID projectId) {
+        UUID actorId = currentUserService.requireUserId();
+        Project project = activeProject(projectId);
+        permissionService.requireProjectPermission(actorId, project.getId(), "report.read");
+        boolean canManageWorkspaceReports = canUseWorkspace(actorId, project.getWorkspaceId(), "report.manage");
+        return reportQueryCatalogRepository.findByWorkspaceIdAndVisibilityAndProjectIdOrderByNameAsc(project.getWorkspaceId(), "project", project.getId()).stream()
+                .filter(entry -> canRead(actorId, entry, canManageWorkspaceReports))
+                .map(ReportQueryCatalogResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReportQueryCatalogResponse> listByTeam(UUID teamId) {
+        UUID actorId = currentUserService.requireUserId();
+        Team team = activeTeam(teamId);
+        permissionService.requireWorkspacePermission(actorId, team.getWorkspaceId(), "report.read");
+        boolean canManageWorkspaceReports = canUseWorkspace(actorId, team.getWorkspaceId(), "report.manage");
+        return reportQueryCatalogRepository.findByWorkspaceIdAndVisibilityAndTeamIdOrderByNameAsc(team.getWorkspaceId(), "team", team.getId()).stream()
+                .filter(entry -> canRead(actorId, entry, canManageWorkspaceReports))
+                .map(ReportQueryCatalogResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public ReportQueryCatalogResponse get(UUID queryId) {
         UUID actorId = currentUserService.requireUserId();
         ReportQueryCatalogEntry entry = entry(queryId);
@@ -573,6 +597,25 @@ public class ReportQueryCatalogService {
             throw notFound("Workspace not found");
         }
         return workspace;
+    }
+
+    private Project activeProject(UUID projectId) {
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+                .orElseThrow(() -> notFound("Project not found"));
+        if (!"active".equals(project.getStatus())) {
+            throw notFound("Project not found");
+        }
+        activeWorkspace(project.getWorkspaceId());
+        return project;
+    }
+
+    private Team activeTeam(UUID teamId) {
+        Team team = teamRepository.findById(teamId).orElseThrow(() -> notFound("Team not found"));
+        if (!"active".equals(team.getStatus())) {
+            throw notFound("Team not found");
+        }
+        activeWorkspace(team.getWorkspaceId());
+        return team;
     }
 
     private UUID normalizeProjectId(UUID workspaceId, String visibility, UUID projectId) {

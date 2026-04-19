@@ -15,6 +15,38 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
     @EntityGraph(attributePaths = {"project", "type", "status", "priority"})
     List<WorkItem> findByProjectIdAndDeletedAtIsNullOrderByRankAsc(UUID projectId);
 
+    @Query(value = """
+            select *
+            from work_items
+            where project_id = :projectId
+              and deleted_at is null
+            order by rank asc, id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<WorkItem> findProjectFirstCursorPage(
+            @Param("projectId") UUID projectId,
+            @Param("limit") int limit
+    );
+
+    @Query(value = """
+            select *
+            from work_items
+            where project_id = :projectId
+              and deleted_at is null
+              and (
+                  rank > :cursorRank
+                  or (rank = :cursorRank and id::text > :cursorId)
+              )
+            order by rank asc, id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<WorkItem> findProjectCursorPageAfter(
+            @Param("projectId") UUID projectId,
+            @Param("cursorRank") String cursorRank,
+            @Param("cursorId") String cursorId,
+            @Param("limit") int limit
+    );
+
     List<WorkItem> findByParentIdAndDeletedAtIsNull(UUID parentId);
 
     Optional<WorkItem> findTopByProjectIdAndDeletedAtIsNullOrderByRankDesc(UUID projectId);

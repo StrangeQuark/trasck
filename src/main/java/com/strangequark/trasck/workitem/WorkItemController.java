@@ -1,5 +1,6 @@
 package com.strangequark.trasck.workitem;
 
+import com.strangequark.trasck.api.CursorPageResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -43,8 +44,12 @@ public class WorkItemController {
     }
 
     @GetMapping("/projects/{projectId}/work-items")
-    public List<WorkItemResponse> listByProject(@PathVariable UUID projectId) {
-        return workItemService.listByProject(projectId);
+    public CursorPageResponse<WorkItemResponse> listByProject(
+            @PathVariable UUID projectId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String cursor
+    ) {
+        return workItemService.listByProject(projectId, limit, cursor);
     }
 
     @GetMapping("/work-items/{workItemId}")

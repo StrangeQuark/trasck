@@ -19,4 +19,8 @@ public interface DashboardRepository extends JpaRepository<Dashboard, UUID> {
             order by dashboard.name asc
             """)
     List<Dashboard> findVisibleCandidates(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
+
+    List<Dashboard> findByWorkspaceIdAndVisibilityAndProjectIdOrderByNameAsc(UUID workspaceId, String visibility, UUID projectId);
+
+    List<Dashboard> findByWorkspaceIdAndVisibilityAndTeamIdOrderByNameAsc(UUID workspaceId, String visibility, UUID teamId);
 }

@@ -1,6 +1,6 @@
 package com.strangequark.trasck.activity;
 
-import java.util.List;
+import com.strangequark.trasck.api.CursorPageResponse;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,21 +19,30 @@ public class ActivityController {
     }
 
     @GetMapping("/workspaces/{workspaceId}/activity")
-    public List<ActivityEventResponse> workspaceActivity(@PathVariable UUID workspaceId, @RequestParam(required = false) Integer limit) {
-        return activityService.workspaceActivity(workspaceId, limit);
+    public CursorPageResponse<ActivityEventResponse> workspaceActivity(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String cursor
+    ) {
+        return activityService.workspaceActivity(workspaceId, limit, cursor);
     }
 
     @GetMapping("/workspaces/{workspaceId}/projects/{projectId}/activity")
-    public List<ActivityEventResponse> projectActivity(
+    public CursorPageResponse<ActivityEventResponse> projectActivity(
             @PathVariable UUID workspaceId,
             @PathVariable UUID projectId,
-            @RequestParam(required = false) Integer limit
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String cursor
     ) {
-        return activityService.projectActivity(workspaceId, projectId, limit);
+        return activityService.projectActivity(workspaceId, projectId, limit, cursor);
     }
 
     @GetMapping("/work-items/{workItemId}/activity")
-    public List<ActivityEventResponse> workItemActivity(@PathVariable UUID workItemId, @RequestParam(required = false) Integer limit) {
-        return activityService.workItemActivity(workItemId, limit);
+    public CursorPageResponse<ActivityEventResponse> workItemActivity(
+            @PathVariable UUID workItemId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String cursor
+    ) {
+        return activityService.workItemActivity(workItemId, limit, cursor);
     }
 }

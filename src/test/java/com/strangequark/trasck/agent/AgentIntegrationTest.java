@@ -505,9 +505,10 @@ class AgentIntegrationTest {
     }
 
     private String[] eventTypes(JsonNode entries, String fieldName) {
-        String[] eventTypes = new String[entries.size()];
-        for (int i = 0; i < entries.size(); i++) {
-            eventTypes[i] = entries.get(i).at("/" + fieldName).asText();
+        JsonNode pageItems = entries.has("items") ? entries.at("/items") : entries;
+        String[] eventTypes = new String[pageItems.size()];
+        for (int i = 0; i < pageItems.size(); i++) {
+            eventTypes[i] = pageItems.get(i).at("/" + fieldName).asText();
         }
         return eventTypes;
     }

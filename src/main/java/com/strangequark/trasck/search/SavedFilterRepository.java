@@ -18,4 +18,8 @@ public interface SavedFilterRepository extends JpaRepository<SavedFilter, UUID> 
             order by savedFilter.name asc
             """)
     List<SavedFilter> findVisibleCandidates(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
+
+    List<SavedFilter> findByWorkspaceIdAndVisibilityAndProjectIdOrderByNameAsc(UUID workspaceId, String visibility, UUID projectId);
+
+    List<SavedFilter> findByWorkspaceIdAndVisibilityAndTeamIdOrderByNameAsc(UUID workspaceId, String visibility, UUID teamId);
 }

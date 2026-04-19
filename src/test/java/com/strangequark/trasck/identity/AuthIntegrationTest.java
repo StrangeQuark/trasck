@@ -84,6 +84,9 @@ class AuthIntegrationTest {
         UUID projectAdminRoleId = roleId(setup, "project_admin");
 
         assertThat(get("/api/v1/auth/me", null).statusCode()).isEqualTo(401);
+        JsonNode openApi = read(get("/v3/api-docs", null));
+        assertThat(openApi.at("/openapi").asText()).startsWith("3.");
+        assertThat(openApi.at("/info/title").asText()).isEqualTo("Trasck API");
 
         AuthSession admin = login(setup.at("/adminUser/email").asText(), "correct-horse-battery-staple");
         assertThat(admin.accessToken()).isNotBlank();
@@ -328,6 +331,15 @@ class AuthIntegrationTest {
         UUID pruneAttachmentId = uuid(retentionPrune, "/fileAttachmentId");
         assertThat(countWhere("attachments", "id", pruneAttachmentId)).isEqualTo(1);
         assertThat(countWhere("export_jobs", "file_attachment_id", pruneAttachmentId)).isEqualTo(1);
+        UUID pruneExportJobId = uuid(retentionPrune, "/exportJobId");
+        JsonNode exportJobs = read(get("/api/v1/workspaces/" + workspaceId + "/export-jobs?exportType=audit_retention&limit=10", admin.accessToken()));
+        assertThat(exportJobs.at("/items")).isNotEmpty();
+        JsonNode pruneExportJob = read(get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + pruneExportJobId, admin.accessToken()));
+        assertThat(uuid(pruneExportJob, "/fileAttachmentId")).isEqualTo(pruneAttachmentId);
+        HttpResponse<String> downloadedExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + pruneExportJobId + "/download", admin.accessToken());
+        assertThat(downloadedExport.statusCode()).isEqualTo(200);
+        assertThat(downloadedExport.headers().firstValue("Content-Disposition")).hasValueSatisfying(value -> assertThat(value).contains("audit-retention-"));
+        assertThat(downloadedExport.body()).contains(oldAuditId.toString(), "audit.old_retention_test");
         assertThat(countWhere("audit_log_entries", "id", oldAuditId)).isZero();
 
         UUID secretEventId = UUID.randomUUID();
@@ -470,17 +482,19 @@ class AuthIntegrationTest {
     }
 
     private String[] actions(JsonNode entries) {
-        String[] actions = new String[entries.size()];
-        for (int i = 0; i < entries.size(); i++) {
-            actions[i] = entries.get(i).at("/action").asText();
+        JsonNode pageItems = entries.has("items") ? entries.at("/items") : entries;
+        String[] actions = new String[pageItems.size()];
+        for (int i = 0; i < pageItems.size(); i++) {
+            actions[i] = pageItems.get(i).at("/action").asText();
         }
         return actions;
     }
 
     private String[] ids(JsonNode entries) {
-        String[] ids = new String[entries.size()];
-        for (int i = 0; i < entries.size(); i++) {
-            ids[i] = entries.get(i).at("/id").asText();
+        JsonNode pageItems = entries.has("items") ? entries.at("/items") : entries;
+        String[] ids = new String[pageItems.size()];
+        for (int i = 0; i < pageItems.size(); i++) {
+            ids[i] = pageItems.get(i).at("/id").asText();
         }
         return ids;
     }

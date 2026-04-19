@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
+import com.strangequark.trasck.api.CursorPageResponse;
+import com.strangequark.trasck.api.PageCursorCodec;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
@@ -175,13 +177,28 @@ public class WorkItemService {
     }
 
     @Transactional(readOnly = true)
-    public List<WorkItemResponse> listByProject(UUID projectId) {
+    public CursorPageResponse<WorkItemResponse> listByProject(UUID projectId, Integer limit, String cursor) {
         UUID actorId = currentUserService.requireUserId();
         activeProject(projectId);
         permissionService.requireProjectPermission(actorId, projectId, "work_item.read");
-        return workItemRepository.findByProjectIdAndDeletedAtIsNullOrderByRankAsc(projectId).stream()
+        int pageLimit = normalizePageLimit(limit);
+        PageCursorCodec.RankCursor decoded = hasText(cursor) ? PageCursorCodec.decodeRank(cursor) : null;
+        List<WorkItem> page = decoded == null
+                ? workItemRepository.findProjectFirstCursorPage(projectId, pageLimit + 1)
+                : workItemRepository.findProjectCursorPageAfter(projectId, decoded.rank(), decoded.id(), pageLimit + 1);
+        boolean hasMore = page.size() > pageLimit;
+        List<WorkItem> items = hasMore ? page.subList(0, pageLimit) : page;
+        String nextCursor = hasMore
+                ? PageCursorCodec.encodeRank(items.get(items.size() - 1).getRank(), items.get(items.size() - 1).getId().toString())
+                : null;
+        return new CursorPageResponse<>(
+                items.stream()
                 .map(WorkItemResponse::from)
-                .toList();
+                        .toList(),
+                nextCursor,
+                hasMore,
+                pageLimit
+        );
     }
 
     @Transactional(readOnly = true)
@@ -643,6 +660,13 @@ public class WorkItemService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "visibility must be inherited, private, or public");
         }
         return normalized;
+    }
+
+    private int normalizePageLimit(Integer limit) {
+        if (limit == null) {
+            return 50;
+        }
+        return Math.max(1, Math.min(limit, 100));
     }
 
     private ResponseStatusException notFound(String message) {

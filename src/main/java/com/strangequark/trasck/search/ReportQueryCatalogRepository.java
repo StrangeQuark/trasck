@@ -23,4 +23,8 @@ public interface ReportQueryCatalogRepository extends JpaRepository<ReportQueryC
             order by entry.name asc
             """)
     List<ReportQueryCatalogEntry> findVisibleCandidates(@Param("workspaceId") UUID workspaceId, @Param("userId") UUID userId);
+
+    List<ReportQueryCatalogEntry> findByWorkspaceIdAndVisibilityAndProjectIdOrderByNameAsc(UUID workspaceId, String visibility, UUID projectId);
+
+    List<ReportQueryCatalogEntry> findByWorkspaceIdAndVisibilityAndTeamIdOrderByNameAsc(UUID workspaceId, String visibility, UUID teamId);
 }

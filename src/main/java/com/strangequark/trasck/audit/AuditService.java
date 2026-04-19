@@ -9,10 +9,15 @@ import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
 import com.strangequark.trasck.activity.storage.AttachmentStorageService;
 import com.strangequark.trasck.activity.storage.AttachmentUpload;
 import com.strangequark.trasck.activity.storage.StoredAttachment;
+import com.strangequark.trasck.api.CursorPageResponse;
+import com.strangequark.trasck.api.PageCursorCodec;
+import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
+import com.strangequark.trasck.integration.ExportFileResponse;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.integration.ExportJob;
 import com.strangequark.trasck.integration.ExportJobRepository;
+import com.strangequark.trasck.integration.ExportJobResponse;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
@@ -32,6 +37,7 @@ public class AuditService {
 
     private static final int MAX_RETENTION_PRUNE_EXPORT_ROWS = 10_000;
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
+    private static final OffsetDateTime EXPORT_CURSOR_FLOOR = OffsetDateTime.parse("0001-01-01T00:00:00Z");
 
     private final AuditLogEntryRepository auditLogEntryRepository;
     private final AuditRetentionPolicyRepository auditRetentionPolicyRepository;
@@ -41,6 +47,7 @@ public class AuditService {
     private final AttachmentStorageService attachmentStorageService;
     private final ExportJobRepository exportJobRepository;
     private final CurrentUserService currentUserService;
+    private final PermissionService permissionService;
     private final DomainEventService domainEventService;
     private final ObjectMapper objectMapper;
 
@@ -53,6 +60,7 @@ public class AuditService {
             AttachmentStorageService attachmentStorageService,
             ExportJobRepository exportJobRepository,
             CurrentUserService currentUserService,
+            PermissionService permissionService,
             DomainEventService domainEventService,
             ObjectMapper objectMapper
     ) {
@@ -64,16 +72,37 @@ public class AuditService {
         this.attachmentStorageService = attachmentStorageService;
         this.exportJobRepository = exportJobRepository;
         this.currentUserService = currentUserService;
+        this.permissionService = permissionService;
         this.domainEventService = domainEventService;
         this.objectMapper = objectMapper;
     }
 
     @Transactional(readOnly = true)
-    public List<AuditLogEntryResponse> listAuditLog(UUID workspaceId, Integer limit) {
+    public CursorPageResponse<AuditLogEntryResponse> listAuditLog(UUID workspaceId, Integer limit, String cursor) {
         activeWorkspace(workspaceId);
-        return auditLogEntryRepository.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId, PageRequest.of(0, normalizeLimit(limit))).stream()
+        int pageLimit = normalizeLimit(limit);
+        PageCursorCodec.TimestampCursor decoded = cursor == null || cursor.isBlank() ? null : PageCursorCodec.decodeTimestamp(cursor);
+        List<AuditLogEntry> page = decoded == null
+                ? auditLogEntryRepository.findFirstCursorPage(workspaceId, pageLimit + 1)
+                : auditLogEntryRepository.findCursorPageAfter(
+                        workspaceId,
+                        decoded.createdAt(),
+                        decoded.id(),
+                        pageLimit + 1
+                );
+        boolean hasMore = page.size() > pageLimit;
+        List<AuditLogEntry> items = hasMore ? page.subList(0, pageLimit) : page;
+        String nextCursor = hasMore
+                ? PageCursorCodec.encodeTimestamp(items.get(items.size() - 1).getCreatedAt(), items.get(items.size() - 1).getId().toString())
+                : null;
+        return new CursorPageResponse<>(
+                items.stream()
                 .map(AuditLogEntryResponse::from)
-                .toList();
+                        .toList(),
+                nextCursor,
+                hasMore,
+                pageLimit
+        );
     }
 
     @Transactional(readOnly = true)
@@ -144,6 +173,80 @@ public class AuditService {
         }
         domainEventService.record(workspaceId, "audit_retention_policy", workspaceId, "audit.retention_pruned", payload);
         return response;
+    }
+
+    @Transactional(readOnly = true)
+    public CursorPageResponse<ExportJobResponse> listExportJobs(UUID workspaceId, String exportType, Integer limit, String cursor) {
+        activeWorkspace(workspaceId);
+        requireWorkspaceAdmin(workspaceId);
+        int pageLimit = normalizeLimit(limit);
+        PageCursorCodec.TimestampCursor decoded = cursor == null || cursor.isBlank() ? null : PageCursorCodec.decodeTimestamp(cursor);
+        String normalizedExportType = hasText(exportType) ? exportType.trim().toLowerCase() : null;
+        List<ExportJob> page = exportJobPage(workspaceId, normalizedExportType, decoded, pageLimit + 1);
+        boolean hasMore = page.size() > pageLimit;
+        List<ExportJob> items = hasMore ? page.subList(0, pageLimit) : page;
+        String nextCursor = hasMore
+                ? PageCursorCodec.encodeTimestamp(exportJobCursorStartedAt(items.get(items.size() - 1)), items.get(items.size() - 1).getId().toString())
+                : null;
+        return new CursorPageResponse<>(
+                items.stream()
+                        .map(job -> ExportJobResponse.from(job, exportAttachment(job, false)))
+                        .toList(),
+                nextCursor,
+                hasMore,
+                pageLimit
+        );
+    }
+
+    private List<ExportJob> exportJobPage(
+            UUID workspaceId,
+            String exportType,
+            PageCursorCodec.TimestampCursor cursor,
+            int limit
+    ) {
+        if (cursor == null && exportType == null) {
+            return exportJobRepository.findFirstCursorPage(workspaceId, limit);
+        }
+        if (cursor == null) {
+            return exportJobRepository.findFirstCursorPageByExportType(workspaceId, exportType, limit);
+        }
+        if (exportType == null) {
+            return exportJobRepository.findCursorPageAfter(workspaceId, cursor.createdAt(), cursor.id(), limit);
+        }
+        return exportJobRepository.findCursorPageAfterByExportType(
+                workspaceId,
+                exportType,
+                cursor.createdAt(),
+                cursor.id(),
+                limit
+        );
+    }
+
+    private OffsetDateTime exportJobCursorStartedAt(ExportJob job) {
+        return job.getStartedAt() == null ? EXPORT_CURSOR_FLOOR : job.getStartedAt();
+    }
+
+    @Transactional(readOnly = true)
+    public ExportJobResponse getExportJob(UUID workspaceId, UUID exportJobId) {
+        activeWorkspace(workspaceId);
+        requireWorkspaceAdmin(workspaceId);
+        ExportJob job = exportJob(workspaceId, exportJobId);
+        return ExportJobResponse.from(job, exportAttachment(job, false));
+    }
+
+    @Transactional(readOnly = true)
+    public ExportFileResponse downloadExportJob(UUID workspaceId, UUID exportJobId) {
+        activeWorkspace(workspaceId);
+        requireWorkspaceAdmin(workspaceId);
+        ExportJob job = exportJob(workspaceId, exportJobId);
+        Attachment attachment = exportAttachment(job, true);
+        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findByIdAndWorkspaceId(
+                        attachment.getStorageConfigId(),
+                        workspaceId
+                )
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file storage config not found"));
+        byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
+        return new ExportFileResponse(attachment.getFilename(), attachment.getContentType(), attachment.getChecksum(), bytes);
     }
 
     @Scheduled(cron = "${trasck.audit.retention.cron:0 45 3 * * *}", zone = "UTC")
@@ -326,6 +429,34 @@ public class AuditService {
         return workspace;
     }
 
+    private ExportJob exportJob(UUID workspaceId, UUID exportJobId) {
+        ExportJob job = exportJobRepository.findById(exportJobId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Export job not found"));
+        if (!workspaceId.equals(job.getWorkspaceId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Export job not found");
+        }
+        return job;
+    }
+
+    private Attachment exportAttachment(ExportJob job, boolean required) {
+        if (job.getFileAttachmentId() == null) {
+            if (required) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file not found");
+            }
+            return null;
+        }
+        Attachment attachment = attachmentRepository.findById(job.getFileAttachmentId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file not found"));
+        if (!job.getWorkspaceId().equals(attachment.getWorkspaceId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file not found");
+        }
+        return attachment;
+    }
+
+    private void requireWorkspaceAdmin(UUID workspaceId) {
+        permissionService.requireWorkspacePermission(currentUserService.requireUserId(), workspaceId, "workspace.admin");
+    }
+
     private int normalizeLimit(Integer limit) {
         if (limit == null) {
             return 50;
@@ -338,6 +469,10 @@ public class AuditService {
             return 500;
         }
         return Math.max(1, Math.min(limit, 1000));
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private <T> T required(T value, String fieldName) {
