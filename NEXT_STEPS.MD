@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should custom field and screen APIs start with custom field definitions, contexts, and value CRUD first, or should they start with screen layout/screen assignment APIs first?
-    - Answer: Start with custom field definitions, contexts, and value CRUD first
-2. Should custom field values become searchable/filterable in the first custom-field API pass, or should search integration wait until the field definition and value APIs are stable?
-    - Answer: Implement search/filter now
-3. Should saved views, favorites, and recent items share one personalization API/package, or should each be implemented as a separate feature surface?
-    - Answer: Share one API/package
-4. Should export jobs add generic create/cancel/retry admin endpoints before import APIs exist, or should they remain list/get/download while export-type-specific APIs create jobs?
-    - Answer: Remain list/get/download for now, but make a note in the NEXT_STEPS.MD file to expand this in the future
+1. Should the next custom-field search pass add typed operators, ranges, and array/multi-select matching, or should exact scalar matching remain the only API shape until the saved-filter/query-builder UI is designed?
+    - Answer: Add them now
+2. Should screen metadata start enforcing required/system/custom fields during work item create/update now, or should screens stay layout metadata until the frontend renders forms from them?
+    - Answer: Start enforcement now
+3. Should saved views expand to project/team sharing like dashboards and saved filters before frontend work, or are private/workspace/public views enough for the first UI?
+    - Answer: Expand them now
+4. When export jobs expand beyond list/get/download, should generic create/cancel/retry wait for import APIs, or should it be added as soon as a second export type exists?
+    - Answer: Add it as soon as a second export type exists
 
 ## Current State
 
@@ -29,6 +29,8 @@ Reporting foundations include status, assignment, team, and estimate history wri
 
 Saved dashboard CRUD, widget CRUD, and render APIs are implemented for private, team, project, workspace, and public visibility. Saved filter CRUD and the governed report query catalog are implemented. Workspace, project, and team scoped list endpoints exist for dashboards, saved filters, and report query catalog entries. Widget configs can reference saved filters or catalog entries while recursively rejecting raw SQL keys. Report query catalog `parametersSchema` is enforced at dashboard render time, and permission coverage includes project-only, team-member, non-team, and token-scope users for dashboard/filter/catalog sharing behavior.
 
+Product configuration and personalization APIs are implemented for the first backend pass. Workspace admins can manage custom field definitions and contexts, work item editors can set/delete validated custom field values, project work-item lists can exact-filter by searchable custom field scalar values, and workspace admins can manage screen metadata, fields, and project/type/operation assignments. Saved views, favorites, and recent items share one personalization API/package with target-entity workspace validation. Export jobs intentionally remain list/get/download for now; generic create/cancel/retry should be revisited when import APIs or additional export types are introduced.
+
 Activity and audit foundations are implemented. Static and configured durable consumers project domain events into cursor-page work-item/project/workspace activity streams, cursor-page workspace audit logs, and configured delivery rows. Tests cover durable outbox failure, retry, dead-letter, disabled consumers, unknown replay consumers, and multi-consumer delivery. Audit retention policy metadata is configurable per workspace; exports write JSON artifacts through configured attachment/object storage and create `export_jobs`, manual/scheduled pruning writes a stored export before deleting eligible rows, and workspace admins can list export jobs, inspect export metadata, and download stored export files.
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
@@ -37,37 +39,7 @@ Local runtime and contract polish is in place. The backend has checked-in HTTP e
 
 ## Primary Next Steps
 
-### 1. Product Configuration Expansion
-
-Goal: fill the remaining Jira/Rally-style configuration and personalization surfaces before broad manual testing.
-
-Planned work:
-
-- Add custom field definitions, field contexts/configurations, custom field value APIs, screen layouts, screen tabs/fields, and screen assignment APIs.
-- Add saved views, favorites, and recent item APIs with permission checks and tests.
-- Keep custom fields compatible with current work item create/update/detail/list, dashboard, saved filter, report query, and agent context surfaces.
-- Decide how soon custom fields become searchable/filterable in work item lists and saved filters.
-
-Done when:
-
-- Custom fields/screens and saved views/favorites/recent items can be created, listed, updated, deleted or archived, permission-tested, and referenced from relevant work item or reporting APIs.
-
-### 2. Generic Admin Import/Export Surface
-
-Goal: make export jobs the first generic admin data movement surface while keeping existing audit export/prune flows stable.
-
-Planned work:
-
-- Add generic export-job admin affordances around existing `export_jobs` records.
-- Decide whether create/cancel/retry should be generic now or remain type-specific until import APIs exist.
-- Keep audit retention export/prune behavior intact and reuse the stored attachment/object artifact download path.
-- Prepare import job APIs to share the same admin status, artifact, and failure-report patterns.
-
-Done when:
-
-- Workspace admins have a coherent generic export-job surface beyond audit-specific entry points, without weakening retention/prune safety.
-
-### 3. OpenAPI Client Generation And Contract Stabilization
+### 1. OpenAPI Client Generation And Contract Stabilization
 
 Goal: make the frontend consume the backend through a generated, reviewed contract instead of duplicated handwritten types.
 
@@ -82,7 +54,7 @@ Done when:
 
 - The frontend has a repeatable way to regenerate typed API calls from the backend OpenAPI document.
 
-### 4. Frontend First Flows
+### 2. Frontend First Flows
 
 Goal: connect the Vite React shell to the backend through typed calls.
 
@@ -97,11 +69,25 @@ Done when:
 
 - The frontend can authenticate, show a project work-item list, open a work-item detail page, and call at least one reporting/dashboard endpoint through typed API functions.
 
+### 3. Remaining Backend Configuration Hardening
+
+Goal: close the remaining backend configuration gaps that are better finished after the first frontend/API contract pass exposes real usage.
+
+Planned work:
+
+- Add field configuration CRUD and decide when screen required-field metadata should enforce work item create/update validation.
+- Expand custom-field search from exact scalar matching to typed operators when saved-filter/query-builder requirements are clearer.
+- Add board, release, roadmap, notification, automation, and import API slices.
+- Keep export jobs list/get/download for now, then add generic create/cancel/retry after import APIs or another export type justify the shared command surface.
+
+Done when:
+
+- The remaining backend configuration APIs have service-layer permission checks, targeted integration coverage, and a clear contract for frontend screens.
+
 ## Remaining Dashboard/Report APIs
 
 - Time and estimate reporting by user/project/work item, remaining-time trends, and estimate-vs-actual summaries.
 - Automatic destructive snapshot pruning after manual rollup behavior is reviewed.
-- Saved views, favorites, and recent item APIs.
 
 ## Before Full User Testing
 
@@ -113,12 +99,12 @@ The following work should be completed before the application is ready for a mea
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, and agent endpoints as more APIs are exposed.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, and external callback failures as those flows are added.
-- Add custom fields/screens plus saved views/favorites/recent items.
+- Add field configuration CRUD and screen-driven work item create/update enforcement if product behavior requires it.
 
 ### Product Configuration Readiness
 
 - Decide which remaining configuration after core system fields is globally seeded, workspace-seeded, or project-seeded.
-- Decide when to introduce configurable custom fields, screens, and screen assignments beyond the current core system field model.
+- Decide when to expand custom-field filters beyond exact scalar matching and when saved views need project/team sharing.
 
 ### Test Readiness
 

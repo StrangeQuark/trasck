@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.api.CursorPageResponse;
 import com.strangequark.trasck.api.PageCursorCodec;
+import com.strangequark.trasck.customfield.CustomFieldService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
@@ -62,6 +63,7 @@ public class WorkItemService {
     private final WorkItemTeamHistoryRepository workItemTeamHistoryRepository;
     private final WorkItemSequenceService workItemSequenceService;
     private final WorkItemRankService workItemRankService;
+    private final CustomFieldService customFieldService;
     private final DomainEventService domainEventService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
@@ -88,6 +90,7 @@ public class WorkItemService {
             WorkItemTeamHistoryRepository workItemTeamHistoryRepository,
             WorkItemSequenceService workItemSequenceService,
             WorkItemRankService workItemRankService,
+            CustomFieldService customFieldService,
             DomainEventService domainEventService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
@@ -113,6 +116,7 @@ public class WorkItemService {
         this.workItemTeamHistoryRepository = workItemTeamHistoryRepository;
         this.workItemSequenceService = workItemSequenceService;
         this.workItemRankService = workItemRankService;
+        this.customFieldService = customFieldService;
         this.domainEventService = domainEventService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
@@ -177,15 +181,26 @@ public class WorkItemService {
     }
 
     @Transactional(readOnly = true)
-    public CursorPageResponse<WorkItemResponse> listByProject(UUID projectId, Integer limit, String cursor) {
+    public CursorPageResponse<WorkItemResponse> listByProject(UUID projectId, Integer limit, String cursor, String customFieldKey, String customFieldValue) {
         UUID actorId = currentUserService.requireUserId();
-        activeProject(projectId);
+        Project project = activeProject(projectId);
         permissionService.requireProjectPermission(actorId, projectId, "work_item.read");
         int pageLimit = normalizePageLimit(limit);
         PageCursorCodec.RankCursor decoded = hasText(cursor) ? PageCursorCodec.decodeRank(cursor) : null;
-        List<WorkItem> page = decoded == null
-                ? workItemRepository.findProjectFirstCursorPage(projectId, pageLimit + 1)
-                : workItemRepository.findProjectCursorPageAfter(projectId, decoded.rank(), decoded.id(), pageLimit + 1);
+        List<WorkItem> page;
+        if (hasText(customFieldKey) || hasText(customFieldValue)) {
+            if (!hasText(customFieldKey) || customFieldValue == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "customFieldKey and customFieldValue must be provided together");
+            }
+            UUID customFieldId = customFieldService.resolveSearchableFieldIdForProject(project, customFieldKey);
+            page = decoded == null
+                    ? workItemRepository.findProjectFirstCursorPageByCustomField(projectId, customFieldId, customFieldValue, pageLimit + 1)
+                    : workItemRepository.findProjectCursorPageAfterByCustomField(projectId, customFieldId, customFieldValue, decoded.rank(), decoded.id(), pageLimit + 1);
+        } else {
+            page = decoded == null
+                    ? workItemRepository.findProjectFirstCursorPage(projectId, pageLimit + 1)
+                    : workItemRepository.findProjectCursorPageAfter(projectId, decoded.rank(), decoded.id(), pageLimit + 1);
+        }
         boolean hasMore = page.size() > pageLimit;
         List<WorkItem> items = hasMore ? page.subList(0, pageLimit) : page;
         String nextCursor = hasMore
