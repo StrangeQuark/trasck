@@ -10,6 +10,12 @@ public record AuditRetentionExportResponse(
         Integer retentionDays,
         OffsetDateTime cutoff,
         long entriesEligible,
+        UUID exportJobId,
+        UUID fileAttachmentId,
+        String filename,
+        String storageKey,
+        String checksum,
+        long sizeBytes,
         List<AuditLogEntryResponse> entries
 ) {
 }

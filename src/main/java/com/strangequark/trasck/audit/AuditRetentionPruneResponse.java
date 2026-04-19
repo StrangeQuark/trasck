@@ -9,6 +9,8 @@ public record AuditRetentionPruneResponse(
         Integer retentionDays,
         OffsetDateTime cutoff,
         long entriesEligible,
-        long entriesPruned
+        long entriesPruned,
+        UUID exportJobId,
+        UUID fileAttachmentId
 ) {
 }

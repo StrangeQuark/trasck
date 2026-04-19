@@ -2,11 +2,22 @@ package com.strangequark.trasck.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.activity.Attachment;
+import com.strangequark.trasck.activity.AttachmentRepository;
+import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
+import com.strangequark.trasck.activity.storage.AttachmentStorageService;
+import com.strangequark.trasck.activity.storage.AttachmentUpload;
+import com.strangequark.trasck.activity.storage.StoredAttachment;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.integration.ExportJob;
+import com.strangequark.trasck.integration.ExportJobRepository;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -19,9 +30,16 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class AuditService {
 
+    private static final int MAX_RETENTION_PRUNE_EXPORT_ROWS = 10_000;
+    private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
+
     private final AuditLogEntryRepository auditLogEntryRepository;
     private final AuditRetentionPolicyRepository auditRetentionPolicyRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorageService attachmentStorageService;
+    private final ExportJobRepository exportJobRepository;
     private final CurrentUserService currentUserService;
     private final DomainEventService domainEventService;
     private final ObjectMapper objectMapper;
@@ -30,6 +48,10 @@ public class AuditService {
             AuditLogEntryRepository auditLogEntryRepository,
             AuditRetentionPolicyRepository auditRetentionPolicyRepository,
             WorkspaceRepository workspaceRepository,
+            AttachmentStorageConfigRepository attachmentStorageConfigRepository,
+            AttachmentRepository attachmentRepository,
+            AttachmentStorageService attachmentStorageService,
+            ExportJobRepository exportJobRepository,
             CurrentUserService currentUserService,
             DomainEventService domainEventService,
             ObjectMapper objectMapper
@@ -37,6 +59,10 @@ public class AuditService {
         this.auditLogEntryRepository = auditLogEntryRepository;
         this.auditRetentionPolicyRepository = auditRetentionPolicyRepository;
         this.workspaceRepository = workspaceRepository;
+        this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
+        this.attachmentRepository = attachmentRepository;
+        this.attachmentStorageService = attachmentStorageService;
+        this.exportJobRepository = exportJobRepository;
         this.currentUserService = currentUserService;
         this.domainEventService = domainEventService;
         this.objectMapper = objectMapper;
@@ -88,34 +114,20 @@ public class AuditService {
         return AuditRetentionPolicyResponse.from(saved);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuditRetentionExportResponse exportRetentionCandidates(UUID workspaceId, Integer limit) {
         activeWorkspace(workspaceId);
-        AuditRetentionPolicy policy = retentionPolicy(workspaceId);
-        OffsetDateTime cutoff = retentionCutoff(policy);
-        long eligible = cutoff == null ? 0 : auditLogEntryRepository.countByWorkspaceIdAndCreatedAtBefore(workspaceId, cutoff);
-        List<AuditLogEntryResponse> entries = cutoff == null
-                ? List.of()
-                : auditLogEntryRepository.findByWorkspaceIdAndCreatedAtBeforeOrderByCreatedAtAsc(
-                        workspaceId,
-                        cutoff,
-                        PageRequest.of(0, normalizeExportLimit(limit))
-                ).stream().map(AuditLogEntryResponse::from).toList();
-        return new AuditRetentionExportResponse(
-                workspaceId,
-                Boolean.TRUE.equals(policy.getRetentionEnabled()),
-                policy.getRetentionDays(),
-                cutoff,
-                eligible,
-                entries
-        );
+        UUID actorId = currentUserService.requireUserId();
+        RetentionExportSnapshot snapshot = retentionExportSnapshot(workspaceId, normalizeExportLimit(limit));
+        StoredRetentionExport export = storeRetentionExport(workspaceId, actorId, snapshot);
+        return exportResponse(snapshot, export);
     }
 
     @Transactional
     public AuditRetentionPruneResponse pruneRetentionCandidates(UUID workspaceId) {
         activeWorkspace(workspaceId);
         UUID actorId = currentUserService.requireUserId();
-        AuditRetentionPruneResponse response = pruneWorkspace(workspaceId);
+        AuditRetentionPruneResponse response = pruneWorkspace(workspaceId, actorId);
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("workspaceId", workspaceId.toString())
                 .put("actorUserId", actorId.toString())
@@ -123,6 +135,12 @@ public class AuditService {
                 .put("entriesPruned", response.entriesPruned());
         if (response.cutoff() != null) {
             payload.put("cutoff", response.cutoff().toString());
+        }
+        if (response.exportJobId() != null) {
+            payload.put("exportJobId", response.exportJobId().toString());
+        }
+        if (response.fileAttachmentId() != null) {
+            payload.put("fileAttachmentId", response.fileAttachmentId().toString());
         }
         domainEventService.record(workspaceId, "audit_retention_policy", workspaceId, "audit.retention_pruned", payload);
         return response;
@@ -133,23 +151,137 @@ public class AuditService {
     public void runScheduledRetentionPruning() {
         for (AuditRetentionPolicy policy : auditRetentionPolicyRepository.findByRetentionEnabledTrue()) {
             if (policy.getWorkspaceId() != null) {
-                pruneWorkspace(policy.getWorkspaceId());
+                pruneWorkspace(policy.getWorkspaceId(), null);
             }
         }
     }
 
-    private AuditRetentionPruneResponse pruneWorkspace(UUID workspaceId) {
+    private AuditRetentionPruneResponse pruneWorkspace(UUID workspaceId, UUID actorId) {
+        RetentionExportSnapshot snapshot = retentionExportSnapshot(workspaceId, MAX_RETENTION_PRUNE_EXPORT_ROWS);
+        if (snapshot.entriesEligible() > MAX_RETENTION_PRUNE_EXPORT_ROWS) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Too many audit log entries are eligible for a single retention prune export"
+            );
+        }
+        StoredRetentionExport export = snapshot.entriesEligible() == 0
+                ? null
+                : storeRetentionExport(workspaceId, actorId, snapshot);
+        int pruned = snapshot.cutoff() == null ? 0 : auditLogEntryRepository.deleteRetainedEntries(workspaceId, snapshot.cutoff());
+        return new AuditRetentionPruneResponse(
+                workspaceId,
+                Boolean.TRUE.equals(snapshot.policy().getRetentionEnabled()),
+                snapshot.policy().getRetentionDays(),
+                snapshot.cutoff(),
+                snapshot.entriesEligible(),
+                pruned,
+                export == null ? null : export.exportJobId(),
+                export == null ? null : export.fileAttachmentId()
+        );
+    }
+
+    private RetentionExportSnapshot retentionExportSnapshot(UUID workspaceId, int limit) {
         AuditRetentionPolicy policy = retentionPolicy(workspaceId);
         OffsetDateTime cutoff = retentionCutoff(policy);
         long eligible = cutoff == null ? 0 : auditLogEntryRepository.countByWorkspaceIdAndCreatedAtBefore(workspaceId, cutoff);
-        int pruned = cutoff == null ? 0 : auditLogEntryRepository.deleteRetainedEntries(workspaceId, cutoff);
-        return new AuditRetentionPruneResponse(
-                workspaceId,
-                Boolean.TRUE.equals(policy.getRetentionEnabled()),
-                policy.getRetentionDays(),
-                cutoff,
-                eligible,
-                pruned
+        List<AuditLogEntryResponse> entries = cutoff == null
+                ? List.of()
+                : auditLogEntryRepository.findByWorkspaceIdAndCreatedAtBeforeOrderByCreatedAtAsc(
+                        workspaceId,
+                        cutoff,
+                        PageRequest.of(0, limit)
+                ).stream().map(AuditLogEntryResponse::from).toList();
+        return new RetentionExportSnapshot(policy, cutoff, eligible, entries);
+    }
+
+    private StoredRetentionExport storeRetentionExport(UUID workspaceId, UUID actorId, RetentionExportSnapshot snapshot) {
+        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(workspaceId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default attachment storage config not found"));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        String filename = "audit-retention-"
+                + workspaceId
+                + "-"
+                + now.format(EXPORT_FILENAME_TIME)
+                + ".json";
+        byte[] content = retentionExportContent(workspaceId, actorId, snapshot, now);
+        StoredAttachment stored = attachmentStorageService.store(
+                storageConfig,
+                new AttachmentUpload(filename, "application/json", content, null)
+        );
+        try {
+            Attachment attachment = new Attachment();
+            attachment.setWorkspaceId(workspaceId);
+            attachment.setStorageConfigId(storageConfig.getId());
+            attachment.setUploaderId(actorId);
+            attachment.setFilename(filename);
+            attachment.setContentType("application/json");
+            attachment.setStorageKey(stored.storageKey());
+            attachment.setSizeBytes(stored.sizeBytes());
+            attachment.setChecksum(stored.checksum());
+            attachment.setVisibility("restricted");
+            Attachment savedAttachment = attachmentRepository.save(attachment);
+
+            ExportJob exportJob = new ExportJob();
+            exportJob.setWorkspaceId(workspaceId);
+            exportJob.setRequestedById(actorId);
+            exportJob.setExportType("audit_retention");
+            exportJob.setStatus("completed");
+            exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setStartedAt(now);
+            exportJob.setFinishedAt(now);
+            ExportJob savedExportJob = exportJobRepository.save(exportJob);
+            return new StoredRetentionExport(
+                    savedExportJob.getId(),
+                    savedAttachment.getId(),
+                    filename,
+                    stored.storageKey(),
+                    stored.checksum(),
+                    stored.sizeBytes()
+            );
+        } catch (RuntimeException ex) {
+            attachmentStorageService.delete(storageConfig, stored.storageKey());
+            throw ex;
+        }
+    }
+
+    private byte[] retentionExportContent(UUID workspaceId, UUID actorId, RetentionExportSnapshot snapshot, OffsetDateTime exportedAt) {
+        ObjectNode document = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("exportedAt", exportedAt.toString())
+                .put("retentionEnabled", Boolean.TRUE.equals(snapshot.policy().getRetentionEnabled()))
+                .put("entriesEligible", snapshot.entriesEligible())
+                .put("entriesIncluded", snapshot.entries().size());
+        if (actorId != null) {
+            document.put("actorUserId", actorId.toString());
+        }
+        if (snapshot.policy().getRetentionDays() != null) {
+            document.put("retentionDays", snapshot.policy().getRetentionDays());
+        }
+        if (snapshot.cutoff() != null) {
+            document.put("cutoff", snapshot.cutoff().toString());
+        }
+        document.set("entries", objectMapper.valueToTree(snapshot.entries()));
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(document);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Could not serialize audit retention export", ex);
+        }
+    }
+
+    private AuditRetentionExportResponse exportResponse(RetentionExportSnapshot snapshot, StoredRetentionExport export) {
+        return new AuditRetentionExportResponse(
+                snapshot.policy().getWorkspaceId(),
+                Boolean.TRUE.equals(snapshot.policy().getRetentionEnabled()),
+                snapshot.policy().getRetentionDays(),
+                snapshot.cutoff(),
+                snapshot.entriesEligible(),
+                export.exportJobId(),
+                export.fileAttachmentId(),
+                export.filename(),
+                export.storageKey(),
+                export.checksum(),
+                export.sizeBytes(),
+                snapshot.entries()
         );
     }
 
@@ -213,5 +345,23 @@ public class AuditService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " is required");
         }
         return value;
+    }
+
+    private record RetentionExportSnapshot(
+            AuditRetentionPolicy policy,
+            OffsetDateTime cutoff,
+            long entriesEligible,
+            List<AuditLogEntryResponse> entries
+    ) {
+    }
+
+    private record StoredRetentionExport(
+            UUID exportJobId,
+            UUID fileAttachmentId,
+            String filename,
+            String storageKey,
+            String checksum,
+            long sizeBytes
+    ) {
     }
 }

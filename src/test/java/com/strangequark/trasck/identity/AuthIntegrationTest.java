@@ -312,9 +312,22 @@ class AuthIntegrationTest {
                 """, oldAuditId, workspaceId, "audit.old_retention_test", "workspace", workspaceId);
         JsonNode retentionExport = read(post("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy/export?limit=10", objectMapper.createObjectNode(), admin.accessToken()));
         assertThat(retentionExport.at("/entriesEligible").asLong()).isGreaterThanOrEqualTo(1);
+        assertThat(retentionExport.at("/exportJobId").asText()).isNotBlank();
+        assertThat(retentionExport.at("/fileAttachmentId").asText()).isNotBlank();
+        assertThat(retentionExport.at("/filename").asText()).startsWith("audit-retention-");
+        assertThat(retentionExport.at("/storageKey").asText()).contains("audit-retention-");
+        assertThat(retentionExport.at("/checksum").asText()).startsWith("sha256:");
+        assertThat(retentionExport.at("/sizeBytes").asLong()).isGreaterThan(0);
+        UUID exportAttachmentId = uuid(retentionExport, "/fileAttachmentId");
+        assertThat(countWhere("attachments", "id", exportAttachmentId)).isEqualTo(1);
+        assertThat(countWhere("export_jobs", "file_attachment_id", exportAttachmentId)).isEqualTo(1);
         assertThat(ids(retentionExport.at("/entries"))).contains(oldAuditId.toString());
         JsonNode retentionPrune = read(post("/api/v1/workspaces/" + workspaceId + "/audit-retention-policy/prune", objectMapper.createObjectNode(), admin.accessToken()));
         assertThat(retentionPrune.at("/entriesPruned").asLong()).isGreaterThanOrEqualTo(1);
+        assertThat(retentionPrune.at("/exportJobId").asText()).isNotBlank();
+        UUID pruneAttachmentId = uuid(retentionPrune, "/fileAttachmentId");
+        assertThat(countWhere("attachments", "id", pruneAttachmentId)).isEqualTo(1);
+        assertThat(countWhere("export_jobs", "file_attachment_id", pruneAttachmentId)).isEqualTo(1);
         assertThat(countWhere("audit_log_entries", "id", oldAuditId)).isZero();
 
         UUID secretEventId = UUID.randomUUID();

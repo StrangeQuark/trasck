@@ -4,10 +4,16 @@
 @csrfToken = replace-with-csrf-token
 @workspaceId = replace-with-workspace-id
 @projectId = replace-with-project-id
+@teamId = replace-with-team-id
+@iterationId = replace-with-iteration-id
 @workItemId = replace-with-work-item-id
 @commentId = replace-with-comment-id
 @workLogId = replace-with-work-log-id
 @attachmentId = replace-with-attachment-id
+@dashboardId = replace-with-dashboard-id
+@dashboardWidgetId = replace-with-dashboard-widget-id
+@savedFilterId = replace-with-saved-filter-id
+@reportQueryId = replace-with-report-query-id
 @providerId = replace-with-agent-provider-id
 @credentialId = replace-with-agent-provider-credential-id
 @profileId = replace-with-agent-profile-id
@@ -233,6 +239,108 @@ Authorization: Bearer {{accessToken}}
 ### Reporting: Team Iteration Dashboard Summary
 GET {{baseUrl}}/api/v1/reports/projects/{{projectId}}/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z&teamId={{teamId}}&iterationId={{iterationId}}
 Authorization: Bearer {{accessToken}}
+
+### Create Project Saved Filter
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/saved-filters
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Committed project work",
+  "visibility": "project",
+  "projectId": "{{projectId}}",
+  "query": {
+    "projectId": "{{projectId}}",
+    "teamId": "{{teamId}}",
+    "iterationId": "{{iterationId}}"
+  }
+}
+
+### Create Governed Report Query
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/report-query-catalog
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "queryKey": "committed-project-work",
+  "name": "Committed project work",
+  "queryType": "project_dashboard_summary",
+  "visibility": "project",
+  "projectId": "{{projectId}}",
+  "queryConfig": {
+    "savedFilterId": "{{savedFilterId}}"
+  },
+  "parametersSchema": {
+    "type": "object",
+    "required": ["projectId", "teamId", "iterationId"],
+    "additionalProperties": false,
+    "properties": {
+      "projectId": { "type": "uuid" },
+      "teamId": { "type": "uuid" },
+      "iterationId": { "type": "uuid" }
+    }
+  }
+}
+
+### Create Project Dashboard
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/dashboards
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Project Delivery",
+  "visibility": "project",
+  "projectId": "{{projectId}}",
+  "layout": {
+    "columns": 12,
+    "density": "comfortable"
+  }
+}
+
+### Add Dashboard Widget From Report Query
+POST {{baseUrl}}/api/v1/dashboards/{{dashboardId}}/widgets
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "widgetType": "work_item_summary",
+  "title": "Committed Work",
+  "positionX": 0,
+  "positionY": 0,
+  "width": 4,
+  "height": 2,
+  "config": {
+    "reportQueryId": "{{reportQueryId}}"
+  }
+}
+
+### Render Dashboard
+GET {{baseUrl}}/api/v1/dashboards/{{dashboardId}}/render?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z
+Authorization: Bearer {{accessToken}}
+
+### Update Audit Retention Policy
+PUT {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/audit-retention-policy
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "retentionEnabled": true,
+  "retentionDays": 365
+}
+
+### Export Audit Retention Candidates To Storage
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/audit-retention-policy/export?limit=500
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Prune Audit Retention Candidates After Stored Export
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/audit-retention-policy/prune
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
 
 ### Create Generic Worker Agent Provider
 POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-providers

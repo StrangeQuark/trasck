@@ -73,7 +73,7 @@ public class SavedFilterService {
     public SavedFilterResponse get(UUID savedFilterId) {
         UUID actorId = currentUserService.requireUserId();
         SavedFilter savedFilter = savedFilter(savedFilterId);
-        permissionService.requireWorkspacePermission(actorId, savedFilter.getWorkspaceId(), "report.read");
+        activeWorkspace(savedFilter.getWorkspaceId());
         requireReadable(actorId, savedFilter);
         return SavedFilterResponse.from(savedFilter);
     }
@@ -83,7 +83,6 @@ public class SavedFilterService {
         SavedFilterRequest createRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
-        permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
         String visibility = normalizeVisibility(createRequest.visibility());
         UUID projectId = normalizeProjectId(workspaceId, visibility, createRequest.projectId());
         UUID teamId = normalizeTeamId(workspaceId, visibility, createRequest.teamId());
@@ -107,7 +106,7 @@ public class SavedFilterService {
         SavedFilterRequest updateRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         SavedFilter savedFilter = savedFilter(savedFilterId);
-        permissionService.requireWorkspacePermission(actorId, savedFilter.getWorkspaceId(), "report.read");
+        activeWorkspace(savedFilter.getWorkspaceId());
         requireWritable(actorId, savedFilter);
         String targetVisibility = hasText(updateRequest.visibility())
                 ? normalizeVisibility(updateRequest.visibility())
@@ -146,7 +145,7 @@ public class SavedFilterService {
     public void delete(UUID savedFilterId) {
         UUID actorId = currentUserService.requireUserId();
         SavedFilter savedFilter = savedFilter(savedFilterId);
-        permissionService.requireWorkspacePermission(actorId, savedFilter.getWorkspaceId(), "report.read");
+        activeWorkspace(savedFilter.getWorkspaceId());
         requireWritable(actorId, savedFilter);
         savedFilterRepository.delete(savedFilter);
         recordEvent(savedFilter, "saved_filter.deleted", actorId);
@@ -276,22 +275,32 @@ public class SavedFilterService {
     }
 
     private boolean canRead(UUID actorId, SavedFilter savedFilter, boolean canManageWorkspaceReports) {
-        if (actorId.equals(savedFilter.getOwnerId()) || canManageWorkspaceReports) {
+        if (canManageWorkspaceReports) {
             return true;
         }
+        if (actorId.equals(savedFilter.getOwnerId())) {
+            if ("project".equals(savedFilter.getVisibility()) && savedFilter.getProjectId() != null) {
+                return canUseProject(actorId, savedFilter.getProjectId(), "report.read")
+                        || canUseWorkspace(actorId, savedFilter.getWorkspaceId(), "report.read");
+            }
+            return canUseWorkspace(actorId, savedFilter.getWorkspaceId(), "report.read");
+        }
         if ("workspace".equals(savedFilter.getVisibility()) || "public".equals(savedFilter.getVisibility())) {
-            return true;
+            return canUseWorkspace(actorId, savedFilter.getWorkspaceId(), "report.read");
         }
         if ("project".equals(savedFilter.getVisibility()) && savedFilter.getProjectId() != null) {
             return canUseProject(actorId, savedFilter.getProjectId(), "report.read");
         }
         return "team".equals(savedFilter.getVisibility())
                 && savedFilter.getTeamId() != null
+                && canUseWorkspace(actorId, savedFilter.getWorkspaceId(), "report.read")
                 && teamMembershipRepository.existsByTeamIdAndUserIdAndLeftAtIsNull(savedFilter.getTeamId(), actorId);
     }
 
     private void requireWritable(UUID actorId, SavedFilter savedFilter) {
-        if ("private".equals(savedFilter.getVisibility()) && actorId.equals(savedFilter.getOwnerId())) {
+        if ("private".equals(savedFilter.getVisibility())
+                && actorId.equals(savedFilter.getOwnerId())
+                && canUseWorkspace(actorId, savedFilter.getWorkspaceId(), "report.read")) {
             return;
         }
         if ("project".equals(savedFilter.getVisibility())
@@ -307,6 +316,7 @@ public class SavedFilterService {
 
     private void requireSharedPermission(UUID actorId, UUID workspaceId, String visibility, UUID projectId) {
         if ("private".equals(visibility)) {
+            permissionService.requireWorkspacePermission(actorId, workspaceId, "report.read");
             return;
         }
         if ("project".equals(visibility)) {
@@ -317,27 +327,15 @@ public class SavedFilterService {
     }
 
     private boolean canManageReports(UUID actorId, UUID workspaceId) {
-        try {
-            permissionService.requireWorkspacePermission(actorId, workspaceId, "report.manage");
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseWorkspace(actorId, workspaceId, "report.manage");
+    }
+
+    private boolean canUseWorkspace(UUID actorId, UUID workspaceId, String permissionKey) {
+        return permissionService.canUseWorkspace(actorId, workspaceId, permissionKey);
     }
 
     private boolean canUseProject(UUID actorId, UUID projectId, String permissionKey) {
-        try {
-            permissionService.requireProjectPermission(actorId, projectId, permissionKey);
-            return true;
-        } catch (ResponseStatusException ex) {
-            if (HttpStatus.FORBIDDEN.equals(ex.getStatusCode())) {
-                return false;
-            }
-            throw ex;
-        }
+        return permissionService.canUseProject(actorId, projectId, permissionKey);
     }
 
     private void recordEvent(SavedFilter savedFilter, String eventType, UUID actorId) {
