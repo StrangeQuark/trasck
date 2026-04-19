@@ -346,6 +346,7 @@ public class WorkItemService {
         item.setTeamId(targetTeamId);
         item.setUpdatedById(actorId);
         WorkItem saved = workItemRepository.saveAndFlush(item);
+        customFieldService.enforceRequiredSystemScreenFieldIfConfigured(saved, "edit", "team");
         writeTeamHistory(saved.getId(), previousTeamId, saved.getTeamId(), actorId);
         recordTeamChangedEvent(saved, previousTeamId, saved.getTeamId(), actorId);
         return WorkItemResponse.from(saved);
@@ -364,6 +365,7 @@ public class WorkItemService {
         item.setAssigneeId(assignRequest.assigneeId());
         item.setUpdatedById(actorId);
         WorkItem saved = workItemRepository.saveAndFlush(item);
+        customFieldService.enforceRequiredSystemScreenFieldIfConfigured(saved, "edit", "assignee");
         writeAssignmentHistory(saved.getId(), previousAssignee, saved.getAssigneeId(), actorId);
         recordEvent(saved, "work_item.assigned", actorId);
         return WorkItemResponse.from(saved);
@@ -400,6 +402,7 @@ public class WorkItemService {
         WorkflowStatus toStatus = workflowStatusRepository.findById(transition.getToStatusId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Transition target status not found"));
         UUID fromStatusId = item.getStatusId();
+        UUID previousResolutionId = item.getResolutionId();
         item.setStatusId(toStatus.getId());
         item.setUpdatedById(actorId);
         applyTransitionActions(item, transition.getId());
@@ -407,6 +410,10 @@ public class WorkItemService {
             item.setResolvedAt(OffsetDateTime.now());
         }
         WorkItem saved = workItemRepository.saveAndFlush(item);
+        customFieldService.enforceRequiredSystemScreenFieldIfConfigured(saved, "edit", "status");
+        if (!same(previousResolutionId, saved.getResolutionId())) {
+            customFieldService.enforceRequiredSystemScreenFieldIfConfigured(saved, "edit", "resolution");
+        }
         writeStatusHistory(saved.getId(), fromStatusId, saved.getStatusId(), actorId);
         recordEvent(saved, "work_item.status_changed", actorId);
         return WorkItemResponse.from(saved);

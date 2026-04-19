@@ -12,6 +12,8 @@ This document is the frontend-facing companion to generated OpenAPI. The backend
 - Errors use Spring's standard error body for now; frontend should branch mainly on HTTP status.
 - Generated OpenAPI: `GET /v3/api-docs`; Swagger UI: `GET /swagger-ui.html`.
 - Generated frontend client: run `npm run generate:api` from `trasck-frontend`. By default it reads `http://localhost:6100/v3/api-docs` and writes `src/api/generated/openapi.json` plus `src/api/generated/trasckApi.ts`.
+- Frontend dev server: `http://localhost:8080`; backend default: `http://localhost:6100`. The frontend reads `VITE_TRASCK_API_BASE_URL`, then `VITE_API_URL`, then falls back to the backend default.
+- UI components should call feature-specific services/hooks, not `TrasckApiClient.request` directly.
 
 ## List Behavior
 
@@ -367,7 +369,7 @@ export interface AgentTask {
 
 - Setup: `POST /setup`
 - Auth: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation.
-- Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
+- Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
 - Teams/planning: team CRUD, memberships, project-team assignment, iteration CRUD, scope, commit, close, carryover.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.

@@ -266,12 +266,19 @@ class WorkItemApiIntegrationTest {
                 .put("systemFieldKey", "team")
                 .put("position", 20)
                 .put("required", true));
+        postJson("/api/v1/screens/" + editScreenId + "/fields", objectMapper.createObjectNode()
+                .put("systemFieldKey", "assignee")
+                .put("position", 30)
+                .put("required", true));
         ObjectNode clearCustomer = objectMapper.createObjectNode();
         clearCustomer.set("customFields", objectMapper.createObjectNode().putNull("customer"));
         assertThat(patchResponse("/api/v1/work-items/" + storyId, clearCustomer).statusCode()).isEqualTo(400);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/custom-fields")).hasSize(3);
         assertThat(patchResponse("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
                 .put("clearTeam", true)).statusCode()).isEqualTo(400);
+        assertThat(post("/api/v1/work-items/" + storyId + "/team", objectMapper.createObjectNode()
+                .put("clearTeam", true)).statusCode()).isEqualTo(400);
+        assertThat(post("/api/v1/work-items/" + storyId + "/assign", objectMapper.createObjectNode()).statusCode()).isEqualTo(400);
 
         ObjectNode commentBody = objectMapper.createObjectNode()
                 .put("bodyMarkdown", "This story needs collaboration coverage.")

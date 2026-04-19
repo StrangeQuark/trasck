@@ -15,6 +15,8 @@ The compose file starts:
 - `trasck-db` on `localhost:5432`
 - `trasck-service` on `localhost:6100`
 
+The Vite frontend runs on `localhost:8080` during local development and reads the backend URL from `VITE_TRASCK_API_BASE_URL`, then `VITE_API_URL`, then `http://localhost:6100`.
+
 Default local credentials are defined in `.env`. They are development-only values and must be replaced outside local testing.
 
 ## Start The Service Manually
