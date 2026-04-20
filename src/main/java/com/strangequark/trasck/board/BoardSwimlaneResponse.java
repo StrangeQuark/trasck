@@ -8,6 +8,7 @@ public record BoardSwimlaneResponse(
         UUID boardId,
         String name,
         String swimlaneType,
+        UUID savedFilterId,
         Object query,
         Integer position,
         Boolean enabled
@@ -18,6 +19,7 @@ public record BoardSwimlaneResponse(
                 swimlane.getBoardId(),
                 swimlane.getName(),
                 swimlane.getSwimlaneType(),
+                swimlane.getSavedFilterId(),
                 JsonValues.toJavaValue(swimlane.getQuery()),
                 swimlane.getPosition(),
                 swimlane.getEnabled()

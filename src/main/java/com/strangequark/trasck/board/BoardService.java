@@ -8,7 +8,9 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.search.SavedFilter;
 import com.strangequark.trasck.search.SavedFilterExecutionService;
+import com.strangequark.trasck.search.SavedFilterService;
 import com.strangequark.trasck.team.ProjectTeamRepository;
 import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
@@ -42,6 +44,7 @@ public class BoardService {
     private final WorkItemRepository workItemRepository;
     private final WorkItemService workItemService;
     private final SavedFilterExecutionService savedFilterExecutionService;
+    private final SavedFilterService savedFilterService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -57,6 +60,7 @@ public class BoardService {
             WorkItemRepository workItemRepository,
             WorkItemService workItemService,
             SavedFilterExecutionService savedFilterExecutionService,
+            SavedFilterService savedFilterService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService
@@ -71,6 +75,7 @@ public class BoardService {
         this.workItemRepository = workItemRepository;
         this.workItemService = workItemService;
         this.savedFilterExecutionService = savedFilterExecutionService;
+        this.savedFilterService = savedFilterService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -259,6 +264,48 @@ public class BoardService {
     }
 
     @Transactional
+    public WorkItemResponse moveBoardWorkItem(UUID boardId, UUID workItemId, BoardWorkItemMoveRequest request) {
+        BoardWorkItemMoveRequest moveRequest = required(request, "request");
+        Board board = activeBoard(boardId);
+        WorkItem item = requireWorkItemOnBoard(board, workItemId);
+        boolean hasRankChange = moveRequest.previousWorkItemId() != null || moveRequest.nextWorkItemId() != null;
+        boolean hasTransitionChange = hasText(moveRequest.transitionKey())
+                || moveRequest.targetColumnId() != null
+                || moveRequest.targetStatusId() != null;
+        if (!hasRankChange && !hasTransitionChange) {
+            throw badRequest("targetColumnId, targetStatusId, transitionKey, previousWorkItemId, or nextWorkItemId is required");
+        }
+        if (moveRequest.previousWorkItemId() != null) {
+            requireWorkItemOnBoard(board, moveRequest.previousWorkItemId());
+        }
+        if (moveRequest.nextWorkItemId() != null) {
+            requireWorkItemOnBoard(board, moveRequest.nextWorkItemId());
+        }
+        WorkItemResponse response = WorkItemResponse.from(item);
+        if (hasTransitionChange) {
+            if (hasText(moveRequest.transitionKey())) {
+                response = workItemService.transition(workItemId, new WorkItemTransitionRequest(moveRequest.transitionKey()));
+            } else {
+                UUID targetStatusId = targetBoardStatusId(
+                        board,
+                        item,
+                        new BoardWorkItemTransitionRequest(null, moveRequest.targetColumnId(), moveRequest.targetStatusId())
+                );
+                if (!targetStatusId.equals(item.getStatusId())) {
+                    response = workItemService.transitionToStatus(workItemId, targetStatusId);
+                }
+            }
+        }
+        if (hasRankChange) {
+            response = workItemService.rank(
+                    workItemId,
+                    new WorkItemRankRequest(moveRequest.previousWorkItemId(), moveRequest.nextWorkItemId())
+            );
+        }
+        return response;
+    }
+
+    @Transactional
     public BoardSwimlaneResponse createSwimlane(UUID boardId, BoardSwimlaneRequest request) {
         BoardSwimlaneRequest createRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
@@ -266,7 +313,7 @@ public class BoardService {
         permissionService.requireProjectPermission(actorId, board.getProjectId(), "board.admin");
         BoardSwimlane swimlane = new BoardSwimlane();
         swimlane.setBoardId(board.getId());
-        applySwimlaneRequest(swimlane, createRequest, true);
+        applySwimlaneRequest(board, actorId, swimlane, createRequest, true);
         BoardSwimlane saved = boardSwimlaneRepository.save(swimlane);
         recordBoardEvent(board, "board.swimlane_created", actorId);
         return BoardSwimlaneResponse.from(saved);
@@ -280,7 +327,7 @@ public class BoardService {
         permissionService.requireProjectPermission(actorId, board.getProjectId(), "board.admin");
         BoardSwimlane swimlane = boardSwimlaneRepository.findByIdAndBoardId(swimlaneId, board.getId())
                 .orElseThrow(() -> notFound("Board swimlane not found"));
-        applySwimlaneRequest(swimlane, updateRequest, false);
+        applySwimlaneRequest(board, actorId, swimlane, updateRequest, false);
         BoardSwimlane saved = boardSwimlaneRepository.save(swimlane);
         recordBoardEvent(board, "board.swimlane_updated", actorId);
         return BoardSwimlaneResponse.from(saved);
@@ -339,12 +386,27 @@ public class BoardService {
         }
     }
 
-    private void applySwimlaneRequest(BoardSwimlane swimlane, BoardSwimlaneRequest request, boolean create) {
+    private void applySwimlaneRequest(
+            Board board,
+            UUID actorId,
+            BoardSwimlane swimlane,
+            BoardSwimlaneRequest request,
+            boolean create
+    ) {
         if (create || hasText(request.name())) {
             swimlane.setName(requiredText(request.name(), "name"));
         }
         if (create || hasText(request.swimlaneType())) {
             swimlane.setSwimlaneType(requiredText(request.swimlaneType(), "swimlaneType").toLowerCase());
+        }
+        if (Boolean.TRUE.equals(request.clearSavedFilter())) {
+            swimlane.setSavedFilterId(null);
+        } else if (request.savedFilterId() != null) {
+            SavedFilter savedFilter = savedFilterService.requireReadableEntity(request.savedFilterId(), actorId);
+            if (!board.getWorkspaceId().equals(savedFilter.getWorkspaceId())) {
+                throw badRequest("savedFilterId is not in this board workspace");
+            }
+            swimlane.setSavedFilterId(savedFilter.getId());
         }
         if (create || request.query() != null) {
             swimlane.setQuery(toJsonObject(request.query()));
@@ -494,11 +556,19 @@ public class BoardService {
             List<BoardColumnWorkItemsResponse> columns,
             int limitPerColumn
     ) {
-        Set<UUID> matchingIds = new LinkedHashSet<>(savedFilterExecutionService.executeInlineWorkItemIds(
-                board.getWorkspaceId(),
-                swimlaneQuery(board, swimlane),
-                swimlaneQueryLimit(columns.size(), limitPerColumn)
-        ));
+        int queryLimit = swimlaneQueryLimit(columns.size(), limitPerColumn);
+        List<UUID> matchingWorkItemIds = swimlane.getSavedFilterId() == null
+                ? savedFilterExecutionService.executeInlineWorkItemIds(
+                        board.getWorkspaceId(),
+                        swimlaneQuery(board, swimlane),
+                        queryLimit
+                )
+                : savedFilterExecutionService.executeSavedFilterWorkItemIds(
+                        swimlane.getSavedFilterId(),
+                        board.getProjectId(),
+                        queryLimit
+                );
+        Set<UUID> matchingIds = new LinkedHashSet<>(matchingWorkItemIds);
         return columns.stream()
                 .map(column -> new BoardColumnWorkItemsResponse(
                         column.columnId(),

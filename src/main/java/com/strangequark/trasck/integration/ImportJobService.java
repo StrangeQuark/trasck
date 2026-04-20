@@ -34,6 +34,7 @@ public class ImportJobService {
     private final ImportJobRecordRepository importJobRecordRepository;
     private final ImportMappingTemplateRepository importMappingTemplateRepository;
     private final ImportTransformPresetRepository importTransformPresetRepository;
+    private final ImportMaterializationRunRepository importMaterializationRunRepository;
     private final ImportMappingValueLookupRepository importMappingValueLookupRepository;
     private final ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository;
     private final ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository;
@@ -50,6 +51,7 @@ public class ImportJobService {
             ImportJobRecordRepository importJobRecordRepository,
             ImportMappingTemplateRepository importMappingTemplateRepository,
             ImportTransformPresetRepository importTransformPresetRepository,
+            ImportMaterializationRunRepository importMaterializationRunRepository,
             ImportMappingValueLookupRepository importMappingValueLookupRepository,
             ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository,
             ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository,
@@ -65,6 +67,7 @@ public class ImportJobService {
         this.importJobRecordRepository = importJobRecordRepository;
         this.importMappingTemplateRepository = importMappingTemplateRepository;
         this.importTransformPresetRepository = importTransformPresetRepository;
+        this.importMaterializationRunRepository = importMaterializationRunRepository;
         this.importMappingValueLookupRepository = importMappingValueLookupRepository;
         this.importMappingTypeTranslationRepository = importMappingTypeTranslationRepository;
         this.importMappingStatusTranslationRepository = importMappingStatusTranslationRepository;
@@ -149,6 +152,7 @@ public class ImportJobService {
         ImportTransformPreset preset = new ImportTransformPreset();
         preset.setWorkspaceId(workspaceId);
         applyTransformPresetRequest(preset, createRequest, true);
+        preset.setVersion(1);
         ImportTransformPreset saved = importTransformPresetRepository.save(preset);
         recordTransformPresetEvent(saved, "import_transform_preset.created", actorId);
         return ImportTransformPresetResponse.from(saved);
@@ -161,6 +165,7 @@ public class ImportJobService {
         ImportTransformPreset preset = transformPreset(presetId);
         permissionService.requireWorkspacePermission(actorId, preset.getWorkspaceId(), "workspace.admin");
         applyTransformPresetRequest(preset, updateRequest, false);
+        preset.setVersion(preset.getVersion() == null ? 2 : preset.getVersion() + 1);
         ImportTransformPreset saved = importTransformPresetRepository.save(preset);
         recordTransformPresetEvent(saved, "import_transform_preset.updated", actorId);
         return ImportTransformPresetResponse.from(saved);
@@ -471,8 +476,21 @@ public class ImportJobService {
         UUID projectId = materializeRequest.projectId() == null ? template.getProjectId() : materializeRequest.projectId();
         Project project = activeProjectInWorkspace(projectId, job.getWorkspaceId());
         ImportMappingRules rules = mappingRules(template.getId());
+        ImportTransformPreset transformPreset = template.getTransformPresetId() == null
+                ? null
+                : activeTransformPresetInWorkspace(template.getTransformPresetId(), template.getWorkspaceId());
+        JsonNode transformations = transformationConfig(template, transformPreset);
         int limit = normalizeMaterializeLimit(materializeRequest.limit());
         boolean updateExisting = Boolean.TRUE.equals(materializeRequest.updateExisting());
+        ImportMaterializationRun materializationRun = startMaterializationRun(
+                job,
+                template,
+                transformPreset,
+                project,
+                actorId,
+                updateExisting,
+                transformations
+        );
         List<ImportJobRecord> candidates = importJobRecordRepository
                 .findByImportJobIdAndStatusInOrderBySourceTypeAscSourceIdAsc(job.getId(), updateExisting ? List.of("pending", "failed", "imported") : List.of("pending", "failed"));
         List<ImportJobRecordResponse> responses = new ArrayList<>();
@@ -495,7 +513,7 @@ public class ImportJobService {
                 continue;
             }
             try {
-                MaterializedWorkItem workItem = materializeRecord(job, template, rules, project, record, updateExisting);
+                MaterializedWorkItem workItem = materializeRecord(job, template, rules, project, record, updateExisting, transformations);
                 if (workItem.created()) {
                     created++;
                 } else {
@@ -516,8 +534,9 @@ public class ImportJobService {
             }
             responses.add(ImportJobRecordResponse.from(importJobRecordRepository.save(record)));
         }
+        finishMaterializationRun(materializationRun, processed, created, updated, failed);
         recordJobEvent(job, "import_job.materialized", actorId);
-        return new ImportMaterializeResponse(job.getId(), template.getId(), project.getId(), processed, created, updated, failed, responses);
+        return new ImportMaterializeResponse(materializationRun.getId(), job.getId(), template.getId(), project.getId(), processed, created, updated, failed, responses);
     }
 
     @Transactional(readOnly = true)
@@ -527,6 +546,16 @@ public class ImportJobService {
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
         return importJobRecordRepository.findByImportJobIdOrderBySourceTypeAscSourceIdAsc(job.getId()).stream()
                 .map(ImportJobRecordResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportMaterializationRunResponse> listMaterializationRuns(UUID importJobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = importJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        return importMaterializationRunRepository.findByImportJobIdOrderByCreatedAtDesc(job.getId()).stream()
+                .map(ImportMaterializationRunResponse::from)
                 .toList();
     }
 
@@ -679,12 +708,12 @@ public class ImportJobService {
             ImportMappingRules rules,
             Project project,
             ImportJobRecord record,
-            boolean updateExisting
+            boolean updateExisting,
+            JsonNode transformations
     ) {
         JsonNode rawPayload = record.getRawPayload() == null ? objectMapper.createObjectNode() : record.getRawPayload();
         JsonNode mapping = template.getFieldMapping() == null ? objectMapper.createObjectNode() : template.getFieldMapping();
         JsonNode defaults = template.getDefaults() == null ? objectMapper.createObjectNode() : template.getDefaults();
-        JsonNode transformations = transformationConfig(template);
         if (record.getTargetId() != null && updateExisting) {
             WorkItemUpdateRequest updateRequest = new WorkItemUpdateRequest(
                     null,
@@ -1157,6 +1186,97 @@ public class ImportJobService {
         return project;
     }
 
+    private ImportMaterializationRun startMaterializationRun(
+            ImportJob job,
+            ImportMappingTemplate template,
+            ImportTransformPreset transformPreset,
+            Project project,
+            UUID actorId,
+            boolean updateExisting,
+            JsonNode transformations
+    ) {
+        ImportMaterializationRun run = new ImportMaterializationRun();
+        run.setWorkspaceId(job.getWorkspaceId());
+        run.setImportJobId(job.getId());
+        run.setMappingTemplateId(template.getId());
+        run.setTransformPresetId(transformPreset == null ? null : transformPreset.getId());
+        run.setTransformPresetVersion(transformPreset == null ? null : transformPreset.getVersion());
+        run.setProjectId(project.getId());
+        run.setRequestedById(actorId);
+        run.setUpdateExisting(updateExisting);
+        run.setMappingTemplateSnapshot(mappingTemplateSnapshot(template));
+        run.setTransformPresetSnapshot(transformPresetSnapshot(transformPreset));
+        run.setTransformationConfigSnapshot(transformations == null ? objectMapper.createObjectNode() : transformations.deepCopy());
+        run.setStatus("running");
+        run.setRecordsProcessed(0);
+        run.setRecordsCreated(0);
+        run.setRecordsUpdated(0);
+        run.setRecordsFailed(0);
+        return importMaterializationRunRepository.saveAndFlush(run);
+    }
+
+    private void finishMaterializationRun(
+            ImportMaterializationRun run,
+            int processed,
+            int created,
+            int updated,
+            int failed
+    ) {
+        run.setRecordsProcessed(processed);
+        run.setRecordsCreated(created);
+        run.setRecordsUpdated(updated);
+        run.setRecordsFailed(failed);
+        run.setStatus(failed > 0 ? "completed_with_failures" : "completed");
+        run.setFinishedAt(OffsetDateTime.now());
+        importMaterializationRunRepository.save(run);
+    }
+
+    private ObjectNode mappingTemplateSnapshot(ImportMappingTemplate template) {
+        ObjectNode snapshot = objectMapper.createObjectNode()
+                .put("id", template.getId().toString())
+                .put("workspaceId", template.getWorkspaceId().toString())
+                .put("name", template.getName())
+                .put("provider", template.getProvider())
+                .put("targetType", template.getTargetType())
+                .put("enabled", Boolean.TRUE.equals(template.getEnabled()));
+        if (template.getProjectId() != null) {
+            snapshot.put("projectId", template.getProjectId().toString());
+        }
+        if (hasText(template.getSourceType())) {
+            snapshot.put("sourceType", template.getSourceType());
+        }
+        if (hasText(template.getWorkItemTypeKey())) {
+            snapshot.put("workItemTypeKey", template.getWorkItemTypeKey());
+        }
+        if (hasText(template.getStatusKey())) {
+            snapshot.put("statusKey", template.getStatusKey());
+        }
+        if (template.getTransformPresetId() != null) {
+            snapshot.put("transformPresetId", template.getTransformPresetId().toString());
+        }
+        snapshot.set("fieldMapping", template.getFieldMapping() == null ? objectMapper.createObjectNode() : template.getFieldMapping().deepCopy());
+        snapshot.set("defaults", template.getDefaults() == null ? objectMapper.createObjectNode() : template.getDefaults().deepCopy());
+        snapshot.set("transformationConfig", template.getTransformationConfig() == null ? objectMapper.createObjectNode() : template.getTransformationConfig().deepCopy());
+        return snapshot;
+    }
+
+    private ObjectNode transformPresetSnapshot(ImportTransformPreset preset) {
+        if (preset == null) {
+            return null;
+        }
+        ObjectNode snapshot = objectMapper.createObjectNode()
+                .put("id", preset.getId().toString())
+                .put("workspaceId", preset.getWorkspaceId().toString())
+                .put("name", preset.getName())
+                .put("enabled", Boolean.TRUE.equals(preset.getEnabled()))
+                .put("version", preset.getVersion() == null ? 1 : preset.getVersion());
+        if (hasText(preset.getDescription())) {
+            snapshot.put("description", preset.getDescription());
+        }
+        snapshot.set("transformationConfig", preset.getTransformationConfig() == null ? objectMapper.createObjectNode() : preset.getTransformationConfig().deepCopy());
+        return snapshot;
+    }
+
     private ImportTransformPreset activeTransformPresetInWorkspace(UUID presetId, UUID workspaceId) {
         ImportTransformPreset preset = importTransformPresetRepository.findByIdAndWorkspaceId(presetId, workspaceId)
                 .orElseThrow(() -> badRequest("Transform preset not found in this workspace"));
@@ -1166,10 +1286,9 @@ public class ImportJobService {
         return preset;
     }
 
-    private JsonNode transformationConfig(ImportMappingTemplate template) {
+    private JsonNode transformationConfig(ImportMappingTemplate template, ImportTransformPreset preset) {
         ObjectNode merged = objectMapper.createObjectNode();
-        if (template.getTransformPresetId() != null) {
-            ImportTransformPreset preset = activeTransformPresetInWorkspace(template.getTransformPresetId(), template.getWorkspaceId());
+        if (preset != null) {
             mergeTransformConfig(merged, preset.getTransformationConfig());
         }
         mergeTransformConfig(merged, template.getTransformationConfig());

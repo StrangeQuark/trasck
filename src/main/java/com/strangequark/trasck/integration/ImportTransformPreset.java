@@ -41,6 +41,9 @@ public class ImportTransformPreset {
     @Column(name = "enabled")
     private Boolean enabled;
 
+    @Column(name = "version")
+    private Integer version;
+
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
@@ -93,6 +96,14 @@ public class ImportTransformPreset {
 
     public void setEnabled(Boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public Integer getVersion() {
+        return version;
+    }
+
+    public void setVersion(Integer version) {
+        this.version = version;
     }
 
     public OffsetDateTime getCreatedAt() {

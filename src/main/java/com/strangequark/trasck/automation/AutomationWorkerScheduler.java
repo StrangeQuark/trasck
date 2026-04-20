@@ -30,6 +30,17 @@ public class AutomationWorkerScheduler {
         }
     }
 
+    @Scheduled(fixedDelayString = "${trasck.automation.worker-run-pruning.fixed-delay-ms:60000}")
+    public void runAutomaticWorkerRunPruning() {
+        for (AutomationWorkerSettings settings : automationWorkerSettingsRepository.findAutomaticPruningSettings()) {
+            try {
+                automationService.pruneWorkerRunsAutomatically(settings.getWorkspaceId());
+            } catch (RuntimeException ex) {
+                LOGGER.warn("Scheduled automation worker run pruning failed for workspace {}", settings.getWorkspaceId(), ex);
+            }
+        }
+    }
+
     private void runWorkspaceWorkers(AutomationWorkerSettings settings) {
         try {
             if (Boolean.TRUE.equals(settings.getAutomationJobsEnabled())) {
@@ -56,9 +67,6 @@ public class AutomationWorkerScheduler {
                         ),
                         null
                 );
-            }
-            if (Boolean.TRUE.equals(settings.getWorkerRunPruningAutomaticEnabled())) {
-                automationService.pruneWorkerRunsInternal(settings.getWorkspaceId());
             }
         } catch (RuntimeException ex) {
             LOGGER.warn("Scheduled automation workers failed for workspace {}", settings.getWorkspaceId(), ex);

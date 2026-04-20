@@ -1,5 +1,7 @@
 package com.strangequark.trasck.automation;
 
+import java.time.LocalTime;
+
 public record AutomationWorkerSettingsRequest(
         Boolean automationJobsEnabled,
         Boolean webhookDeliveriesEnabled,
@@ -14,6 +16,9 @@ public record AutomationWorkerSettingsRequest(
         Boolean workerRunRetentionEnabled,
         Integer workerRunRetentionDays,
         Boolean workerRunExportBeforePrune,
-        Boolean workerRunPruningAutomaticEnabled
+        Boolean workerRunPruningAutomaticEnabled,
+        Integer workerRunPruningIntervalMinutes,
+        LocalTime workerRunPruningWindowStart,
+        LocalTime workerRunPruningWindowEnd
 ) {
 }

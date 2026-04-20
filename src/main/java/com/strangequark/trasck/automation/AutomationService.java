@@ -48,8 +48,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.MessageDigest;
+import java.time.DateTimeException;
 import java.time.Duration;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -448,6 +451,22 @@ public class AutomationService {
     public AutomationWorkerRunRetentionResponse pruneWorkerRunsInternal(UUID workspaceId) {
         activeWorkspace(workspaceId);
         return pruneWorkerRuns(workspaceId, null);
+    }
+
+    @Transactional
+    public AutomationWorkerRunRetentionResponse pruneWorkerRunsAutomatically(UUID workspaceId) {
+        Workspace workspace = activeWorkspace(workspaceId);
+        AutomationWorkerSettings settings = workerSettings(workspaceId);
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        if (!shouldRunAutomaticWorkerRunPruning(workspace, settings, now)) {
+            return null;
+        }
+        settings.setWorkerRunPruningLastStartedAt(now);
+        automationWorkerSettingsRepository.save(settings);
+        AutomationWorkerRunRetentionResponse response = pruneWorkerRuns(workspaceId, null);
+        settings.setWorkerRunPruningLastFinishedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        automationWorkerSettingsRepository.save(settings);
+        return response;
     }
 
     private AutomationWorkerRunRetentionResponse pruneWorkerRuns(UUID workspaceId, UUID actorId) {
@@ -1174,8 +1193,59 @@ public class AutomationService {
             settings.setWorkerRunRetentionDays(null);
             settings.setWorkerRunExportBeforePrune(true);
             settings.setWorkerRunPruningAutomaticEnabled(false);
+            settings.setWorkerRunPruningIntervalMinutes(1440);
             return settings;
         });
+    }
+
+    private boolean shouldRunAutomaticWorkerRunPruning(
+            Workspace workspace,
+            AutomationWorkerSettings settings,
+            OffsetDateTime now
+    ) {
+        if (!Boolean.TRUE.equals(settings.getWorkerRunPruningAutomaticEnabled())
+                || !Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled())) {
+            return false;
+        }
+        int intervalMinutes = normalizePruningIntervalMinutes(settings.getWorkerRunPruningIntervalMinutes());
+        OffsetDateTime lastStartedAt = settings.getWorkerRunPruningLastStartedAt();
+        if (lastStartedAt != null && lastStartedAt.plusMinutes(intervalMinutes).isAfter(now)) {
+            return false;
+        }
+        return withinPruningWindow(workspace, settings, now);
+    }
+
+    private boolean withinPruningWindow(Workspace workspace, AutomationWorkerSettings settings, OffsetDateTime now) {
+        LocalTime start = settings.getWorkerRunPruningWindowStart();
+        LocalTime end = settings.getWorkerRunPruningWindowEnd();
+        if (start == null && end == null) {
+            return true;
+        }
+        LocalTime localNow = now.atZoneSameInstant(workspaceZone(workspace)).toLocalTime();
+        if (start != null && end != null) {
+            if (start.equals(end)) {
+                return true;
+            }
+            if (start.isBefore(end)) {
+                return !localNow.isBefore(start) && !localNow.isAfter(end);
+            }
+            return !localNow.isBefore(start) || !localNow.isAfter(end);
+        }
+        if (start != null) {
+            return !localNow.isBefore(start);
+        }
+        return !localNow.isAfter(end);
+    }
+
+    private ZoneId workspaceZone(Workspace workspace) {
+        if (workspace != null && hasText(workspace.getTimezone())) {
+            try {
+                return ZoneId.of(workspace.getTimezone());
+            } catch (DateTimeException ignored) {
+                return ZoneOffset.UTC;
+            }
+        }
+        return ZoneOffset.UTC;
     }
 
     private WorkerRunRetentionSnapshot workerRunRetentionSnapshot(UUID workspaceId, int limit) {
@@ -1403,6 +1473,15 @@ public class AutomationService {
         if (request.workerRunPruningAutomaticEnabled() != null) {
             settings.setWorkerRunPruningAutomaticEnabled(request.workerRunPruningAutomaticEnabled());
         }
+        if (request.workerRunPruningIntervalMinutes() != null) {
+            settings.setWorkerRunPruningIntervalMinutes(normalizePruningIntervalMinutes(request.workerRunPruningIntervalMinutes()));
+        }
+        if (request.workerRunPruningWindowStart() != null) {
+            settings.setWorkerRunPruningWindowStart(request.workerRunPruningWindowStart());
+        }
+        if (request.workerRunPruningWindowEnd() != null) {
+            settings.setWorkerRunPruningWindowEnd(request.workerRunPruningWindowEnd());
+        }
         if (Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled()) && settings.getWorkerRunRetentionDays() == null) {
             throw badRequest("workerRunRetentionDays is required when worker run retention is enabled");
         }
@@ -1415,6 +1494,17 @@ public class AutomationService {
         if (settings.getWorkerRunPruningAutomaticEnabled() == null) {
             settings.setWorkerRunPruningAutomaticEnabled(false);
         }
+        if (settings.getWorkerRunPruningIntervalMinutes() == null) {
+            settings.setWorkerRunPruningIntervalMinutes(1440);
+        }
+    }
+
+    private int normalizePruningIntervalMinutes(Integer minutes) {
+        int value = minutes == null ? 1440 : minutes;
+        if (value < 5 || value > 10080) {
+            throw badRequest("workerRunPruningIntervalMinutes must be between 5 and 10080");
+        }
+        return value;
     }
 
     private AutomationWorkerRun startWorkerRun(

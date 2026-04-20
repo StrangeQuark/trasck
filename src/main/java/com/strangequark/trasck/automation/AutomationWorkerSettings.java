@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
@@ -60,6 +61,21 @@ public class AutomationWorkerSettings {
 
     @Column(name = "worker_run_pruning_automatic_enabled")
     private Boolean workerRunPruningAutomaticEnabled;
+
+    @Column(name = "worker_run_pruning_interval_minutes")
+    private Integer workerRunPruningIntervalMinutes;
+
+    @Column(name = "worker_run_pruning_window_start")
+    private LocalTime workerRunPruningWindowStart;
+
+    @Column(name = "worker_run_pruning_window_end")
+    private LocalTime workerRunPruningWindowEnd;
+
+    @Column(name = "worker_run_pruning_last_started_at")
+    private OffsetDateTime workerRunPruningLastStartedAt;
+
+    @Column(name = "worker_run_pruning_last_finished_at")
+    private OffsetDateTime workerRunPruningLastFinishedAt;
 
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
@@ -182,6 +198,46 @@ public class AutomationWorkerSettings {
 
     public void setWorkerRunPruningAutomaticEnabled(Boolean workerRunPruningAutomaticEnabled) {
         this.workerRunPruningAutomaticEnabled = workerRunPruningAutomaticEnabled;
+    }
+
+    public Integer getWorkerRunPruningIntervalMinutes() {
+        return workerRunPruningIntervalMinutes;
+    }
+
+    public void setWorkerRunPruningIntervalMinutes(Integer workerRunPruningIntervalMinutes) {
+        this.workerRunPruningIntervalMinutes = workerRunPruningIntervalMinutes;
+    }
+
+    public LocalTime getWorkerRunPruningWindowStart() {
+        return workerRunPruningWindowStart;
+    }
+
+    public void setWorkerRunPruningWindowStart(LocalTime workerRunPruningWindowStart) {
+        this.workerRunPruningWindowStart = workerRunPruningWindowStart;
+    }
+
+    public LocalTime getWorkerRunPruningWindowEnd() {
+        return workerRunPruningWindowEnd;
+    }
+
+    public void setWorkerRunPruningWindowEnd(LocalTime workerRunPruningWindowEnd) {
+        this.workerRunPruningWindowEnd = workerRunPruningWindowEnd;
+    }
+
+    public OffsetDateTime getWorkerRunPruningLastStartedAt() {
+        return workerRunPruningLastStartedAt;
+    }
+
+    public void setWorkerRunPruningLastStartedAt(OffsetDateTime workerRunPruningLastStartedAt) {
+        this.workerRunPruningLastStartedAt = workerRunPruningLastStartedAt;
+    }
+
+    public OffsetDateTime getWorkerRunPruningLastFinishedAt() {
+        return workerRunPruningLastFinishedAt;
+    }
+
+    public void setWorkerRunPruningLastFinishedAt(OffsetDateTime workerRunPruningLastFinishedAt) {
+        this.workerRunPruningLastFinishedAt = workerRunPruningLastFinishedAt;
     }
 
     public OffsetDateTime getUpdatedAt() {

@@ -82,6 +82,15 @@ public class BoardController {
         return boardService.transitionBoardWorkItem(boardId, workItemId, request);
     }
 
+    @PostMapping("/boards/{boardId}/work-items/{workItemId}/move")
+    public WorkItemResponse moveBoardWorkItem(
+            @PathVariable UUID boardId,
+            @PathVariable UUID workItemId,
+            @RequestBody BoardWorkItemMoveRequest request
+    ) {
+        return boardService.moveBoardWorkItem(boardId, workItemId, request);
+    }
+
     @PostMapping("/boards/{boardId}/columns")
     public ResponseEntity<BoardColumnResponse> createColumn(
             @PathVariable UUID boardId,
