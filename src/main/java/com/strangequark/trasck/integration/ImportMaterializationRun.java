@@ -61,6 +61,10 @@ public class ImportMaterializationRun {
     @Column(name = "transformation_config_snapshot")
     private JsonNode transformationConfigSnapshot;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mapping_rules_snapshot")
+    private JsonNode mappingRulesSnapshot;
+
     @Column(name = "status")
     private String status;
 
@@ -178,6 +182,14 @@ public class ImportMaterializationRun {
 
     public void setTransformationConfigSnapshot(JsonNode transformationConfigSnapshot) {
         this.transformationConfigSnapshot = transformationConfigSnapshot;
+    }
+
+    public JsonNode getMappingRulesSnapshot() {
+        return mappingRulesSnapshot;
+    }
+
+    public void setMappingRulesSnapshot(JsonNode mappingRulesSnapshot) {
+        this.mappingRulesSnapshot = mappingRulesSnapshot;
     }
 
     public String getStatus() {

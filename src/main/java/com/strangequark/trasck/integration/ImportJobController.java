@@ -72,6 +72,15 @@ public class ImportJobController {
         return importJobService.listTransformPresetVersions(presetId);
     }
 
+    @PostMapping("/import-transform-presets/{presetId}/versions/{versionId}/clone")
+    public ResponseEntity<ImportTransformPresetResponse> cloneTransformPresetVersion(
+            @PathVariable UUID presetId,
+            @PathVariable UUID versionId,
+            @RequestBody(required = false) ImportTransformPresetCloneRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.cloneTransformPresetVersion(presetId, versionId, request));
+    }
+
     @PatchMapping("/import-transform-presets/{presetId}")
     public ImportTransformPresetResponse updateTransformPreset(
             @PathVariable UUID presetId,
@@ -242,6 +251,27 @@ public class ImportJobController {
     @GetMapping("/import-jobs/{importJobId}/materialization-runs")
     public List<ImportMaterializationRunResponse> listMaterializationRuns(@PathVariable UUID importJobId) {
         return importJobService.listMaterializationRuns(importJobId);
+    }
+
+    @PostMapping("/import-materialization-runs/{materializationRunId}/rerun")
+    public ImportMaterializeResponse rerunMaterialization(
+            @PathVariable UUID materializationRunId,
+            @RequestBody(required = false) ImportMaterializationRerunRequest request
+    ) {
+        return importJobService.rerunMaterialization(materializationRunId, request);
+    }
+
+    @GetMapping("/import-jobs/{importJobId}/conflicts")
+    public List<ImportJobRecordResponse> listConflicts(@PathVariable UUID importJobId) {
+        return importJobService.listConflicts(importJobId);
+    }
+
+    @PostMapping("/import-job-records/{recordId}/resolve-conflict")
+    public ImportJobRecordResponse resolveConflict(
+            @PathVariable UUID recordId,
+            @RequestBody ImportConflictResolutionRequest request
+    ) {
+        return importJobService.resolveConflict(recordId, request);
     }
 
     @PostMapping("/import-jobs/{importJobId}/records")

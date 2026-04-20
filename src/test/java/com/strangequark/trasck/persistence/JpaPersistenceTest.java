@@ -33,6 +33,8 @@ import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
 import com.strangequark.trasck.integration.EmailProviderSettings;
 import com.strangequark.trasck.integration.EmailProviderSettingsRepository;
+import com.strangequark.trasck.integration.ImportJobRecord;
+import com.strangequark.trasck.integration.ImportJobRecordRepository;
 import com.strangequark.trasck.integration.ImportMaterializationRun;
 import com.strangequark.trasck.integration.ImportMaterializationRunRepository;
 import com.strangequark.trasck.integration.ImportJob;
@@ -172,6 +174,9 @@ class JpaPersistenceTest {
     private ImportJobRepository importJobRepository;
 
     @Autowired
+    private ImportJobRecordRepository importJobRecordRepository;
+
+    @Autowired
     private ImportMappingTemplateRepository importMappingTemplateRepository;
 
     @DynamicPropertySource
@@ -205,6 +210,9 @@ class JpaPersistenceTest {
         assertThat(columnExists("import_transform_preset_versions", "change_type")).isTrue();
         assertThat(columnExists("board_swimlanes", "saved_filter_id")).isTrue();
         assertThat(columnExists("import_materialization_runs", "records_skipped")).isTrue();
+        assertThat(columnExists("import_materialization_runs", "mapping_rules_snapshot")).isTrue();
+        assertThat(columnExists("import_job_records", "conflict_status")).isTrue();
+        assertThat(columnExists("import_job_records", "conflict_materialization_run_id")).isTrue();
     }
 
     @Test
@@ -458,9 +466,25 @@ class JpaPersistenceTest {
         template.setEnabled(true);
         template = importMappingTemplateRepository.saveAndFlush(template);
 
+        ImportJob importJob = createImportJob(fixture, "jira");
+        ObjectNode mappingRulesSnapshot = objectMapper.createObjectNode();
+        mappingRulesSnapshot.set("valueLookups", objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode()
+                        .put("sourceField", "fields.security")
+                        .put("sourceValue", "Public")
+                        .put("targetField", "visibility")
+                        .put("targetValue", "public")));
+        mappingRulesSnapshot.set("typeTranslations", objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode()
+                        .put("sourceTypeKey", "Story")
+                        .put("targetTypeKey", "story")));
+        mappingRulesSnapshot.set("statusTranslations", objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode()
+                        .put("sourceStatusKey", "To Do")
+                        .put("targetStatusKey", "open")));
         ImportMaterializationRun materializationRun = new ImportMaterializationRun();
         materializationRun.setWorkspaceId(fixture.workspace.getId());
-        materializationRun.setImportJobId(createImportJob(fixture, "jira").getId());
+        materializationRun.setImportJobId(importJob.getId());
         materializationRun.setMappingTemplateId(template.getId());
         materializationRun.setTransformPresetId(preset.getId());
         materializationRun.setTransformPresetVersion(preset.getVersion());
@@ -470,6 +494,7 @@ class JpaPersistenceTest {
         materializationRun.setMappingTemplateSnapshot(objectMapper.createObjectNode().put("name", template.getName()));
         materializationRun.setTransformPresetSnapshot(objectMapper.createObjectNode().put("version", preset.getVersion()));
         materializationRun.setTransformationConfigSnapshot(presetTransform);
+        materializationRun.setMappingRulesSnapshot(mappingRulesSnapshot);
         materializationRun.setStatus("completed");
         materializationRun.setRecordsProcessed(1);
         materializationRun.setRecordsCreated(1);
@@ -479,6 +504,21 @@ class JpaPersistenceTest {
         materializationRun.setRecordsConflicted(0);
         materializationRun.setFinishedAt(OffsetDateTime.now());
         materializationRun = importMaterializationRunRepository.saveAndFlush(materializationRun);
+
+        ImportJobRecord conflictRecord = new ImportJobRecord();
+        conflictRecord.setImportJobId(importJob.getId());
+        conflictRecord.setSourceType("issue");
+        conflictRecord.setSourceId("JPA-1");
+        conflictRecord.setTargetType("work_item");
+        conflictRecord.setTargetId(UUID.randomUUID());
+        conflictRecord.setStatus("conflict");
+        conflictRecord.setErrorMessage("Existing import target would be skipped");
+        conflictRecord.setRawPayload(objectMapper.createObjectNode().put("key", "JPA-1"));
+        conflictRecord.setConflictStatus("open");
+        conflictRecord.setConflictReason("Existing import target would be skipped");
+        conflictRecord.setConflictDetectedAt(OffsetDateTime.now());
+        conflictRecord.setConflictMaterializationRunId(materializationRun.getId());
+        conflictRecord = importJobRecordRepository.saveAndFlush(conflictRecord);
 
         entityManager.clear();
 
@@ -500,6 +540,10 @@ class JpaPersistenceTest {
         assertThat(importMappingTemplateRepository.findById(template.getId()).orElseThrow().getTransformPresetId()).isEqualTo(preset.getId());
         assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getTransformPresetVersion()).isEqualTo(1);
         assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getRecordsSkipped()).isZero();
+        assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getMappingRulesSnapshot().get("typeTranslations")).hasSize(1);
+        ImportJobRecord reloadedConflictRecord = importJobRecordRepository.findById(conflictRecord.getId()).orElseThrow();
+        assertThat(reloadedConflictRecord.getConflictStatus()).isEqualTo("open");
+        assertThat(reloadedConflictRecord.getConflictMaterializationRunId()).isEqualTo(materializationRun.getId());
     }
 
     private ImportJob createImportJob(CoreFixture fixture, String provider) {

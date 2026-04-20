@@ -63,6 +63,8 @@ class ConfigurationApiIntegrationTest {
         UUID storyTypeId = uuid(story, "/typeId");
         JsonNode boardPeerStory = createWorkItem(projectId, actorId, "story", "Board peer story");
         UUID boardPeerStoryId = uuid(boardPeerStory, "/id");
+        JsonNode openBoardStory = createWorkItem(projectId, actorId, "story", "Open board story");
+        UUID openBoardStoryId = uuid(openBoardStory, "/id");
 
         JsonNode customerField = postJson("/api/v1/workspaces/" + workspaceId + "/custom-fields", objectMapper.createObjectNode()
                 .put("name", "Customer Tier")
@@ -134,7 +136,7 @@ class ConfigurationApiIntegrationTest {
         assertThat(getJson("/api/v1/projects/" + projectId + "/boards")).hasSizeGreaterThanOrEqualTo(2);
         JsonNode boardWork = getJson("/api/v1/boards/" + boardId + "/work-items");
         assertThat(boardWork.at("/columns")).hasSize(3);
-        assertThat(boardWork.at("/swimlanes/0/columns/0/workItems")).hasSize(2);
+        assertThat(boardWork.at("/swimlanes/0/columns/0/workItems")).hasSize(3);
         JsonNode readyPeerStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + boardPeerStoryId + "/move", objectMapper.createObjectNode()
                 .put("targetColumnId", readyColumn.at("/id").asText()));
         JsonNode boardRankedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/move", objectMapper.createObjectNode()
@@ -142,6 +144,10 @@ class ConfigurationApiIntegrationTest {
                 .put("previousWorkItemId", boardPeerStoryId.toString()));
         assertThat(boardRankedStory.at("/rank").asText()).isGreaterThan(readyPeerStory.at("/rank").asText());
         assertThat(uuid(boardRankedStory, "/statusId")).isEqualTo(statusId(setup, "ready"));
+        HttpResponse<String> invalidBoardMove = post("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/move", objectMapper.createObjectNode()
+                .put("targetColumnId", readyColumn.at("/id").asText())
+                .put("previousWorkItemId", openBoardStoryId.toString()));
+        assertThat(invalidBoardMove.statusCode()).isEqualTo(400);
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
                 .put("name", "Release 1")
@@ -405,6 +411,14 @@ class ConfigurationApiIntegrationTest {
         JsonNode presetVersions = getJson("/api/v1/import-transform-presets/" + transformPreset.at("/id").asText() + "/versions");
         assertThat(presetVersions).hasSize(2);
         assertThat(presetVersions.at("/0/version").asInt()).isEqualTo(2);
+        JsonNode clonedTransformPreset = postJson(
+                "/api/v1/import-transform-presets/" + transformPreset.at("/id").asText() + "/versions/" + presetVersions.at("/1/id").asText() + "/clone",
+                objectMapper.createObjectNode()
+                        .put("name", "Jira title cleanup v1 clone")
+                        .put("enabled", true));
+        assertThat(clonedTransformPreset.at("/version").asInt()).isEqualTo(1);
+        assertThat(clonedTransformPreset.at("/transformationConfig/title")).hasSize(3);
+        assertThat(getJson("/api/v1/import-transform-presets/" + clonedTransformPreset.at("/id").asText() + "/versions")).hasSize(1);
         JsonNode updatedMaterialized = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
                 .put("mappingTemplateId", mapping.at("/id").asText())
                 .put("limit", 10)
@@ -416,12 +430,39 @@ class ConfigurationApiIntegrationTest {
                 .put("mappingTemplateId", mapping.at("/id").asText())
                 .put("limit", 10)
                 .put("updateExisting", false));
+        UUID skippedRunId = uuid(skippedMaterialized, "/materializationRunId");
         assertThat(skippedMaterialized.at("/created").asInt()).isZero();
         assertThat(skippedMaterialized.at("/skipped").asInt()).isGreaterThanOrEqualTo(1);
         assertThat(skippedMaterialized.at("/conflicts").asInt()).isGreaterThanOrEqualTo(1);
+        JsonNode conflicts = getJson("/api/v1/import-jobs/" + importJobId + "/conflicts");
+        assertThat(conflicts).hasSizeGreaterThanOrEqualTo(1);
+        JsonNode parsedConflict = findRecordBySourceId(conflicts, "JIRA-2");
+        assertThat(parsedConflict.at("/status").asText()).isEqualTo("conflict");
+        assertThat(parsedConflict.at("/conflictStatus").asText()).isEqualTo("open");
+        assertThat(parsedConflict.at("/conflictReason").asText()).contains("updateExisting is false");
+        JsonNode resolvedCreateNewConflict = postJson(
+                "/api/v1/import-job-records/" + parsedConflict.at("/id").asText() + "/resolve-conflict",
+                objectMapper.createObjectNode().put("resolution", "create_new"));
+        assertThat(resolvedCreateNewConflict.at("/status").asText()).isEqualTo("pending");
+        assertThat(resolvedCreateNewConflict.at("/targetId").isMissingNode() || resolvedCreateNewConflict.at("/targetId").isNull()).isTrue();
+        assertThat(resolvedCreateNewConflict.at("/conflictStatus").asText()).isEqualTo("resolved");
+        JsonNode rerunMaterialized = postJson("/api/v1/import-materialization-runs/" + skippedRunId + "/rerun", objectMapper.createObjectNode()
+                .put("limit", 10));
+        assertThat(rerunMaterialized.at("/materializationRunId").asText()).isNotEqualTo(skippedRunId.toString());
+        assertThat(rerunMaterialized.at("/created").asInt()).isGreaterThanOrEqualTo(1);
+        JsonNode rerunParsedRecord = findRecordBySourceId(rerunMaterialized.at("/records"), "JIRA-2");
+        assertThat(uuid(rerunParsedRecord, "/targetId")).isNotEqualTo(importedWorkItemId);
+        JsonNode remainingConflicts = getJson("/api/v1/import-jobs/" + importJobId + "/conflicts");
+        JsonNode manualConflict = findRecordBySourceId(remainingConflicts, "JIRA-1");
+        JsonNode resolvedSkipConflict = postJson(
+                "/api/v1/import-job-records/" + manualConflict.at("/id").asText() + "/resolve-conflict",
+                objectMapper.createObjectNode().put("resolution", "skip"));
+        assertThat(resolvedSkipConflict.at("/status").asText()).isEqualTo("skipped");
+        assertThat(resolvedSkipConflict.at("/conflictResolution").asText()).isEqualTo("skip");
         JsonNode updatedMaterializationRuns = getJson("/api/v1/import-jobs/" + importJobId + "/materialization-runs");
-        assertThat(updatedMaterializationRuns).hasSize(3);
+        assertThat(updatedMaterializationRuns).hasSize(4);
         assertThat(updatedMaterializationRuns.at("/0/recordsSkipped").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(updatedMaterializationRuns.at("/0/mappingRulesSnapshot/typeTranslations")).hasSize(1);
         JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
     }
@@ -551,5 +592,14 @@ class ConfigurationApiIntegrationTest {
             }
         }
         throw new IllegalStateException("Status not found: " + key);
+    }
+
+    private JsonNode findRecordBySourceId(JsonNode records, String sourceId) {
+        for (JsonNode record : records) {
+            if (sourceId.equals(record.at("/sourceId").asText())) {
+                return record;
+            }
+        }
+        throw new IllegalStateException("Record not found: " + sourceId);
     }
 }

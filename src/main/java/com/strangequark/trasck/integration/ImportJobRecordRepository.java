@@ -10,5 +10,7 @@ public interface ImportJobRecordRepository extends JpaRepository<ImportJobRecord
 
     List<ImportJobRecord> findByImportJobIdAndStatusInOrderBySourceTypeAscSourceIdAsc(UUID importJobId, List<String> statuses);
 
+    List<ImportJobRecord> findByImportJobIdAndConflictStatusOrderBySourceTypeAscSourceIdAsc(UUID importJobId, String conflictStatus);
+
     Optional<ImportJobRecord> findByImportJobIdAndSourceTypeAndSourceId(UUID importJobId, String sourceType, String sourceId);
 }
