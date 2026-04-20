@@ -7,6 +7,7 @@ public record BoardWorkItemsResponse(
         UUID boardId,
         UUID projectId,
         int limitPerColumn,
-        List<BoardColumnWorkItemsResponse> columns
+        List<BoardColumnWorkItemsResponse> columns,
+        List<BoardSwimlaneWorkItemsResponse> swimlanes
 ) {
 }

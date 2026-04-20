@@ -49,6 +49,15 @@ public class AutomationWorkerSettings {
     @Column(name = "email_dry_run")
     private Boolean emailDryRun;
 
+    @Column(name = "worker_run_retention_enabled")
+    private Boolean workerRunRetentionEnabled;
+
+    @Column(name = "worker_run_retention_days")
+    private Integer workerRunRetentionDays;
+
+    @Column(name = "worker_run_export_before_prune")
+    private Boolean workerRunExportBeforePrune;
+
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
 
@@ -138,6 +147,30 @@ public class AutomationWorkerSettings {
 
     public void setEmailDryRun(Boolean emailDryRun) {
         this.emailDryRun = emailDryRun;
+    }
+
+    public Boolean getWorkerRunRetentionEnabled() {
+        return workerRunRetentionEnabled;
+    }
+
+    public void setWorkerRunRetentionEnabled(Boolean workerRunRetentionEnabled) {
+        this.workerRunRetentionEnabled = workerRunRetentionEnabled;
+    }
+
+    public Integer getWorkerRunRetentionDays() {
+        return workerRunRetentionDays;
+    }
+
+    public void setWorkerRunRetentionDays(Integer workerRunRetentionDays) {
+        this.workerRunRetentionDays = workerRunRetentionDays;
+    }
+
+    public Boolean getWorkerRunExportBeforePrune() {
+        return workerRunExportBeforePrune;
+    }
+
+    public void setWorkerRunExportBeforePrune(Boolean workerRunExportBeforePrune) {
+        this.workerRunExportBeforePrune = workerRunExportBeforePrune;
     }
 
     public OffsetDateTime getUpdatedAt() {

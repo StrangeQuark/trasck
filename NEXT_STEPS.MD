@@ -4,14 +4,16 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should import transformation functions stay as the current fixed allowlist (`trim`, case conversion, `collapse_whitespace`), or should the next import pass add reusable argument-based transform pipelines?
-    - Answer: Add reusable argument-based transform pipelines
-2. Should automation worker run history be retained indefinitely for now, or should a retention/pruning/export policy be added before scheduled workers are enabled broadly?
-    - Answer: Add a retention/pruning/export policy now
-3. Should the next board pass add backend swimlane-aware grouping and rank/transition commands before drag/drop UI, or keep grouping client-side until the board UX is designed?
-    - Answer: Add backend swimlane-aware grouping and rank/transition commands now
-4. Should production SMTP configuration start as application/environment configuration, or should workspace-level email provider settings be modeled from the start while keeping Maildev selectable in non-production?
-    - Answer: Go with workspace-level email provider settings from the start
+1. Should automation worker run pruning be scheduled automatically from `workerRunRetentionEnabled`, or remain manual/admin-triggered until retention exports are manually reviewed?
+    - Answer: Allow for both, some useres may want automatic pruning while others may want manual admin triggering
+2. Should workspace SMTP passwords stay encrypted in the database for now, or move to the same external KMS/secret-management abstraction planned for non-stub agent credentials?
+    - Answer: Keep DB encryption for now, but design it so SMTP secrets can later move behind the same secret abstraction as agent credentials
+3. Should board swimlane query support stay limited to simple field/value predicates, or reuse the saved-filter/query-builder engine for complex swimlanes?
+    - Answer: Reuse the engine, but make sure it stays flexible
+4. Should board transition commands keep requiring explicit `transitionKey` from the UI, or derive transitions from target columns/status mappings during drag/drop?
+    - Answer: Derive during drag/drop
+5. Should import transform pipelines stay embedded in mapping templates, or become named reusable workspace transform presets?
+    - Answer: Make them reusable workspace transform presets
 
 ## Current State
 
@@ -23,7 +25,7 @@ Authentication and authorization foundations are implemented. Username/password 
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, keep a single role value per project-team assignment, and manage workspace roadmaps. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/archive boards, board columns, swimlanes, releases, release scope, project roadmaps, roadmap items, iterations, iteration scope, commitments, closes, and incomplete-work carryover. Boards expose per-column work item card data from configured status mappings, and the browser board detail page renders real cards by column.
+Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, keep a single role value per project-team assignment, and manage workspace roadmaps. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/archive boards, board columns, swimlanes, releases, release scope, project roadmaps, roadmap items, iterations, iteration scope, commitments, closes, and incomplete-work carryover. Boards expose per-column work item card data from configured status mappings plus backend swimlane groupings, and board-scoped rank/transition commands validate board membership before delegating to the normal work item command paths. The browser board detail page currently renders real cards by column.
 
 Reporting foundations include status, assignment, team, and estimate history writes plus dedicated read APIs for work item status history, assignment history, team history, estimate history, and work-log summaries. Project, workspace/project-set, and program dashboard summaries are implemented. Persisted snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`, with manual run/backfill/reconcile controls, raw snapshot read APIs, report-shaped time-series DTOs, and live/snapshot iteration report APIs. Configurable snapshot retention policies, dedicated cycle-time/iteration/velocity/cumulative-flow rollup tables, a generic experimental rollup table, manual rollup/backfill controls, archive-run metadata, and additive `rollupSeries` project snapshot output are implemented.
 
@@ -33,9 +35,9 @@ Product configuration APIs are implemented. Workspace admins can manage custom f
 
 Activity and audit foundations are implemented. Static and configured durable consumers project domain events into cursor-page work-item/project/workspace activity streams, cursor-page workspace audit logs, and configured delivery rows. Tests cover durable outbox failure, retry, dead-letter, disabled consumers, unknown replay consumers, and multi-consumer delivery. Audit retention policy metadata is configurable per workspace; exports write JSON artifacts through configured attachment/object storage and create `export_jobs`, manual/scheduled pruning writes a stored export before deleting eligible rows, and workspace admins can list export jobs, inspect export metadata, and download stored export files.
 
-Automation and integration execution have moved beyond shells. Automation rule execution creates queued jobs; admin worker endpoints process queued/failed jobs and expose succeeded/failed counts. Workspace-level worker settings can enable scheduled automation, webhook, and email workers while preserving manual admin endpoints. Webhook actions create durable delivery rows, and webhook delivery processing supports inspect, retry, cancel, dry-run/real HTTP POST, bounded retry, and `dead_letter` status. Email actions create durable Maildev development-provider delivery rows, with manual/scheduled dry-run or SMTP-backed processing. Worker processing now writes dedicated `automation_worker_runs` history and `automation_worker_health` rows for automation, webhook, and email workers.
+Automation and integration execution have moved beyond shells. Automation rule execution creates queued jobs; admin worker endpoints process queued/failed jobs and expose succeeded/failed counts. Workspace-level worker settings can enable scheduled automation, webhook, and email workers while preserving manual admin endpoints, and worker run retention settings now support manual export/prune through configured attachment storage and `export_jobs`. Webhook actions create durable delivery rows, and webhook delivery processing supports inspect, retry, cancel, dry-run/real HTTP POST, bounded retry, and `dead_letter` status. Email actions create durable delivery rows using workspace-level Maildev or SMTP provider settings; SMTP passwords are encrypted at rest and Maildev is blocked in production profiles. Worker processing writes dedicated `automation_worker_runs` history and `automation_worker_health` rows for automation, webhook, and email workers.
 
-Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import mapping templates can materialize those records into work items through the normal work item service. Mapping templates now support transformation config, reusable value lookups, type translations, and status translations, with REST/JPA coverage and integration tests proving materialization through those rules.
+Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import mapping templates can materialize those records into work items through the normal work item service. Mapping templates now support transformation config with legacy function names plus argument-based pipelines, reusable value lookups, type translations, and status translations, with REST/JPA coverage and integration tests proving materialization through those rules.
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
@@ -43,14 +45,14 @@ Local runtime and contract polish is in place. The backend has checked-in HTTP e
 
 ## Primary Next Steps
 
-### 1. Backend Reliability And Permission Hardening
+### 1. Backend Reliability Follow-Through
 
 Goal: keep the growing backend safe enough for a full manual product test.
 
 Planned work:
 
-- Add migration tests for every new schema change, including import mapping rules and worker history/health.
-- Expand permission tests for hierarchy, workflow, collaboration, user-management, team/planning, public read, dashboard/search/personalization, notification defaults, automation workers, import parsing/materialization, worker history/health, and attachment byte APIs.
+- Keep adding migration/JPA coverage for every new schema change; the latest pass covers worker retention and workspace email provider settings.
+- Expand permission tests for hierarchy, workflow, collaboration, user-management, team/planning, public read, dashboard/search/personalization, notification defaults, automation workers, import parsing/materialization, worker history/health, attachment byte APIs, board-scoped commands, and email provider settings.
 - Extend activity/audit projection coverage for request-changes, waiting-for-input, retry failures, cancellation failures, import materialization, notification default changes, worker run failures, and external callback/delivery failures.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 
@@ -65,9 +67,9 @@ Goal: turn the operational import/delivery slice into a production-ready integra
 Planned work:
 
 - Add import conflict handling, update-existing idempotency coverage, mapping-rule validation, and rule-specific audit/activity events.
-- Add production SMTP configuration while keeping Maildev selectable only in non-production according to the answered decision.
-- Add worker run retention/alerting metadata after the retention question above is answered.
-- Add permission, activity, audit, and dead-letter tests around import materialization, email delivery, scheduled workers, retry/cancel failures, and worker settings.
+- Add named transform presets if the embedded-template pipeline model becomes too repetitive.
+- Decide whether worker run pruning should be scheduled automatically or remain manual/admin-triggered while exports are reviewed.
+- Add permission, activity, audit, and dead-letter tests around import materialization, email delivery, scheduled workers, retry/cancel failures, worker retention, SMTP settings, and worker settings.
 
 Done when:
 
@@ -80,8 +82,9 @@ Goal: move the browser console from a broad manual-test surface toward a usable 
 Planned work:
 
 - Add field-specific child editors for contexts, field configurations, screen fields, screen assignments, board columns, swimlanes, automation conditions/actions, and import mapping rules.
-- Add board swimlane grouping after the backend/frontend grouping decision is answered.
-- Add board drag/rank and transition interactions after the rank/transition API shape is confirmed for board usage.
+- Render backend swimlane groupings on board detail pages.
+- Add board drag/rank and transition interactions against the board-scoped rank/transition endpoints.
+- Add UI controls for workspace email provider settings, worker run retention export/prune, and argument-based import transform pipelines.
 - Expand route tests to exercise configuration, planning, automation, import, selector, cookie/CSRF, and global-error surfaces beyond smoke rendering.
 
 Done when:
@@ -103,8 +106,8 @@ The following work should be completed before the application is ready for a mea
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization, and worker history as more APIs are exposed.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, import materialization, notification defaults, worker runs, and external callback/delivery failures as those flows are added.
-- Add production SMTP configuration and explicitly confine the Maildev provider to non-production before exposing external email automation broadly.
-- Add retention/pruning/export behavior for automation worker runs once the retention policy is chosen.
+- Decide and implement automatic worker run pruning only after manual retention exports are reviewed.
+- Decide whether SMTP secrets should stay database-encrypted or move to external secret management before real production email usage.
 
 ### Product Configuration Readiness
 
@@ -118,8 +121,8 @@ The following work should be completed before the application is ready for a mea
 - Add repository/query tests for high-use list screens and detail pages.
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
-- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, worker run retention, and Maildev/SMTP email delivery.
-- Expand import tests from parser/materialization coverage into mapping conflict, disabled rule behavior, update-existing, idempotency, and audit/activity coverage.
+- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, worker run retention scheduling, SMTP provider settings, and Maildev/SMTP email delivery.
+- Expand import tests from parser/materialization coverage into mapping conflict, disabled rule behavior, invalid transform arguments, update-existing, idempotency, and audit/activity coverage.
 - Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, comments, activity events, audit entries, or API responses.
@@ -133,3 +136,5 @@ The following work should be completed before the application is ready for a mea
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
 - Replace raw JSON child editors with field-specific forms for common nested admin records.
 - Expand frontend route tests and replace remaining raw ID inputs only after corresponding list endpoints exist.
+- Wire the board UI to backend swimlanes plus board-scoped rank/transition commands.
+- Add UI for workspace email provider settings, worker run retention export/prune, and argument-based import transform pipelines.

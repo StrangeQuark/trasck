@@ -3,6 +3,8 @@ package com.strangequark.trasck.automation;
 import com.strangequark.trasck.integration.EmailDeliveryResponse;
 import com.strangequark.trasck.integration.EmailDeliveryWorkerRequest;
 import com.strangequark.trasck.integration.EmailDeliveryWorkerResponse;
+import com.strangequark.trasck.integration.EmailProviderSettingsRequest;
+import com.strangequark.trasck.integration.EmailProviderSettingsResponse;
 import com.strangequark.trasck.integration.WebhookDeliveryResponse;
 import com.strangequark.trasck.integration.WebhookDeliveryWorkerRequest;
 import com.strangequark.trasck.integration.WebhookDeliveryWorkerResponse;
@@ -17,8 +19,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -153,6 +157,32 @@ public class AutomationController {
     @GetMapping("/workspaces/{workspaceId}/automation-worker-health")
     public List<AutomationWorkerHealthResponse> listWorkerHealth(@PathVariable UUID workspaceId) {
         return automationService.listWorkerHealth(workspaceId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/export")
+    public AutomationWorkerRunRetentionResponse exportWorkerRuns(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return automationService.exportWorkerRuns(workspaceId, limit);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/prune")
+    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(@PathVariable UUID workspaceId) {
+        return automationService.pruneWorkerRuns(workspaceId);
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/email-provider-settings")
+    public EmailProviderSettingsResponse getEmailProviderSettings(@PathVariable UUID workspaceId) {
+        return automationService.getEmailProviderSettings(workspaceId);
+    }
+
+    @PutMapping("/workspaces/{workspaceId}/email-provider-settings")
+    public EmailProviderSettingsResponse updateEmailProviderSettings(
+            @PathVariable UUID workspaceId,
+            @RequestBody EmailProviderSettingsRequest request
+    ) {
+        return automationService.updateEmailProviderSettings(workspaceId, request);
     }
 
     @GetMapping("/automation-jobs/{jobId}")

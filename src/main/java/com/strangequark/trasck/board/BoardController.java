@@ -1,5 +1,6 @@
 package com.strangequark.trasck.board;
 
+import com.strangequark.trasck.workitem.WorkItemResponse;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -61,6 +62,24 @@ public class BoardController {
             @RequestParam(required = false) Integer limitPerColumn
     ) {
         return boardService.listBoardWorkItems(boardId, limitPerColumn);
+    }
+
+    @PostMapping("/boards/{boardId}/work-items/{workItemId}/rank")
+    public WorkItemResponse rankBoardWorkItem(
+            @PathVariable UUID boardId,
+            @PathVariable UUID workItemId,
+            @RequestBody BoardWorkItemRankRequest request
+    ) {
+        return boardService.rankBoardWorkItem(boardId, workItemId, request);
+    }
+
+    @PostMapping("/boards/{boardId}/work-items/{workItemId}/transition")
+    public WorkItemResponse transitionBoardWorkItem(
+            @PathVariable UUID boardId,
+            @PathVariable UUID workItemId,
+            @RequestBody BoardWorkItemTransitionRequest request
+    ) {
+        return boardService.transitionBoardWorkItem(boardId, workItemId, request);
     }
 
     @PostMapping("/boards/{boardId}/columns")

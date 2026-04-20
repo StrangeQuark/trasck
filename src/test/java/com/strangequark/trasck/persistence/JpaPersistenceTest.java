@@ -27,8 +27,12 @@ import com.strangequark.trasck.agent.AgentTaskRepositoryLink;
 import com.strangequark.trasck.agent.AgentTaskRepositoryLinkRepository;
 import com.strangequark.trasck.agent.RepositoryConnection;
 import com.strangequark.trasck.agent.RepositoryConnectionRepository;
+import com.strangequark.trasck.automation.AutomationWorkerSettings;
+import com.strangequark.trasck.automation.AutomationWorkerSettingsRepository;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
+import com.strangequark.trasck.integration.EmailProviderSettings;
+import com.strangequark.trasck.integration.EmailProviderSettingsRepository;
 import com.strangequark.trasck.organization.Organization;
 import com.strangequark.trasck.organization.OrganizationRepository;
 import com.strangequark.trasck.project.Project;
@@ -137,6 +141,12 @@ class JpaPersistenceTest {
     @Autowired
     private AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
 
+    @Autowired
+    private AutomationWorkerSettingsRepository automationWorkerSettingsRepository;
+
+    @Autowired
+    private EmailProviderSettingsRepository emailProviderSettingsRepository;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -155,10 +165,12 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(123);
+        assertThat(tableCount).isEqualTo(124);
         assertThat(permissionCount).isEqualTo(31);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(120);
-        assertThat(repositories).hasSizeGreaterThanOrEqualTo(103);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(121);
+        assertThat(repositories).hasSizeGreaterThanOrEqualTo(104);
+        assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
+        assertThat(columnExists("email_provider_settings", "smtp_password_encrypted")).isTrue();
     }
 
     @Test
@@ -336,6 +348,54 @@ class JpaPersistenceTest {
         assertThat(agentTaskRepositoryLinkRepository.count()).isEqualTo(1);
     }
 
+    @Test
+    void persistsWorkerRetentionAndWorkspaceEmailProviderSettings() {
+        CoreFixture fixture = createCoreFixture("ops");
+
+        AutomationWorkerSettings workerSettings = new AutomationWorkerSettings();
+        workerSettings.setWorkspaceId(fixture.workspace.getId());
+        workerSettings.setAutomationJobsEnabled(false);
+        workerSettings.setWebhookDeliveriesEnabled(false);
+        workerSettings.setEmailDeliveriesEnabled(false);
+        workerSettings.setAutomationLimit(25);
+        workerSettings.setWebhookLimit(25);
+        workerSettings.setEmailLimit(25);
+        workerSettings.setWebhookMaxAttempts(3);
+        workerSettings.setEmailMaxAttempts(3);
+        workerSettings.setWebhookDryRun(true);
+        workerSettings.setEmailDryRun(true);
+        workerSettings.setWorkerRunRetentionEnabled(true);
+        workerSettings.setWorkerRunRetentionDays(30);
+        workerSettings.setWorkerRunExportBeforePrune(true);
+        automationWorkerSettingsRepository.saveAndFlush(workerSettings);
+
+        EmailProviderSettings emailSettings = new EmailProviderSettings();
+        emailSettings.setWorkspaceId(fixture.workspace.getId());
+        emailSettings.setProvider("smtp");
+        emailSettings.setFromEmail("no-reply@example.com");
+        emailSettings.setSmtpHost("smtp.example.com");
+        emailSettings.setSmtpPort(587);
+        emailSettings.setSmtpUsername("smtp-user");
+        emailSettings.setSmtpPasswordEncrypted("aesgcm:v1:test");
+        emailSettings.setSmtpStartTlsEnabled(true);
+        emailSettings.setSmtpAuthEnabled(true);
+        emailSettings.setActive(true);
+        emailProviderSettingsRepository.saveAndFlush(emailSettings);
+
+        entityManager.clear();
+
+        AutomationWorkerSettings reloadedWorkerSettings = automationWorkerSettingsRepository
+                .findById(fixture.workspace.getId())
+                .orElseThrow();
+        EmailProviderSettings reloadedEmailSettings = emailProviderSettingsRepository
+                .findByWorkspaceId(fixture.workspace.getId())
+                .orElseThrow();
+        assertThat(reloadedWorkerSettings.getWorkerRunRetentionEnabled()).isTrue();
+        assertThat(reloadedWorkerSettings.getWorkerRunRetentionDays()).isEqualTo(30);
+        assertThat(reloadedEmailSettings.getProvider()).isEqualTo("smtp");
+        assertThat(reloadedEmailSettings.getSmtpPasswordEncrypted()).isEqualTo("aesgcm:v1:test");
+    }
+
     private CoreFixture createCoreFixture(String keyPrefix) {
         User user = new User();
         user.setEmail(keyPrefix + "-" + UUID.randomUUID() + "@example.com");
@@ -377,6 +437,22 @@ class JpaPersistenceTest {
         status = workflowStatusRepository.saveAndFlush(status);
 
         return new CoreFixture(user, organization, workspace, project, type, workflow, status);
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                        select count(*)
+                        from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = ?
+                          and column_name = ?
+                        """,
+                Integer.class,
+                tableName,
+                columnName
+        );
+        return count != null && count > 0;
     }
 
     private Project createProject(Workspace workspace, String name, String key) {

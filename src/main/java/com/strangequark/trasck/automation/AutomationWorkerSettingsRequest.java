@@ -10,6 +10,9 @@ public record AutomationWorkerSettingsRequest(
         Integer webhookMaxAttempts,
         Integer emailMaxAttempts,
         Boolean webhookDryRun,
-        Boolean emailDryRun
+        Boolean emailDryRun,
+        Boolean workerRunRetentionEnabled,
+        Integer workerRunRetentionDays,
+        Boolean workerRunExportBeforePrune
 ) {
 }

@@ -61,6 +61,8 @@ class ConfigurationApiIntegrationTest {
         JsonNode story = createWorkItem(projectId, actorId, "story", "Configurable delivery story");
         UUID storyId = uuid(story, "/id");
         UUID storyTypeId = uuid(story, "/typeId");
+        JsonNode boardPeerStory = createWorkItem(projectId, actorId, "story", "Board peer story");
+        UUID boardPeerStoryId = uuid(boardPeerStory, "/id");
 
         JsonNode customerField = postJson("/api/v1/workspaces/" + workspaceId + "/custom-fields", objectMapper.createObjectNode()
                 .put("name", "Customer Tier")
@@ -91,6 +93,12 @@ class ConfigurationApiIntegrationTest {
         boardBody.set("filterConfig", objectMapper.createObjectNode().put("query", "project = TRK"));
         JsonNode board = postJson("/api/v1/projects/" + projectId + "/boards", boardBody);
         UUID boardId = uuid(board, "/id");
+        ObjectNode openColumnBody = objectMapper.createObjectNode()
+                .put("name", "Open")
+                .put("position", 0)
+                .put("doneColumn", false);
+        openColumnBody.set("statusIds", objectMapper.createArrayNode().add(statusId(setup, "open").toString()));
+        postJson("/api/v1/boards/" + boardId + "/columns", openColumnBody);
         ObjectNode columnBody = objectMapper.createObjectNode()
                 .put("name", "Done")
                 .put("position", 1)
@@ -99,16 +107,23 @@ class ConfigurationApiIntegrationTest {
         JsonNode column = postJson("/api/v1/boards/" + boardId + "/columns", columnBody);
         assertThat(column.at("/doneColumn").asBoolean()).isTrue();
         ObjectNode swimlaneBody = objectMapper.createObjectNode()
-                .put("name", "By assignee")
-                .put("swimlaneType", "assignee")
+                .put("name", "By reporter")
+                .put("swimlaneType", "reporter")
                 .put("position", 0)
                 .put("enabled", true);
-        swimlaneBody.set("query", objectMapper.createObjectNode());
+        swimlaneBody.set("query", objectMapper.createObjectNode().put("value", actorId.toString()));
         JsonNode swimlane = postJson("/api/v1/boards/" + boardId + "/swimlanes", swimlaneBody);
-        assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("assignee");
+        assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("reporter");
         assertThat(getJson("/api/v1/projects/" + projectId + "/boards")).hasSizeGreaterThanOrEqualTo(2);
         JsonNode boardWork = getJson("/api/v1/boards/" + boardId + "/work-items");
-        assertThat(boardWork.at("/columns")).hasSize(1);
+        assertThat(boardWork.at("/columns")).hasSize(2);
+        assertThat(boardWork.at("/swimlanes/0/columns/0/workItems")).hasSize(2);
+        JsonNode boardRankedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/rank", objectMapper.createObjectNode()
+                .put("previousWorkItemId", boardPeerStoryId.toString()));
+        assertThat(boardRankedStory.at("/rank").asText()).isGreaterThan(boardPeerStory.at("/rank").asText());
+        JsonNode boardTransitionedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
+                .put("transitionKey", "open_to_ready"));
+        assertThat(uuid(boardTransitionedStory, "/statusId")).isEqualTo(statusId(setup, "ready"));
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
                 .put("name", "Release 1")
@@ -165,6 +180,20 @@ class ConfigurationApiIntegrationTest {
         JsonNode webhook = postJson("/api/v1/workspaces/" + workspaceId + "/webhooks", webhookBody);
         UUID webhookId = uuid(webhook, "/id");
         assertThat(webhook.at("/secretConfigured").asBoolean()).isTrue();
+
+        JsonNode emailProviderSettings = putJson("/api/v1/workspaces/" + workspaceId + "/email-provider-settings", objectMapper.createObjectNode()
+                .put("provider", "smtp")
+                .put("fromEmail", "automation@example.com")
+                .put("smtpHost", "smtp.example.com")
+                .put("smtpPort", 587)
+                .put("smtpUsername", "automation-user")
+                .put("smtpPassword", "automation-password")
+                .put("smtpStartTlsEnabled", true)
+                .put("smtpAuthEnabled", true)
+                .put("active", true));
+        assertThat(emailProviderSettings.at("/provider").asText()).isEqualTo("smtp");
+        assertThat(emailProviderSettings.at("/smtpPasswordConfigured").asBoolean()).isTrue();
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/email-provider-settings").at("/smtpPassword").isMissingNode()).isTrue();
 
         ObjectNode ruleBody = objectMapper.createObjectNode()
                 .put("name", "Notify and webhook")
@@ -228,6 +257,7 @@ class ConfigurationApiIntegrationTest {
         assertThat(webhookWorkerRun.at("/delivered").asInt()).isEqualTo(1);
         JsonNode emails = getJson("/api/v1/workspaces/" + workspaceId + "/email-deliveries");
         assertThat(emails).hasSize(1);
+        assertThat(emails.at("/0/provider").asText()).isEqualTo("smtp");
         UUID emailDeliveryId = UUID.fromString(emails.at("/0/id").asText());
         assertThat(postJson("/api/v1/email-deliveries/" + emailDeliveryId + "/cancel", objectMapper.createObjectNode()).at("/status").asText()).isEqualTo("cancelled");
         assertThat(postJson("/api/v1/email-deliveries/" + emailDeliveryId + "/retry", objectMapper.createObjectNode()).at("/status").asText()).isEqualTo("queued");
@@ -245,8 +275,17 @@ class ConfigurationApiIntegrationTest {
                 .put("webhookLimit", 5)
                 .put("emailLimit", 5)
                 .put("webhookDryRun", true)
-                .put("emailDryRun", true));
+                .put("emailDryRun", true)
+                .put("workerRunRetentionEnabled", true)
+                .put("workerRunRetentionDays", 1)
+                .put("workerRunExportBeforePrune", true));
         assertThat(workerSettings.at("/automationJobsEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/workerRunRetentionEnabled").asBoolean()).isTrue();
+        JsonNode workerRunExport = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/export?limit=5", objectMapper.createObjectNode());
+        assertThat(workerRunExport.at("/retentionEnabled").asBoolean()).isTrue();
+        assertThat(workerRunExport.at("/exportJobId").isMissingNode() || workerRunExport.at("/exportJobId").isNull()).isFalse();
+        JsonNode workerRunPrune = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/prune", objectMapper.createObjectNode());
+        assertThat(workerRunPrune.at("/runsPruned").asInt()).isEqualTo(0);
 
         JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
                 .put("provider", "jira"));
@@ -260,7 +299,7 @@ class ConfigurationApiIntegrationTest {
         assertThat(importRecord.at("/sourceId").asText()).isEqualTo("JIRA-1");
         ObjectNode parseBody = objectMapper.createObjectNode()
                 .put("content", """
-                        {"issues":[{"key":"JIRA-2","fields":{"summary":"  Parsed story  ","issuetype":{"name":"Story"},"status":{"name":"To Do"},"security":"Public"}}]}
+                        {"issues":[{"key":"JIRA-2","fields":{"summary":"  Imported: Parsed    story  ","issuetype":{"name":"Story"},"status":{"name":"To Do"},"security":"Public"}}]}
                         """);
         JsonNode parsedImport = postJson("/api/v1/import-jobs/" + importJobId + "/parse", parseBody);
         assertThat(parsedImport.at("/recordsParsed").asInt()).isEqualTo(1);
@@ -280,7 +319,13 @@ class ConfigurationApiIntegrationTest {
         mappingBody.set("defaults", objectMapper.createObjectNode()
                 .put("descriptionMarkdown", "Imported Jira issue"));
         ObjectNode transformationConfig = objectMapper.createObjectNode();
-        transformationConfig.set("title", objectMapper.createArrayNode().add("trim"));
+        transformationConfig.set("title", objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("function", "trim"))
+                .add(objectMapper.createObjectNode()
+                        .put("function", "replace")
+                        .put("target", "Imported: ")
+                        .put("replacement", ""))
+                .add(objectMapper.createObjectNode().put("function", "collapse_whitespace")));
         mappingBody.set("transformationConfig", transformationConfig);
         JsonNode mapping = postJson("/api/v1/workspaces/" + workspaceId + "/import-mapping-templates", mappingBody);
         postJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/type-translations", objectMapper.createObjectNode()
@@ -373,6 +418,16 @@ class ConfigurationApiIntegrationTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder);
+        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).isBetween(200, 299);
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode putJson(String path, JsonNode body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .method("PUT", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
         authorize(builder);
         HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isBetween(200, 299);
