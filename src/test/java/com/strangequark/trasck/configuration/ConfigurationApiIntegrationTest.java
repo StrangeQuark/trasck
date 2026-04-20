@@ -301,9 +301,11 @@ class ConfigurationApiIntegrationTest {
                 .put("automationJobsEnabled", true)
                 .put("webhookDeliveriesEnabled", true)
                 .put("emailDeliveriesEnabled", true)
+                .put("importReviewExportsEnabled", true)
                 .put("automationLimit", 5)
                 .put("webhookLimit", 5)
                 .put("emailLimit", 5)
+                .put("importReviewExportLimit", 5)
                 .put("webhookDryRun", true)
                 .put("emailDryRun", true)
                 .put("workerRunRetentionEnabled", true)
@@ -312,11 +314,23 @@ class ConfigurationApiIntegrationTest {
                 .put("workerRunPruningAutomaticEnabled", true)
                 .put("workerRunPruningIntervalMinutes", 720)
                 .put("workerRunPruningWindowStart", "01:00:00")
-                .put("workerRunPruningWindowEnd", "04:00:00"));
+                .put("workerRunPruningWindowEnd", "04:00:00")
+                .put("agentDispatchAttemptRetentionEnabled", true)
+                .put("agentDispatchAttemptRetentionDays", 30)
+                .put("agentDispatchAttemptExportBeforePrune", true)
+                .put("agentDispatchAttemptPruningAutomaticEnabled", true)
+                .put("agentDispatchAttemptPruningIntervalMinutes", 720)
+                .put("agentDispatchAttemptPruningWindowStart", "01:00:00")
+                .put("agentDispatchAttemptPruningWindowEnd", "04:00:00"));
         assertThat(workerSettings.at("/automationJobsEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/importReviewExportsEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/importReviewExportLimit").asInt()).isEqualTo(5);
         assertThat(workerSettings.at("/workerRunRetentionEnabled").asBoolean()).isTrue();
         assertThat(workerSettings.at("/workerRunPruningAutomaticEnabled").asBoolean()).isTrue();
         assertThat(workerSettings.at("/workerRunPruningIntervalMinutes").asInt()).isEqualTo(720);
+        assertThat(workerSettings.at("/agentDispatchAttemptRetentionEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/agentDispatchAttemptPruningAutomaticEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/agentDispatchAttemptPruningIntervalMinutes").asInt()).isEqualTo(720);
         JsonNode workerRunExport = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/export?limit=5", objectMapper.createObjectNode());
         assertThat(workerRunExport.at("/retentionEnabled").asBoolean()).isTrue();
         assertThat(workerRunExport.at("/exportJobId").isMissingNode() || workerRunExport.at("/exportJobId").isNull()).isFalse();

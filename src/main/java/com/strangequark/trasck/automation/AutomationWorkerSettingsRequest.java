@@ -7,10 +7,12 @@ public record AutomationWorkerSettingsRequest(
         Boolean webhookDeliveriesEnabled,
         Boolean emailDeliveriesEnabled,
         Boolean importConflictResolutionEnabled,
+        Boolean importReviewExportsEnabled,
         Integer automationLimit,
         Integer webhookLimit,
         Integer emailLimit,
         Integer importConflictResolutionLimit,
+        Integer importReviewExportLimit,
         Integer webhookMaxAttempts,
         Integer emailMaxAttempts,
         Boolean webhookDryRun,
@@ -21,6 +23,13 @@ public record AutomationWorkerSettingsRequest(
         Boolean workerRunPruningAutomaticEnabled,
         Integer workerRunPruningIntervalMinutes,
         LocalTime workerRunPruningWindowStart,
-        LocalTime workerRunPruningWindowEnd
+        LocalTime workerRunPruningWindowEnd,
+        Boolean agentDispatchAttemptRetentionEnabled,
+        Integer agentDispatchAttemptRetentionDays,
+        Boolean agentDispatchAttemptExportBeforePrune,
+        Boolean agentDispatchAttemptPruningAutomaticEnabled,
+        Integer agentDispatchAttemptPruningIntervalMinutes,
+        LocalTime agentDispatchAttemptPruningWindowStart,
+        LocalTime agentDispatchAttemptPruningWindowEnd
 ) {
 }

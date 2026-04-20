@@ -21,6 +21,8 @@ import com.strangequark.trasck.activity.storage.AttachmentUpload;
 import com.strangequark.trasck.activity.storage.StoredAttachment;
 import com.strangequark.trasck.api.CursorPageResponse;
 import com.strangequark.trasck.api.PageCursorCodec;
+import com.strangequark.trasck.automation.AutomationWorkerSettings;
+import com.strangequark.trasck.automation.AutomationWorkerSettingsRepository;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.event.EventConsumerConfig;
 import com.strangequark.trasck.event.EventConsumerConfigRepository;
@@ -49,6 +51,9 @@ import com.strangequark.trasck.workflow.WorkflowTransitionAction;
 import com.strangequark.trasck.workflow.WorkflowTransitionActionRepository;
 import com.strangequark.trasck.workflow.WorkflowTransitionRepository;
 import java.time.ZoneOffset;
+import java.time.DateTimeException;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -85,6 +90,7 @@ public class AgentService {
     private final AgentArtifactRepository agentArtifactRepository;
     private final AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
     private final AgentDispatchAttemptRepository agentDispatchAttemptRepository;
+    private final AutomationWorkerSettingsRepository automationWorkerSettingsRepository;
     private final ExportJobRepository exportJobRepository;
     private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
     private final AttachmentRepository attachmentRepository;
@@ -123,6 +129,7 @@ public class AgentService {
             AgentArtifactRepository agentArtifactRepository,
             AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository,
             AgentDispatchAttemptRepository agentDispatchAttemptRepository,
+            AutomationWorkerSettingsRepository automationWorkerSettingsRepository,
             ExportJobRepository exportJobRepository,
             AttachmentStorageConfigRepository attachmentStorageConfigRepository,
             AttachmentRepository attachmentRepository,
@@ -160,6 +167,7 @@ public class AgentService {
         this.agentArtifactRepository = agentArtifactRepository;
         this.agentTaskRepositoryLinkRepository = agentTaskRepositoryLinkRepository;
         this.agentDispatchAttemptRepository = agentDispatchAttemptRepository;
+        this.automationWorkerSettingsRepository = automationWorkerSettingsRepository;
         this.exportJobRepository = exportJobRepository;
         this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
         this.attachmentRepository = attachmentRepository;
@@ -283,12 +291,48 @@ public class AgentService {
 
     @Transactional
     public AgentDispatchAttemptRetentionResponse pruneDispatchAttempts(UUID workspaceId, AgentDispatchAttemptRetentionRequest request) {
-        AgentDispatchAttemptRetentionRequest retentionRequest = request == null
-                ? new AgentDispatchAttemptRetentionRequest(null, null, null, null, null, null, null, null, null, null)
-                : request;
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        return pruneDispatchAttemptsInternal(workspaceId, actorId, request);
+    }
+
+    @Transactional
+    public AgentDispatchAttemptRetentionResponse pruneDispatchAttemptsAutomatically(UUID workspaceId) {
+        Workspace workspace = activeWorkspace(workspaceId);
+        AutomationWorkerSettings settings = automationWorkerSettingsRepository.findById(workspaceId)
+                .orElseThrow(() -> badRequest("Automation worker settings not found"));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        if (!shouldRunAutomaticDispatchAttemptPruning(workspace, settings, now)) {
+            return null;
+        }
+        settings.setAgentDispatchAttemptPruningLastStartedAt(now);
+        automationWorkerSettingsRepository.save(settings);
+        try {
+            AgentDispatchAttemptRetentionRequest request = new AgentDispatchAttemptRetentionRequest(
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    settings.getAgentDispatchAttemptRetentionDays(),
+                    settings.getAgentDispatchAttemptExportBeforePrune()
+            );
+            return pruneDispatchAttemptsInternal(workspaceId, null, request);
+        } finally {
+            settings.setAgentDispatchAttemptPruningLastFinishedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            automationWorkerSettingsRepository.save(settings);
+        }
+    }
+
+    private AgentDispatchAttemptRetentionResponse pruneDispatchAttemptsInternal(UUID workspaceId, UUID actorId, AgentDispatchAttemptRetentionRequest request) {
+        AgentDispatchAttemptRetentionRequest retentionRequest = request == null
+                ? new AgentDispatchAttemptRetentionRequest(null, null, null, null, null, null, null, null, null, null)
+                : request;
+        activeWorkspace(workspaceId);
         AgentDispatchAttemptFilter filter = dispatchAttemptFilter(
                 retentionRequest.agentTaskId(),
                 retentionRequest.providerId(),
@@ -353,8 +397,10 @@ public class AgentService {
                 .put("workspaceId", workspaceId.toString())
                 .put("cutoff", cutoff.toString())
                 .put("attemptsEligible", eligible)
-                .put("attemptsPruned", pruned)
-                .put("actorUserId", actorId.toString());
+                .put("attemptsPruned", pruned);
+        if (actorId != null) {
+            payload.put("actorUserId", actorId.toString());
+        }
         if (export != null) {
             payload.put("exportJobId", export.id().toString());
             payload.put("fileAttachmentId", export.fileAttachmentId().toString());
@@ -593,6 +639,8 @@ public class AgentService {
         permissionService.requireWorkspacePermission(actorId, provider.getWorkspaceId(), "agent.provider.credential.manage");
         String credentialType = normalizeKey(requiredText(createRequest.credentialType(), "credentialType"));
         JsonNode metadata = credentialMetadata(credentialType, createRequest.metadata());
+        String secret = requiredText(createRequest.secret(), "secret");
+        validateProviderCredential(provider, credentialType, secret, metadata);
         String workerId = "worker_token".equals(credentialType) ? workerIdFromMetadata(metadata) : null;
         agentProviderCredentialRepository.findByProviderIdAndCredentialTypeAndActiveTrue(providerId, credentialType).stream()
                 .filter(existing -> workerId == null || workerId.equals(workerIdFromMetadata(existing.getMetadata())))
@@ -603,7 +651,7 @@ public class AgentService {
         AgentProviderCredential credential = new AgentProviderCredential();
         credential.setProviderId(providerId);
         credential.setCredentialType(credentialType);
-        credential.setEncryptedSecret(secretCipherService.encrypt(requiredText(createRequest.secret(), "secret")));
+        credential.setEncryptedSecret(secretCipherService.encrypt(secret));
         credential.setMetadata(metadata);
         credential.setActive(true);
         credential.setExpiresAt(createRequest.expiresAt());
@@ -1299,8 +1347,10 @@ public class AgentService {
                     .put("workspaceId", workspaceId.toString())
                     .put("exportJobId", savedExportJob.getId().toString())
                     .put("fileAttachmentId", savedAttachment.getId().toString())
-                    .put("attemptsIncluded", attempts.size())
-                    .put("actorUserId", actorId.toString());
+                    .put("attemptsIncluded", attempts.size());
+            if (actorId != null) {
+                payload.put("actorUserId", actorId.toString());
+            }
             if (retentionCutoff != null) {
                 payload.put("retentionCutoff", retentionCutoff.toString());
             }
@@ -1802,6 +1852,58 @@ public class AgentService {
         return normalized;
     }
 
+    private void validateProviderCredential(AgentProvider provider, String credentialType, String secret, JsonNode metadata) {
+        String providerType = provider.getProviderType();
+        if ("codex".equals(providerType)) {
+            validateCodexCredential(credentialType, secret, metadata);
+            return;
+        }
+        if ("claude_code".equals(providerType)) {
+            validateClaudeCodeCredential(credentialType, secret, metadata);
+        }
+    }
+
+    private void validateCodexCredential(String credentialType, String secret, JsonNode metadata) {
+        if (Set.of("callback_signing", "worker_token").contains(credentialType)) {
+            return;
+        }
+        if (!Set.of("codex_api_key", "codex_cli_token").contains(credentialType)) {
+            throw badRequest("Codex credentials must use credentialType codex_api_key or codex_cli_token");
+        }
+        validateExternalAgentSecret(credentialType, secret);
+        validateCredentialMetadataAuthScheme(metadata);
+    }
+
+    private void validateClaudeCodeCredential(String credentialType, String secret, JsonNode metadata) {
+        if (Set.of("callback_signing", "worker_token").contains(credentialType)) {
+            return;
+        }
+        if (!Set.of("anthropic_api_key", "claude_cli_token").contains(credentialType)) {
+            throw badRequest("Claude Code credentials must use credentialType anthropic_api_key or claude_cli_token");
+        }
+        validateExternalAgentSecret(credentialType, secret);
+        validateCredentialMetadataAuthScheme(metadata);
+    }
+
+    private void validateExternalAgentSecret(String credentialType, String secret) {
+        if (secret.length() < 16) {
+            throw badRequest(credentialType + " secret must be at least 16 characters");
+        }
+        if (secret.chars().anyMatch(Character::isWhitespace)) {
+            throw badRequest(credentialType + " secret must not contain whitespace");
+        }
+    }
+
+    private void validateCredentialMetadataAuthScheme(JsonNode metadata) {
+        if (metadata == null || !metadata.hasNonNull("authScheme")) {
+            return;
+        }
+        String authScheme = normalizeKey(metadata.path("authScheme").asText());
+        if (!Set.of("bearer", "api_key", "cli_token").contains(authScheme)) {
+            throw badRequest("metadata.authScheme must be bearer, api_key, or cli_token");
+        }
+    }
+
     private String workerIdFromMetadata(JsonNode metadata) {
         if (metadata == null || !metadata.isObject() || !hasText(metadata.path("workerId").asText(null))) {
             return null;
@@ -1998,6 +2100,64 @@ public class AgentService {
             throw badRequest("action must be dispatched, retried, or cancelled");
         }
         return "canceled".equals(normalized) ? "cancelled" : normalized;
+    }
+
+    private boolean shouldRunAutomaticDispatchAttemptPruning(
+            Workspace workspace,
+            AutomationWorkerSettings settings,
+            OffsetDateTime now
+    ) {
+        if (!Boolean.TRUE.equals(settings.getAgentDispatchAttemptPruningAutomaticEnabled())
+                || !Boolean.TRUE.equals(settings.getAgentDispatchAttemptRetentionEnabled())) {
+            return false;
+        }
+        int intervalMinutes = normalizeDispatchAttemptPruningIntervalMinutes(settings.getAgentDispatchAttemptPruningIntervalMinutes());
+        OffsetDateTime lastStartedAt = settings.getAgentDispatchAttemptPruningLastStartedAt();
+        if (lastStartedAt != null && lastStartedAt.plusMinutes(intervalMinutes).isAfter(now)) {
+            return false;
+        }
+        return withinDispatchAttemptPruningWindow(workspace, settings, now);
+    }
+
+    private boolean withinDispatchAttemptPruningWindow(Workspace workspace, AutomationWorkerSettings settings, OffsetDateTime now) {
+        LocalTime start = settings.getAgentDispatchAttemptPruningWindowStart();
+        LocalTime end = settings.getAgentDispatchAttemptPruningWindowEnd();
+        if (start == null && end == null) {
+            return true;
+        }
+        LocalTime localNow = now.atZoneSameInstant(workspaceZone(workspace)).toLocalTime();
+        if (start != null && end != null) {
+            if (start.equals(end)) {
+                return true;
+            }
+            if (start.isBefore(end)) {
+                return !localNow.isBefore(start) && !localNow.isAfter(end);
+            }
+            return !localNow.isBefore(start) || !localNow.isAfter(end);
+        }
+        if (start != null) {
+            return !localNow.isBefore(start);
+        }
+        return !localNow.isAfter(end);
+    }
+
+    private ZoneId workspaceZone(Workspace workspace) {
+        if (workspace != null && hasText(workspace.getTimezone())) {
+            try {
+                return ZoneId.of(workspace.getTimezone());
+            } catch (DateTimeException ignored) {
+                return ZoneOffset.UTC;
+            }
+        }
+        return ZoneOffset.UTC;
+    }
+
+    private int normalizeDispatchAttemptPruningIntervalMinutes(Integer minutes) {
+        int value = minutes == null ? 1440 : minutes;
+        if (value < 5 || value > 10080) {
+            throw badRequest("agentDispatchAttemptPruningIntervalMinutes must be between 5 and 10080");
+        }
+        return value;
     }
 
     private int normalizeListLimit(Integer limit, int defaultLimit, int maxLimit) {

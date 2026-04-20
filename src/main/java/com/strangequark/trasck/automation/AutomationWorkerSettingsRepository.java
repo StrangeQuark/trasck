@@ -14,6 +14,7 @@ public interface AutomationWorkerSettingsRepository extends JpaRepository<Automa
                or settings.webhookDeliveriesEnabled = true
                or settings.emailDeliveriesEnabled = true
                or settings.importConflictResolutionEnabled = true
+               or settings.importReviewExportsEnabled = true
             """)
     List<AutomationWorkerSettings> findEnabledSettings();
 
@@ -23,4 +24,11 @@ public interface AutomationWorkerSettingsRepository extends JpaRepository<Automa
             where settings.workerRunPruningAutomaticEnabled = true
             """)
     List<AutomationWorkerSettings> findAutomaticPruningSettings();
+
+    @Query("""
+            select settings
+            from AutomationWorkerSettings settings
+            where settings.agentDispatchAttemptPruningAutomaticEnabled = true
+            """)
+    List<AutomationWorkerSettings> findAutomaticAgentDispatchAttemptPruningSettings();
 }

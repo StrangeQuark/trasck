@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.automation.AutomationWorkerScheduler;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -46,6 +47,9 @@ class ImportSampleFixtureIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private AutomationWorkerScheduler automationWorkerScheduler;
 
     private String accessToken;
 
@@ -88,6 +92,8 @@ class ImportSampleFixtureIntegrationTest {
         JsonNode workerSettings = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings");
         assertThat(workerSettings.at("/importConflictResolutionEnabled").asBoolean()).isFalse();
         assertThat(workerSettings.at("/importConflictResolutionLimit").asInt()).isEqualTo(10);
+        assertThat(workerSettings.at("/importReviewExportsEnabled").asBoolean()).isFalse();
+        assertThat(workerSettings.at("/importReviewExportLimit").asInt()).isEqualTo(10);
         JsonNode updatedWorkerSettings = patch("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings", objectMapper.createObjectNode()
                 .put("importConflictResolutionEnabled", true)
                 .put("importConflictResolutionLimit", 5));
@@ -331,6 +337,20 @@ class ImportSampleFixtureIntegrationTest {
         UUID processedReviewExportJobId = uuid(processedReviewExports.at("/jobs/0"), "/id");
         HttpResponse<String> downloadedExportJobsCsv = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + processedReviewExportJobId + "/download");
         assertThat(downloadedExportJobsCsv.body()).contains("Status,Filename,Size,Finished,Checksum", "import-job-version-diffs");
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs?workerType=import_review_export")).isNotEmpty();
+
+        patch("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings", objectMapper.createObjectNode()
+                .put("importReviewExportsEnabled", true)
+                .put("importReviewExportLimit", 5));
+        JsonNode queuedScheduledExport = postJson("/api/v1/workspaces/" + workspaceId + "/import-review/export-jobs", objectMapper.createObjectNode()
+                .put("tableType", "export_jobs")
+                .put("exportType", "import_export_jobs")
+                .put("filterColumn", "status")
+                .put("filter", "completed"));
+        assertThat(queuedScheduledExport.at("/status").asText()).isEqualTo("queued");
+        automationWorkerScheduler.runEnabledWorkspaceWorkers();
+        JsonNode scheduledReviewRuns = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs?workerType=import_review_export");
+        assertThat(scheduledReviewRuns.at("/0/triggerType").asText()).isEqualTo("scheduled");
 
         JsonNode conflictRun = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
                 .put("mappingTemplateId", mapping.at("/id").asText())

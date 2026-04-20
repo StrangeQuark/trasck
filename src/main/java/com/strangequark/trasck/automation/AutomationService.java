@@ -1218,10 +1218,12 @@ public class AutomationService {
             settings.setWebhookDeliveriesEnabled(false);
             settings.setEmailDeliveriesEnabled(false);
             settings.setImportConflictResolutionEnabled(false);
+            settings.setImportReviewExportsEnabled(false);
             settings.setAutomationLimit(25);
             settings.setWebhookLimit(25);
             settings.setEmailLimit(25);
             settings.setImportConflictResolutionLimit(10);
+            settings.setImportReviewExportLimit(10);
             settings.setWebhookMaxAttempts(3);
             settings.setEmailMaxAttempts(3);
             settings.setWebhookDryRun(true);
@@ -1231,6 +1233,11 @@ public class AutomationService {
             settings.setWorkerRunExportBeforePrune(true);
             settings.setWorkerRunPruningAutomaticEnabled(false);
             settings.setWorkerRunPruningIntervalMinutes(1440);
+            settings.setAgentDispatchAttemptRetentionEnabled(false);
+            settings.setAgentDispatchAttemptRetentionDays(30);
+            settings.setAgentDispatchAttemptExportBeforePrune(true);
+            settings.setAgentDispatchAttemptPruningAutomaticEnabled(false);
+            settings.setAgentDispatchAttemptPruningIntervalMinutes(1440);
             return settings;
         });
     }
@@ -1507,6 +1514,9 @@ public class AutomationService {
         if (request.importConflictResolutionEnabled() != null) {
             settings.setImportConflictResolutionEnabled(request.importConflictResolutionEnabled());
         }
+        if (request.importReviewExportsEnabled() != null) {
+            settings.setImportReviewExportsEnabled(request.importReviewExportsEnabled());
+        }
         if (request.automationLimit() != null) {
             settings.setAutomationLimit(normalizeWorkerLimit(request.automationLimit()));
         }
@@ -1518,6 +1528,9 @@ public class AutomationService {
         }
         if (request.importConflictResolutionLimit() != null) {
             settings.setImportConflictResolutionLimit(normalizeWorkerLimit(request.importConflictResolutionLimit()));
+        }
+        if (request.importReviewExportLimit() != null) {
+            settings.setImportReviewExportLimit(normalizeImportReviewExportLimit(request.importReviewExportLimit()));
         }
         if (request.webhookMaxAttempts() != null) {
             settings.setWebhookMaxAttempts(normalizeMaxAttempts(request.webhookMaxAttempts()));
@@ -1555,11 +1568,35 @@ public class AutomationService {
         if (request.workerRunPruningWindowEnd() != null) {
             settings.setWorkerRunPruningWindowEnd(request.workerRunPruningWindowEnd());
         }
+        if (request.agentDispatchAttemptRetentionEnabled() != null) {
+            settings.setAgentDispatchAttemptRetentionEnabled(request.agentDispatchAttemptRetentionEnabled());
+        }
+        if (request.agentDispatchAttemptRetentionDays() != null) {
+            settings.setAgentDispatchAttemptRetentionDays(normalizeAgentDispatchAttemptRetentionDays(request.agentDispatchAttemptRetentionDays()));
+        }
+        if (request.agentDispatchAttemptExportBeforePrune() != null) {
+            settings.setAgentDispatchAttemptExportBeforePrune(request.agentDispatchAttemptExportBeforePrune());
+        }
+        if (request.agentDispatchAttemptPruningAutomaticEnabled() != null) {
+            settings.setAgentDispatchAttemptPruningAutomaticEnabled(request.agentDispatchAttemptPruningAutomaticEnabled());
+        }
+        if (request.agentDispatchAttemptPruningIntervalMinutes() != null) {
+            settings.setAgentDispatchAttemptPruningIntervalMinutes(normalizeAgentDispatchAttemptPruningIntervalMinutes(request.agentDispatchAttemptPruningIntervalMinutes()));
+        }
+        if (request.agentDispatchAttemptPruningWindowStart() != null) {
+            settings.setAgentDispatchAttemptPruningWindowStart(request.agentDispatchAttemptPruningWindowStart());
+        }
+        if (request.agentDispatchAttemptPruningWindowEnd() != null) {
+            settings.setAgentDispatchAttemptPruningWindowEnd(request.agentDispatchAttemptPruningWindowEnd());
+        }
         if (Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled()) && settings.getWorkerRunRetentionDays() == null) {
             throw badRequest("workerRunRetentionDays is required when worker run retention is enabled");
         }
         if (Boolean.TRUE.equals(settings.getWorkerRunPruningAutomaticEnabled()) && !Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled())) {
             throw badRequest("workerRunRetentionEnabled is required when automatic worker run pruning is enabled");
+        }
+        if (Boolean.TRUE.equals(settings.getAgentDispatchAttemptPruningAutomaticEnabled()) && !Boolean.TRUE.equals(settings.getAgentDispatchAttemptRetentionEnabled())) {
+            throw badRequest("agentDispatchAttemptRetentionEnabled is required when automatic agent dispatch attempt pruning is enabled");
         }
         if (settings.getWorkerRunExportBeforePrune() == null) {
             settings.setWorkerRunExportBeforePrune(true);
@@ -1576,12 +1613,57 @@ public class AutomationService {
         if (settings.getImportConflictResolutionLimit() == null) {
             settings.setImportConflictResolutionLimit(10);
         }
+        if (settings.getImportReviewExportsEnabled() == null) {
+            settings.setImportReviewExportsEnabled(false);
+        }
+        if (settings.getImportReviewExportLimit() == null) {
+            settings.setImportReviewExportLimit(10);
+        }
+        if (settings.getAgentDispatchAttemptRetentionEnabled() == null) {
+            settings.setAgentDispatchAttemptRetentionEnabled(false);
+        }
+        if (settings.getAgentDispatchAttemptRetentionDays() == null) {
+            settings.setAgentDispatchAttemptRetentionDays(30);
+        }
+        if (settings.getAgentDispatchAttemptExportBeforePrune() == null) {
+            settings.setAgentDispatchAttemptExportBeforePrune(true);
+        }
+        if (settings.getAgentDispatchAttemptPruningAutomaticEnabled() == null) {
+            settings.setAgentDispatchAttemptPruningAutomaticEnabled(false);
+        }
+        if (settings.getAgentDispatchAttemptPruningIntervalMinutes() == null) {
+            settings.setAgentDispatchAttemptPruningIntervalMinutes(1440);
+        }
+    }
+
+    private int normalizeImportReviewExportLimit(Integer limit) {
+        int value = limit == null ? 10 : limit;
+        if (value < 1 || value > 50) {
+            throw badRequest("importReviewExportLimit must be between 1 and 50");
+        }
+        return value;
+    }
+
+    private int normalizeAgentDispatchAttemptRetentionDays(Integer days) {
+        int value = days == null ? 30 : days;
+        if (value < 1 || value > 3650) {
+            throw badRequest("agentDispatchAttemptRetentionDays must be between 1 and 3650");
+        }
+        return value;
     }
 
     private int normalizePruningIntervalMinutes(Integer minutes) {
         int value = minutes == null ? 1440 : minutes;
         if (value < 5 || value > 10080) {
             throw badRequest("workerRunPruningIntervalMinutes must be between 5 and 10080");
+        }
+        return value;
+    }
+
+    private int normalizeAgentDispatchAttemptPruningIntervalMinutes(Integer minutes) {
+        int value = minutes == null ? 1440 : minutes;
+        if (value < 5 || value > 10080) {
+            throw badRequest("agentDispatchAttemptPruningIntervalMinutes must be between 5 and 10080");
         }
         return value;
     }
@@ -1778,8 +1860,8 @@ public class AutomationService {
             return null;
         }
         String normalized = workerType.trim().toLowerCase(Locale.ROOT).replace('-', '_');
-        if (!List.of("automation", "webhook", "email", "import_conflict_resolution").contains(normalized)) {
-            throw badRequest("workerType must be automation, webhook, email, or import_conflict_resolution");
+        if (!List.of("automation", "webhook", "email", "import_conflict_resolution", "import_review_export").contains(normalized)) {
+            throw badRequest("workerType must be automation, webhook, email, import_conflict_resolution, or import_review_export");
         }
         return normalized;
     }
