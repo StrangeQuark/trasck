@@ -183,6 +183,7 @@ public class ReportingService {
         ProjectReportSummaryResponse.EstimateTimeMetricsResponse estimateAndTime = estimateAndTimeMetrics(scoped);
         ProjectReportSummaryResponse.AgingMetricsResponse aging = agingMetrics(scoped);
         ProjectReportSummaryResponse.CycleTimeMetricsResponse cycleTime = cycleTimeMetrics(scoped);
+        ProjectReportSummaryResponse.ImportCompletionMetricsResponse importCompletions = importCompletionMetrics(scoped);
         List<ProjectReportSummaryResponse.DimensionCountResponse> byStatus = dimensionCounts(scoped, "status");
         List<ProjectReportSummaryResponse.DimensionCountResponse> byType = dimensionCounts(scoped, "type");
         List<ProjectReportSummaryResponse.DimensionCountResponse> byPriority = dimensionCounts(scoped, "priority");
@@ -193,6 +194,7 @@ public class ReportingService {
                 new ProjectReportSummaryResponse.ReportWidgetResponse("estimate_time_summary", estimateAndTime),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("aging_wip", aging),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("cycle_time_inputs", cycleTime),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("import_completion_summary", importCompletions),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_status", byStatus),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_type", byType),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_priority", byPriority)
@@ -214,6 +216,7 @@ public class ReportingService {
                 estimateAndTime,
                 aging,
                 cycleTime,
+                importCompletions,
                 byStatus,
                 byType,
                 byPriority,
@@ -1098,6 +1101,7 @@ public class ReportingService {
         ProjectReportSummaryResponse.ThroughputMetricsResponse throughput = throughputMetrics(scoped);
         ProjectReportSummaryResponse.EstimateTimeMetricsResponse estimateAndTime = estimateAndTimeMetrics(scoped);
         ProjectReportSummaryResponse.CycleTimeMetricsResponse cycleTime = cycleTimeMetrics(scoped);
+        ProjectReportSummaryResponse.ImportCompletionMetricsResponse importCompletions = importCompletionMetrics(scoped);
         List<ProjectReportSummaryResponse.DimensionCountResponse> byProject = portfolioProjectCounts(scoped);
         List<ProjectReportSummaryResponse.DimensionCountResponse> byTeam = portfolioTeamCounts(scoped);
         List<ProjectReportSummaryResponse.DimensionCountResponse> byType = dimensionCounts(scoped, "type");
@@ -1106,6 +1110,7 @@ public class ReportingService {
                 new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_throughput", throughput),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_estimate_time_summary", estimateAndTime),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_cycle_time_inputs", cycleTime),
+                new ProjectReportSummaryResponse.ReportWidgetResponse("portfolio_import_completion_summary", importCompletions),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_project", byProject),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_team", byTeam),
                 new ProjectReportSummaryResponse.ReportWidgetResponse("work_by_type", byType)
@@ -1119,6 +1124,7 @@ public class ReportingService {
                 throughput,
                 estimateAndTime,
                 cycleTime,
+                importCompletions,
                 byProject,
                 byTeam,
                 byType,
@@ -1319,6 +1325,30 @@ public class ReportingService {
                 """, query.params(), (rs, rowNum) -> new ProjectReportSummaryResponse.CycleTimeMetricsResponse(
                 rs.getLong("completed_work_items"),
                 rs.getLong("average_lead_time_minutes")
+        ));
+    }
+
+    private ProjectReportSummaryResponse.ImportCompletionMetricsResponse importCompletionMetrics(ScopedReportQuery query) {
+        return namedJdbcTemplate.queryForObject(query.cte() + """
+                , scoped_import_jobs as (
+                    select distinct ij.*
+                    from import_jobs ij
+                    join import_job_records ir on ir.import_job_id = ij.id
+                    join scoped_work_items wi on wi.id = ir.target_id
+                    where ij.status = 'completed'
+                      and ij.finished_at >= :from
+                      and ij.finished_at < :to
+                )
+                select count(*) as completed_jobs,
+                       count(*) filter (where open_conflict_completion_accepted = true) as completed_with_open_conflicts,
+                       coalesce(sum(open_conflict_completion_count) filter (where open_conflict_completion_accepted = true), 0) as accepted_open_conflict_count,
+                       max(open_conflict_completed_at) as last_open_conflict_completed_at
+                from scoped_import_jobs
+                """, query.params(), (rs, rowNum) -> new ProjectReportSummaryResponse.ImportCompletionMetricsResponse(
+                rs.getLong("completed_jobs"),
+                rs.getLong("completed_with_open_conflicts"),
+                rs.getLong("accepted_open_conflict_count"),
+                rs.getObject("last_open_conflict_completed_at", OffsetDateTime.class)
         ));
     }
 

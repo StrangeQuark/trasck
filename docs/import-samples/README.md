@@ -1,6 +1,6 @@
 # Import Samples
 
-These files are representative inputs for manual import testing. They are intentionally small enough to paste into the import parser UI while still exercising transforms, value lookups, type/status translations, conflict handling, reruns, and guarded completion.
+These files are representative inputs for manual import testing and executable smoke coverage. They are intentionally small enough to paste into the import parser UI while still exercising transforms, value lookups, type/status translations, conflict handling, queued filtered conflict-resolution jobs, job-level diff export, exact/modified reruns, and guarded completion reporting.
 
 ## Files
 
@@ -70,3 +70,17 @@ Suggested status translations:
 4. Preview filtered open conflicts, confirm `RESOLVE FILTERED CONFLICTS`, and resolve them as `update_existing`.
 5. Rerun materialization with the source run's snapshot, or override `updateExisting=true` to apply staged updates.
 6. To test guarded completion, leave at least one conflict open and complete the job with `COMPLETE WITH OPEN CONFLICTS` plus an audit reason.
+
+## Executable Fixture Coverage
+
+`ImportSampleFixtureIntegrationTest` reads all three files and validates the full stable flow:
+
+- Parse count is `3` for CSV, Jira, and Rally.
+- Shared mapping rules translate `Story`/`HierarchicalRequirement` to `story`, `Bug`/`Defect` to `bug`, and source statuses into `open`, `in_progress`, and `done`.
+- Visibility lookup maps `Public` to Trasck `public`.
+- Title transforms trim, remove `Imported: `, and collapse whitespace.
+- Materialization creates three work items, then an edited source title produces backend record/job diff rows.
+- Re-materializing with `updateExisting=false` opens three conflicts.
+- Filtered conflict preview returns paginated counts; queued filtered resolution jobs stage `update_existing`.
+- Exact reruns keep the source run's `updateExisting=false`; modified reruns with `updateExisting=true` apply the staged source update.
+- Final guarded completion with open conflicts writes first-class import completion fields that project and workspace dashboard summaries expose through `importCompletions`.

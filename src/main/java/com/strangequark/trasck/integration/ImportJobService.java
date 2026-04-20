@@ -62,6 +62,7 @@ public class ImportJobService {
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
     private final ImportJobRecordVersionRepository importJobRecordVersionRepository;
+    private final ImportConflictResolutionJobRepository importConflictResolutionJobRepository;
     private final ImportMappingTemplateRepository importMappingTemplateRepository;
     private final ImportTransformPresetRepository importTransformPresetRepository;
     private final ImportTransformPresetVersionRepository importTransformPresetVersionRepository;
@@ -81,6 +82,7 @@ public class ImportJobService {
             ImportJobRepository importJobRepository,
             ImportJobRecordRepository importJobRecordRepository,
             ImportJobRecordVersionRepository importJobRecordVersionRepository,
+            ImportConflictResolutionJobRepository importConflictResolutionJobRepository,
             ImportMappingTemplateRepository importMappingTemplateRepository,
             ImportTransformPresetRepository importTransformPresetRepository,
             ImportTransformPresetVersionRepository importTransformPresetVersionRepository,
@@ -99,6 +101,7 @@ public class ImportJobService {
         this.importJobRepository = importJobRepository;
         this.importJobRecordRepository = importJobRecordRepository;
         this.importJobRecordVersionRepository = importJobRecordVersionRepository;
+        this.importConflictResolutionJobRepository = importConflictResolutionJobRepository;
         this.importMappingTemplateRepository = importMappingTemplateRepository;
         this.importTransformPresetRepository = importTransformPresetRepository;
         this.importTransformPresetVersionRepository = importTransformPresetVersionRepository;
@@ -795,6 +798,108 @@ public class ImportJobService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public List<ImportConflictResolutionJobResponse> listConflictResolutionJobs(UUID importJobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = importJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        return importConflictResolutionJobRepository.findByImportJobIdOrderByRequestedAtDesc(job.getId()).stream()
+                .map(ImportConflictResolutionJobResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public ImportConflictResolutionJobResponse createConflictResolutionJob(UUID importJobId, ImportConflictBulkResolutionRequest request) {
+        ImportConflictBulkResolutionRequest resolutionRequest = required(request, "request");
+        String resolution = validatedConflictResolution(resolutionRequest.resolution());
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = mutableImportJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        String scope = conflictResolutionScope(resolutionRequest.scope());
+        if (!"filtered".equals(scope)) {
+            throw badRequest("Async conflict resolution jobs require scope filtered");
+        }
+        validateFilteredConflictFilters(resolutionRequest);
+        long matched = countFilteredConflicts(job, resolutionRequest);
+        if (matched == 0) {
+            throw badRequest("No open conflicts match the requested filters");
+        }
+        validateFilteredConflictConfirmation(resolutionRequest, matched);
+
+        ImportConflictResolutionJob resolutionJob = new ImportConflictResolutionJob();
+        resolutionJob.setWorkspaceId(job.getWorkspaceId());
+        resolutionJob.setImportJobId(job.getId());
+        resolutionJob.setRequestedById(actorId);
+        resolutionJob.setResolution(resolution);
+        resolutionJob.setScope(scope);
+        resolutionJob.setStatus("queued");
+        resolutionJob.setStatusFilter(normalizedFilter(resolutionRequest.status()));
+        resolutionJob.setConflictStatusFilter("open");
+        resolutionJob.setSourceTypeFilter(normalizedFilter(resolutionRequest.sourceType()));
+        resolutionJob.setExpectedCount(Math.toIntExact(matched));
+        resolutionJob.setMatchedCount(Math.toIntExact(matched));
+        resolutionJob.setResolvedCount(0);
+        resolutionJob.setFailedCount(0);
+        resolutionJob.setConfirmation(resolutionRequest.confirmation());
+        resolutionJob.setRequestedAt(OffsetDateTime.now());
+        ImportConflictResolutionJob saved = importConflictResolutionJobRepository.save(resolutionJob);
+        recordConflictResolutionJobEvent(saved, "import_conflict_resolution_job.queued", actorId);
+        return ImportConflictResolutionJobResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public ImportConflictResolutionJobResponse getConflictResolutionJob(UUID jobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportConflictResolutionJob resolutionJob = conflictResolutionJob(jobId);
+        permissionService.requireWorkspacePermission(actorId, resolutionJob.getWorkspaceId(), "workspace.admin");
+        return ImportConflictResolutionJobResponse.from(resolutionJob);
+    }
+
+    @Transactional
+    public ImportConflictResolutionJobResponse runConflictResolutionJob(UUID jobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportConflictResolutionJob resolutionJob = conflictResolutionJob(jobId);
+        permissionService.requireWorkspacePermission(actorId, resolutionJob.getWorkspaceId(), "workspace.admin");
+        if (!Set.of("queued", "failed").contains(resolutionJob.getStatus())) {
+            throw badRequest("Conflict resolution job must be queued or failed to run");
+        }
+        resolutionJob.setStatus("running");
+        resolutionJob.setStartedAt(OffsetDateTime.now());
+        resolutionJob.setFinishedAt(null);
+        resolutionJob.setErrorMessage(null);
+        resolutionJob.setResolvedCount(0);
+        resolutionJob.setFailedCount(0);
+        importConflictResolutionJobRepository.save(resolutionJob);
+        try {
+            ImportJob job = mutableImportJob(resolutionJob.getImportJobId());
+            long currentMatched = importJobRecordRepository.countFiltered(
+                    job.getId(),
+                    resolutionJob.getStatusFilter(),
+                    "open",
+                    resolutionJob.getSourceTypeFilter()
+            );
+            if (currentMatched != resolutionJob.getExpectedCount()) {
+                throw badRequest("Current filtered open conflict count no longer matches the queued expected count");
+            }
+            int resolved = resolveFilteredConflictsForJob(job, resolutionJob, actorId);
+            resolutionJob.setResolvedCount(resolved);
+            resolutionJob.setMatchedCount(Math.toIntExact(currentMatched));
+            resolutionJob.setStatus("completed");
+            resolutionJob.setFinishedAt(OffsetDateTime.now());
+            ImportConflictResolutionJob saved = importConflictResolutionJobRepository.save(resolutionJob);
+            recordConflictResolutionJobEvent(saved, "import_conflict_resolution_job.completed", actorId);
+            return ImportConflictResolutionJobResponse.from(saved);
+        } catch (RuntimeException ex) {
+            resolutionJob.setStatus("failed");
+            resolutionJob.setFinishedAt(OffsetDateTime.now());
+            resolutionJob.setFailedCount(resolutionJob.getExpectedCount() == null ? 0 : resolutionJob.getExpectedCount() - safeCount(resolutionJob.getResolvedCount()));
+            resolutionJob.setErrorMessage(ex.getMessage());
+            ImportConflictResolutionJob saved = importConflictResolutionJobRepository.save(resolutionJob);
+            recordConflictResolutionJobEvent(saved, "import_conflict_resolution_job.failed", actorId);
+            return ImportConflictResolutionJobResponse.from(saved);
+        }
+    }
+
     private String conflictResolutionScope(String value) {
         String scope = hasText(value) ? value.trim().toLowerCase(Locale.ROOT) : "selected";
         if (!Set.of("selected", "filtered").contains(scope)) {
@@ -867,11 +972,11 @@ public class ImportJobService {
         return records;
     }
 
-    private void validateFilteredConflictConfirmation(ImportConflictBulkResolutionRequest request, int matchedCount) {
+    private void validateFilteredConflictConfirmation(ImportConflictBulkResolutionRequest request, long matchedCount) {
         if (!RESOLVE_FILTERED_CONFLICTS_CONFIRMATION.equals(request.confirmation())) {
             throw badRequest("confirmation must equal " + RESOLVE_FILTERED_CONFLICTS_CONFIRMATION);
         }
-        if (request.expectedCount() == null || request.expectedCount() != matchedCount) {
+        if (request.expectedCount() == null || request.expectedCount().longValue() != matchedCount) {
             throw badRequest("expectedCount must match the current filtered open conflict count");
         }
     }
@@ -919,6 +1024,31 @@ public class ImportJobService {
         return pageSize;
     }
 
+    private int resolveFilteredConflictsForJob(ImportJob job, ImportConflictResolutionJob resolutionJob, UUID actorId) {
+        int resolved = 0;
+        while (true) {
+            List<ImportJobRecord> records = importJobRecordRepository.findFiltered(
+                    job.getId(),
+                    resolutionJob.getStatusFilter(),
+                    "open",
+                    resolutionJob.getSourceTypeFilter(),
+                    PageRequest.of(0, MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE)
+            );
+            if (records.isEmpty()) {
+                return resolved;
+            }
+            for (ImportJobRecord record : records) {
+                applyConflictResolution(record, resolutionJob.getResolution(), actorId);
+                ImportJobRecord saved = importJobRecordRepository.save(record);
+                recordImportJobRecordVersion(saved, "conflict_resolved", actorId);
+                recordConflictResolvedEvent(job, saved, actorId);
+                resolved++;
+            }
+            resolutionJob.setResolvedCount(resolved);
+            importConflictResolutionJobRepository.save(resolutionJob);
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<ImportJobRecordResponse> listRecords(UUID importJobId, String status, String conflictStatus, String sourceType) {
         UUID actorId = currentUserService.requireUserId();
@@ -948,14 +1078,34 @@ public class ImportJobService {
                 .orElseThrow(() -> notFound("Import job record not found"));
         ImportJob job = importJob(record.getImportJobId());
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
-        List<ImportJobRecordVersion> versions = importJobRecordVersionRepository.findByImportJobRecordIdOrderByVersionDesc(record.getId());
-        List<ImportJobRecordVersionDiffResponse> responses = new ArrayList<>();
-        for (int index = 0; index < versions.size(); index++) {
-            ImportJobRecordVersion current = versions.get(index);
-            ImportJobRecordVersion previous = index + 1 < versions.size() ? versions.get(index + 1) : null;
-            responses.add(recordVersionDiff(current, previous));
-        }
-        return responses;
+        return recordVersionDiffs(record);
+    }
+
+    @Transactional(readOnly = true)
+    public ImportJobVersionDiffResponse listJobVersionDiffs(UUID importJobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = importJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        List<ImportJobRecordVersionDiffGroupResponse> groups = importJobRecordRepository
+                .findByImportJobIdOrderBySourceTypeAscSourceIdAsc(job.getId()).stream()
+                .map(record -> ImportJobRecordVersionDiffGroupResponse.from(record, recordVersionDiffs(record)))
+                .filter(group -> !group.diffs().isEmpty())
+                .toList();
+        int versionCount = groups.stream()
+                .mapToInt(group -> group.diffs().size())
+                .sum();
+        int diffCount = groups.stream()
+                .flatMap(group -> group.diffs().stream())
+                .mapToInt(diff -> diff.fields().size())
+                .sum();
+        return new ImportJobVersionDiffResponse(job.getId(), job.getWorkspaceId(), groups.size(), versionCount, diffCount, groups);
+    }
+
+    @Transactional(readOnly = true)
+    public ImportJobVersionDiffExportResponse exportJobVersionDiffs(UUID importJobId) {
+        ImportJobVersionDiffResponse diffs = listJobVersionDiffs(importJobId);
+        ImportJob job = importJob(importJobId);
+        return new ImportJobVersionDiffExportResponse(OffsetDateTime.now(), response(job), diffs);
     }
 
     private ImportMaterializeResponse processMaterialization(
@@ -1710,6 +1860,11 @@ public class ImportJobService {
         return importJobRepository.findById(importJobId).orElseThrow(() -> notFound("Import job not found"));
     }
 
+    private ImportConflictResolutionJob conflictResolutionJob(UUID jobId) {
+        return importConflictResolutionJobRepository.findById(jobId)
+                .orElseThrow(() -> notFound("Import conflict resolution job not found"));
+    }
+
     private ImportMappingTemplate mappingTemplate(UUID mappingTemplateId) {
         return importMappingTemplateRepository.findById(mappingTemplateId).orElseThrow(() -> notFound("Import mapping template not found"));
     }
@@ -2163,6 +2318,33 @@ public class ImportJobService {
         domainEventService.record(job.getWorkspaceId(), "import_job_record", record.getId(), "import_job_record.conflict_resolved", payload);
     }
 
+    private void recordConflictResolutionJobEvent(ImportConflictResolutionJob job, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("conflictResolutionJobId", job.getId().toString())
+                .put("importJobId", job.getImportJobId().toString())
+                .put("resolution", job.getResolution())
+                .put("scope", job.getScope())
+                .put("status", job.getStatus())
+                .put("expectedCount", safeCount(job.getExpectedCount()))
+                .put("matchedCount", safeCount(job.getMatchedCount()))
+                .put("resolvedCount", safeCount(job.getResolvedCount()))
+                .put("failedCount", safeCount(job.getFailedCount()))
+                .put("actorUserId", actorId.toString());
+        if (job.getStatusFilter() != null) {
+            payload.put("statusFilter", job.getStatusFilter());
+        }
+        if (job.getConflictStatusFilter() != null) {
+            payload.put("conflictStatusFilter", job.getConflictStatusFilter());
+        }
+        if (job.getSourceTypeFilter() != null) {
+            payload.put("sourceTypeFilter", job.getSourceTypeFilter());
+        }
+        if (job.getErrorMessage() != null) {
+            payload.put("errorMessage", job.getErrorMessage());
+        }
+        domainEventService.record(job.getWorkspaceId(), "import_conflict_resolution_job", job.getId(), eventType, payload);
+    }
+
     private void recordImportJobRecordVersion(ImportJobRecord record, String changeType, UUID actorId) {
         ImportJobRecordVersion version = new ImportJobRecordVersion();
         version.setImportJobRecordId(record.getId());
@@ -2259,6 +2441,17 @@ public class ImportJobService {
                 current.getCreatedAt(),
                 fieldDiffs
         );
+    }
+
+    private List<ImportJobRecordVersionDiffResponse> recordVersionDiffs(ImportJobRecord record) {
+        List<ImportJobRecordVersion> versions = importJobRecordVersionRepository.findByImportJobRecordIdOrderByVersionDesc(record.getId());
+        List<ImportJobRecordVersionDiffResponse> responses = new ArrayList<>();
+        for (int index = 0; index < versions.size(); index++) {
+            ImportJobRecordVersion current = versions.get(index);
+            ImportJobRecordVersion previous = index + 1 < versions.size() ? versions.get(index + 1) : null;
+            responses.add(recordVersionDiff(current, previous));
+        }
+        return responses;
     }
 
     private Map<String, JsonNode> flattenSnapshot(JsonNode snapshot) {
@@ -2381,6 +2574,10 @@ public class ImportJobService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private int safeCount(Integer value) {
+        return value == null ? 0 : value;
     }
 
     private ResponseStatusException notFound(String message) {

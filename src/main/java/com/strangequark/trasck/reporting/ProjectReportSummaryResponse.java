@@ -16,6 +16,7 @@ public record ProjectReportSummaryResponse(
         EstimateTimeMetricsResponse estimateAndTime,
         AgingMetricsResponse aging,
         CycleTimeMetricsResponse cycleTime,
+        ImportCompletionMetricsResponse importCompletions,
         List<DimensionCountResponse> byStatus,
         List<DimensionCountResponse> byType,
         List<DimensionCountResponse> byPriority,
@@ -65,6 +66,14 @@ public record ProjectReportSummaryResponse(
     public record CycleTimeMetricsResponse(
             long completedWorkItems,
             long averageLeadTimeMinutes
+    ) {
+    }
+
+    public record ImportCompletionMetricsResponse(
+            long completedJobs,
+            long completedWithOpenConflicts,
+            long acceptedOpenConflictCount,
+            OffsetDateTime lastOpenConflictCompletedAt
     ) {
     }
 
