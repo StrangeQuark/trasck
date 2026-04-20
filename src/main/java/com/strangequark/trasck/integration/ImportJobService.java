@@ -66,6 +66,7 @@ public class ImportJobService {
     private static final int DEFAULT_IMPORT_REVIEW_EXPORT_WORKER_LIMIT = 10;
     private static final int MAX_IMPORT_REVIEW_EXPORT_WORKER_LIMIT = 50;
     private static final String IMPORT_CONFLICT_RESOLUTION_WORKER_TYPE = "import_conflict_resolution";
+    private static final String IMPORT_REVIEW_EXPORT_WORKER_TYPE = "import_review_export";
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
     private static final Set<String> SUPPORTED_TRANSFORM_FUNCTIONS = Set.of(
@@ -1355,6 +1356,75 @@ public class ImportJobService {
         automationWorkerHealthRepository.save(health);
     }
 
+    private AutomationWorkerRun startImportReviewExportWorkerRun(UUID workspaceId, Integer limit, UUID actorId) {
+        if (workspaceId == null) {
+            throw badRequest("workspaceId is required for import review export worker runs");
+        }
+        AutomationWorkerRun run = new AutomationWorkerRun();
+        run.setWorkspaceId(workspaceId);
+        run.setWorkerType(IMPORT_REVIEW_EXPORT_WORKER_TYPE);
+        run.setTriggerType(actorId == null ? "scheduled" : "manual");
+        run.setStatus("running");
+        run.setDryRun(false);
+        run.setRequestedLimit(limit);
+        run.setMaxAttempts(null);
+        run.setProcessedCount(0);
+        run.setSuccessCount(0);
+        run.setFailureCount(0);
+        run.setDeadLetterCount(0);
+        ObjectNode metadata = objectMapper.createObjectNode()
+                .put("worker", IMPORT_REVIEW_EXPORT_WORKER_TYPE);
+        if (actorId != null) {
+            metadata.put("actorUserId", actorId.toString());
+        }
+        run.setMetadata(metadata);
+        run.setStartedAt(OffsetDateTime.now());
+        AutomationWorkerRun saved = automationWorkerRunRepository.save(run);
+        updateImportReviewExportWorkerHealth(saved);
+        return saved;
+    }
+
+    private void finishImportReviewExportWorkerRun(
+            AutomationWorkerRun run,
+            int processed,
+            int completed,
+            int failed,
+            String errorMessage
+    ) {
+        run.setProcessedCount(processed);
+        run.setSuccessCount(completed);
+        run.setFailureCount(failed);
+        run.setDeadLetterCount(0);
+        run.setErrorMessage(truncateText(errorMessage, 4000));
+        run.setStatus(hasText(errorMessage) || failed > 0 ? "failed" : "succeeded");
+        run.setFinishedAt(OffsetDateTime.now());
+        AutomationWorkerRun saved = automationWorkerRunRepository.save(run);
+        updateImportReviewExportWorkerHealth(saved);
+    }
+
+    private void updateImportReviewExportWorkerHealth(AutomationWorkerRun run) {
+        AutomationWorkerHealth health = automationWorkerHealthRepository
+                .findById(new AutomationWorkerHealthId(run.getWorkspaceId(), run.getWorkerType()))
+                .orElseGet(() -> {
+                    AutomationWorkerHealth created = new AutomationWorkerHealth();
+                    created.setWorkspaceId(run.getWorkspaceId());
+                    created.setWorkerType(run.getWorkerType());
+                    created.setConsecutiveFailures(0);
+                    return created;
+                });
+        health.setLastRunId(run.getId());
+        health.setLastStatus(run.getStatus());
+        health.setLastStartedAt(run.getStartedAt());
+        health.setLastFinishedAt(run.getFinishedAt());
+        health.setLastError(run.getErrorMessage());
+        if ("failed".equals(run.getStatus())) {
+            health.setConsecutiveFailures((health.getConsecutiveFailures() == null ? 0 : health.getConsecutiveFailures()) + 1);
+        } else if ("succeeded".equals(run.getStatus())) {
+            health.setConsecutiveFailures(0);
+        }
+        automationWorkerHealthRepository.save(health);
+    }
+
     private ImportConflictResolutionJobResponse runConflictResolutionJob(ImportConflictResolutionJob resolutionJob, UUID actorId) {
         if (!"queued".equals(resolutionJob.getStatus())) {
             throw badRequest("Conflict resolution job must be queued to run");
@@ -1726,7 +1796,27 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return processImportReviewCsvExportJobsInternal(workspaceId, limit, actorId);
+    }
+
+    @Transactional
+    public ImportReviewCsvExportWorkerResponse processImportReviewCsvExportJobsInternal(UUID workspaceId, Integer limit, UUID actorId) {
+        if (workspaceId != null) {
+            activeWorkspace(workspaceId);
+        }
         int workerLimit = normalizeImportReviewExportWorkerLimit(limit);
+        AutomationWorkerRun run = startImportReviewExportWorkerRun(workspaceId, workerLimit, actorId);
+        try {
+            ImportReviewCsvExportWorkerResponse response = processQueuedImportReviewCsvExportJobs(workspaceId, workerLimit, actorId);
+            finishImportReviewExportWorkerRun(run, response.processed(), response.completed(), response.failed(), null);
+            return response;
+        } catch (RuntimeException ex) {
+            finishImportReviewExportWorkerRun(run, 0, 0, 1, ex.getMessage());
+            throw ex;
+        }
+    }
+
+    private ImportReviewCsvExportWorkerResponse processQueuedImportReviewCsvExportJobs(UUID workspaceId, int workerLimit, UUID actorId) {
         List<ExportJob> queued = exportJobRepository.findQueuedImportReviewExportJobs(workspaceId, workerLimit);
         List<ExportJobResponse> jobs = new ArrayList<>();
         int completed = 0;
@@ -1738,10 +1828,11 @@ public class ImportJobService {
             try {
                 ImportReviewCsvExportJobRequest request = objectMapper.convertValue(job.getRequestPayload(), ImportReviewCsvExportJobRequest.class);
                 ReviewCsvExportContent content = reviewCsvExportContent(workspaceId, request);
-                ExportJobResponse completedJob = completeImportReviewCsvExport(job, actorId, content);
+                UUID jobActorId = actorId == null ? job.getRequestedById() : actorId;
+                ExportJobResponse completedJob = completeImportReviewCsvExport(job, jobActorId, content);
                 jobs.add(completedJob);
                 completed++;
-                recordImportReviewExportProcessed(workspaceId, completedJob, request, "completed", actorId, null);
+                recordImportReviewExportProcessed(workspaceId, completedJob, request, "completed", jobActorId, null);
             } catch (RuntimeException ex) {
                 job.setStatus("failed");
                 job.setErrorMessage(truncate(ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage(), 2_000));
@@ -1749,7 +1840,8 @@ public class ImportJobService {
                 ExportJob failedJob = exportJobRepository.save(job);
                 jobs.add(ExportJobResponse.from(failedJob, null));
                 failed++;
-                recordImportReviewExportProcessed(workspaceId, ExportJobResponse.from(failedJob, null), null, "failed", actorId, ex.getMessage());
+                UUID jobActorId = actorId == null ? job.getRequestedById() : actorId;
+                recordImportReviewExportProcessed(workspaceId, ExportJobResponse.from(failedJob, null), null, "failed", jobActorId, ex.getMessage());
             }
         }
         return new ImportReviewCsvExportWorkerResponse(workspaceId, workerLimit, queued.size(), completed, failed, jobs);
@@ -3148,8 +3240,10 @@ public class ImportJobService {
                 .put("workspaceId", workspaceId.toString())
                 .put("exportJobId", exportJob.id().toString())
                 .put("exportType", exportJob.exportType())
-                .put("status", status)
-                .put("actorUserId", actorId.toString());
+                .put("status", status);
+        if (actorId != null) {
+            payload.put("actorUserId", actorId.toString());
+        }
         if (request != null) {
             payload.put("tableType", request.tableType());
             if (request.importJobId() != null) {

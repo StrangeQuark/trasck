@@ -224,6 +224,9 @@ class JpaPersistenceTest {
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_automatic_enabled")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_interval_minutes")).isTrue();
+        assertThat(columnExists("automation_worker_settings", "import_review_exports_enabled")).isTrue();
+        assertThat(columnExists("automation_worker_settings", "agent_dispatch_attempt_retention_days")).isTrue();
+        assertThat(columnExists("automation_worker_settings", "agent_dispatch_attempt_pruning_automatic_enabled")).isTrue();
         assertThat(columnExists("email_provider_settings", "smtp_password_encrypted")).isTrue();
         assertThat(columnExists("import_mapping_templates", "transform_preset_id")).isTrue();
         assertThat(columnExists("import_transform_presets", "version")).isTrue();

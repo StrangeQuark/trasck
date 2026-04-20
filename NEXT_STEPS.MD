@@ -4,12 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should queued import review CSV export jobs be picked up by the shared scheduled worker next, or remain manually processed through the admin endpoint until a broader export-job worker design exists?
-    - Answer: Allow it to be picked up by the shared scheduled worker
-2. Should agent dispatch attempt retention get workspace-level defaults and automatic scheduled pruning, or remain manual admin export/prune until real external adapters are enabled?
-    - Answer: Give workspace-level default and automatic scheduled pruning
-3. Should the first real Codex/Claude execution pass start with provider-specific credential validation, or start with a generic external-worker protocol that Codex/Claude adapters can implement later?
-    - Answer: Start with real provider-specific credential validation.
+1. Should production-like profile validation fail startup when known development defaults are active, including JWT/encryption secrets, database passwords, insecure cookie flags, and missing required production secrets, or should the first hardening pass warn only until deployment packaging is finalized?
+    - Answer: Yes, fail startup for production like profiles
+2. Should Swagger/OpenAPI be disabled entirely outside local/dev, or stay available in production behind authenticated admin access?
+    - Answer: Stay available in prod behind authenticated admin access
+3. Should the outbound URL policy default-deny localhost, private-network, link-local, and cloud metadata endpoints for webhooks, agent worker callbacks, OAuth side fetches, and S3-compatible storage unless explicitly allowlisted?
+    - Answer: Yes, default-deny those destinations
+4. Should checked-in `.env` files be removed from source control now and replaced with committed `.env.example` files in both repos, or wait until a deployment secrets strategy is written?
+    - Answer: Yes remove them now and replace with .env.example only
 
 ## Current State
 
@@ -33,43 +35,34 @@ Automation, webhook, email, and import conflict-resolution worker executions wri
 
 Agent delivery hardening keeps the generic worker protocol as the main extensibility path while Codex and Claude Code adapters expose explicit `stub`, `hosted_api`, and hardened `cli_worker` runtime modes behind the provider-neutral adapter contract. External execution must be intentionally enabled in provider config; CLI-worker config accepts named allowlisted command profiles instead of raw shell commands. Provider runtime preview lets admins inspect non-stub payloads without dispatching work. Dispatch, retry, and cancel boundaries are persisted in first-class `agent_dispatch_attempts` rows, included in `AgentTaskResponse.dispatchAttempts`, and exposed through workspace admin list/export/prune endpoints so admins and tests have a durable view of idempotency keys, payloads, external task IDs, transport, provider type, and failure messages before real external execution is enabled.
 
+Queued import review CSV export jobs can now be picked up by the shared scheduled worker through workspace worker settings. Scheduled and manual review export processing writes `import_review_export` worker run and health rows, and operations screens can filter that worker type alongside automation, webhook, email, and import conflict-resolution workers. Agent dispatch attempt retention now has workspace-level defaults and optional automatic scheduled pruning. Codex and Claude Code provider credential creation now validates provider-specific credential types and basic secret/auth-scheme shape before encrypting credentials.
+
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
+
+The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The audit found no `6101` configuration references and no frontend access-token local storage, but it identified production hardening work that must be completed before broad manual testing: remove tracked `.env` files in favor of examples, reject unsafe production defaults, gate Swagger/OpenAPI, add explicit CORS, add outbound egress/SSRF controls and timeouts, tighten login/password policy, enforce upload/import size controls, harden frontend secret display and container headers, and add security/dependency regression gates.
+
 
 ## Primary Next Steps
 
-### 1. Full Codebase Security Audit And Threat Model
-
-Goal: inspect the entire Trasck backend and frontend before manual product testing, with a production security mindset.
-
-Planned work:
-
-- Review every backend file, every frontend file, generated client artifacts, Docker/nginx/build config, local runtime docs, checked-in HTTP examples, migrations, tests, and sample data for secrets, unsafe defaults, information disclosure, insecure auth flows, missing authorization, injection risks, path traversal, unsafe file handling, SSRF/open redirect risk, logging leaks, dependency risk, and data exposure.
-- Build a system-level threat model after the file-by-file pass, covering authentication, OAuth, API tokens, service tokens, cookie/CSRF behavior, CORS, public project reads, workspace/project/team scoping, attachments, imports, exports, audit/activity logs, notifications, automation, webhooks, email, reporting, dashboards, generated OpenAPI/client behavior, and AI agent dispatch/callback/worker flows.
-- Verify all secret-bearing configuration is environment-driven for deployable runtimes. No production credential, token, key, password, SMTP secret, OAuth client secret, database credential, object-storage secret, agent credential, callback private key, webhook secret, or JWT signing secret should be hard-coded or required from checked-in config.
-- Produce a written security findings list with severity, affected files/endpoints, exploit path, user-data impact, recommended fix, and regression-test plan.
-
-Done when:
-
-- We have a complete security audit record for both repos, including file-level findings and cross-system risks, and no high-risk area has been skipped or assumed safe without inspection.
-
-### 2. Production Security Hardening And Regression Coverage
+### 1. Production Security Hardening And Regression Coverage
 
 Goal: close the security findings before manual end-to-end testing so manual testing starts from a hardened baseline.
 
 Planned work:
 
-- Move unsafe deployable defaults and secret-bearing configuration behind `.env`/environment variables, document required variables, and ensure local examples remain clearly non-production.
-- Tighten backend security where findings require it: cookie flags, CSRF boundaries, CORS, OAuth callback validation, JWT/key handling, token scope enforcement, permission checks, tenant scoping, public-read gates, request validation, upload/download safety, export/download authorization, redaction, audit logging, rate/size limits where practical, and secure error responses.
-- Tighten integration and worker surfaces: webhook validation, email/SMTP secret handling, import payload limits and parser safety, export artifact access, automation execution boundaries, AI agent runtime/callback/worker credential handling, and prevention of secrets leaking into task context, dispatch attempts, activity, audit, comments, exports, or frontend JSON previews.
-- Tighten frontend security where findings require it: no browser access-token persistence, CSRF handling, API-base configuration safety, route/data exposure checks, dangerous rendering review, generated-client usage, admin-only screen assumptions, and accidental display of secret-bearing payloads.
-- Add targeted backend/frontend tests for every fixed class of issue, including authorization denial, cross-workspace/project isolation, redaction, secret config, attachment/export access, callback/token validation, and frontend no-secret/no-token persistence checks.
-- Run dependency and build verification for both repos, including Maven tests, frontend tests, frontend build, dependency audit where available, and any static checks added during the hardening pass.
+- Work through `SECURITY_AUDIT.MD` findings in priority order.
+- Move unsafe deployable defaults and secret-bearing configuration behind environment variables, document required variables, untrack real `.env` files, and keep committed examples clearly non-production.
+- Tighten backend security where findings require it: production startup validation, cookie flags, CSRF boundaries, explicit CORS, Swagger/OpenAPI gating, OAuth redirect/provider validation, JWT/key handling, token scope enforcement, permission checks, tenant scoping, public-read gates, request validation, upload/download safety, export/download authorization, redaction, audit logging, rate/size limits where practical, and secure error responses.
+- Tighten integration and worker surfaces: outbound URL/SSRF policy, HTTP timeouts, webhook validation, email/SMTP secret handling, import payload limits and parser safety, export artifact access, automation execution boundaries, AI agent runtime/callback/worker credential handling, and prevention of secrets leaking into task context, dispatch attempts, activity, audit, comments, exports, or frontend JSON previews.
+- Tighten frontend security where findings require it: no browser access-token persistence, CSRF handling, API-base configuration safety, route/data exposure checks, dangerous rendering review, generated-client usage, admin-only screen assumptions, masked secret fields, one-time token reveal handling, container security headers, reproducible Docker builds, and accidental display of secret-bearing payloads.
+- Add targeted backend/frontend tests for every fixed class of issue, including authorization denial, cross-workspace/project isolation, production secret config, CORS, Swagger/OpenAPI denial, egress URL validation, login/password protections, redaction, attachment/export access, callback/token validation, and frontend no-secret/no-token persistence checks.
+- Run dependency and build verification for both repos, including Maven tests, frontend tests, frontend build, `npm audit`, Java dependency vulnerability scanning once added, and any static checks added during the hardening pass.
 
 Done when:
 
 - All critical/high security findings are fixed, medium findings are fixed or explicitly documented with a production-safe mitigation plan, no real-user data leak paths remain known, and both repos pass the security regression suite.
 
-### 3. Manual End-To-End Product Test Pass
+### 2. Manual End-To-End Product Test Pass
 
 Goal: validate the now-operable automation, webhook, email, import, board, dashboard, and agent surfaces against realistic local data before public testing.
 
@@ -83,19 +76,20 @@ Done when:
 
 - A local tester can operate delivery workers, inspect failures, retry/cancel jobs, export/prune worker history, create guarded sample imports, review/import conflict outcomes, and inspect agent task dispatch attempts without touching the database.
 
-### 4. Queued Operations Worker Consolidation
+### 3. External Worker And Provider Readiness
 
-Goal: reduce manual-only admin processing paths before broader user testing.
+Goal: prepare the provider-neutral worker boundary for the first non-stub external agent execution without weakening normal Jira/Rally-style product behavior.
 
 Planned work:
 
-- Decide whether queued import review CSV exports should be picked up by the shared scheduled worker or wait for a generic export-job worker.
-- Align import review export jobs, audit/retention export jobs, and agent dispatch-attempt export jobs around one operations model where practical.
-- Keep external agent execution disabled by default while preserving runtime preview and dispatch-attempt inspection.
+- Keep external agent execution disabled by default until security hardening and manual operations testing are complete.
+- Validate Codex and Claude Code provider credential UX and errors against the provider-specific credential rules.
+- Exercise generic worker claim/heartbeat/log/message/artifact/cancel/retry and webhook-push dispatch against a local worker harness.
+- Decide whether the first real execution path should be hosted provider API, backend-managed CLI worker, or a deployable generic worker service once the hardened boundary is proven.
 
 Done when:
 
-- Admins can understand which queued/export/retention jobs are manual, which are scheduled, and where each job's artifact or failure can be inspected.
+- Admins can preview runtime payloads, rotate/revoke credentials, inspect dispatch attempts, and test a local worker without enabling paid or unmanaged external execution.
 
 ## Remaining Dashboard/Report APIs
 
@@ -108,7 +102,7 @@ The following work should be completed before the application is ready for a mea
 
 ### Backend Readiness
 
-- Complete the full codebase security audit and production hardening pass before manual product testing begins.
+- Complete the production hardening pass from `SECURITY_AUDIT.MD` before broad manual product testing begins.
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization/record editing/history/conflict resolution, and worker history as more APIs are exposed.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import review export jobs, import record versions, clone-retarget, snapshot reruns, and external callback/delivery failures as those flows are added.
@@ -124,14 +118,14 @@ The following work should be completed before the application is ready for a mea
 
 ### Test Readiness
 
-- Add a dedicated security regression suite for tenant isolation, permission denial, public-read boundaries, token/callback validation, CSRF/cookie behavior, CORS expectations, redaction, attachment/export access, and frontend token/secret persistence.
+- Add a dedicated security regression suite mapped to `SECURITY_AUDIT.MD` for tenant isolation, permission denial, public-read boundaries, token/callback validation, production secret/config validation, Swagger/OpenAPI gating, CSRF/cookie behavior, CORS expectations, outbound URL denial, redaction, attachment/export access, and frontend token/secret persistence.
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for high-use list screens and detail pages.
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization/conflicts/record editing/history, agent dispatch attempts, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
-- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, manual and automatic worker run retention schedule/window/throttle behavior, worker-type/trigger/status/date-range retention filters, SMTP provider settings, and Maildev/SMTP email delivery.
+- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, scheduled import review export pickup, manual and automatic worker run retention schedule/window/throttle behavior, worker-type/trigger/status/date-range retention filters, SMTP provider settings, and Maildev/SMTP email delivery.
 - Expand import tests from parser/materialization/sample-fixture/backend-sample coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, conflict update semantics, production-profile sample gating, guarded completion reporting screens, durable review CSV export jobs, and field-specific import review UI assertions.
-- Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
+- Expand agent adapter contract tests covering provider-specific credential validation, automatic dispatch-attempt retention pruning, callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, dispatch attempts, comments, activity events, audit entries, or API responses.
 - Expand reporting snapshot tests for persisted status, assignment, estimate, and time-tracking history once those additional snapshot families exist.

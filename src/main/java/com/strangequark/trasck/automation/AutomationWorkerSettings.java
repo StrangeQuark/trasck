@@ -32,6 +32,9 @@ public class AutomationWorkerSettings {
     @Column(name = "import_conflict_resolution_enabled")
     private Boolean importConflictResolutionEnabled;
 
+    @Column(name = "import_review_exports_enabled")
+    private Boolean importReviewExportsEnabled;
+
     @Column(name = "automation_limit")
     private Integer automationLimit;
 
@@ -43,6 +46,9 @@ public class AutomationWorkerSettings {
 
     @Column(name = "import_conflict_resolution_limit")
     private Integer importConflictResolutionLimit;
+
+    @Column(name = "import_review_export_limit")
+    private Integer importReviewExportLimit;
 
     @Column(name = "webhook_max_attempts")
     private Integer webhookMaxAttempts;
@@ -82,6 +88,33 @@ public class AutomationWorkerSettings {
 
     @Column(name = "worker_run_pruning_last_finished_at")
     private OffsetDateTime workerRunPruningLastFinishedAt;
+
+    @Column(name = "agent_dispatch_attempt_retention_enabled")
+    private Boolean agentDispatchAttemptRetentionEnabled;
+
+    @Column(name = "agent_dispatch_attempt_retention_days")
+    private Integer agentDispatchAttemptRetentionDays;
+
+    @Column(name = "agent_dispatch_attempt_export_before_prune")
+    private Boolean agentDispatchAttemptExportBeforePrune;
+
+    @Column(name = "agent_dispatch_attempt_pruning_automatic_enabled")
+    private Boolean agentDispatchAttemptPruningAutomaticEnabled;
+
+    @Column(name = "agent_dispatch_attempt_pruning_interval_minutes")
+    private Integer agentDispatchAttemptPruningIntervalMinutes;
+
+    @Column(name = "agent_dispatch_attempt_pruning_window_start")
+    private LocalTime agentDispatchAttemptPruningWindowStart;
+
+    @Column(name = "agent_dispatch_attempt_pruning_window_end")
+    private LocalTime agentDispatchAttemptPruningWindowEnd;
+
+    @Column(name = "agent_dispatch_attempt_pruning_last_started_at")
+    private OffsetDateTime agentDispatchAttemptPruningLastStartedAt;
+
+    @Column(name = "agent_dispatch_attempt_pruning_last_finished_at")
+    private OffsetDateTime agentDispatchAttemptPruningLastFinishedAt;
 
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
@@ -126,6 +159,14 @@ public class AutomationWorkerSettings {
         this.importConflictResolutionEnabled = importConflictResolutionEnabled;
     }
 
+    public Boolean getImportReviewExportsEnabled() {
+        return importReviewExportsEnabled;
+    }
+
+    public void setImportReviewExportsEnabled(Boolean importReviewExportsEnabled) {
+        this.importReviewExportsEnabled = importReviewExportsEnabled;
+    }
+
     public Integer getAutomationLimit() {
         return automationLimit;
     }
@@ -156,6 +197,14 @@ public class AutomationWorkerSettings {
 
     public void setImportConflictResolutionLimit(Integer importConflictResolutionLimit) {
         this.importConflictResolutionLimit = importConflictResolutionLimit;
+    }
+
+    public Integer getImportReviewExportLimit() {
+        return importReviewExportLimit;
+    }
+
+    public void setImportReviewExportLimit(Integer importReviewExportLimit) {
+        this.importReviewExportLimit = importReviewExportLimit;
     }
 
     public Integer getWebhookMaxAttempts() {
@@ -260,6 +309,78 @@ public class AutomationWorkerSettings {
 
     public void setWorkerRunPruningLastFinishedAt(OffsetDateTime workerRunPruningLastFinishedAt) {
         this.workerRunPruningLastFinishedAt = workerRunPruningLastFinishedAt;
+    }
+
+    public Boolean getAgentDispatchAttemptRetentionEnabled() {
+        return agentDispatchAttemptRetentionEnabled;
+    }
+
+    public void setAgentDispatchAttemptRetentionEnabled(Boolean agentDispatchAttemptRetentionEnabled) {
+        this.agentDispatchAttemptRetentionEnabled = agentDispatchAttemptRetentionEnabled;
+    }
+
+    public Integer getAgentDispatchAttemptRetentionDays() {
+        return agentDispatchAttemptRetentionDays;
+    }
+
+    public void setAgentDispatchAttemptRetentionDays(Integer agentDispatchAttemptRetentionDays) {
+        this.agentDispatchAttemptRetentionDays = agentDispatchAttemptRetentionDays;
+    }
+
+    public Boolean getAgentDispatchAttemptExportBeforePrune() {
+        return agentDispatchAttemptExportBeforePrune;
+    }
+
+    public void setAgentDispatchAttemptExportBeforePrune(Boolean agentDispatchAttemptExportBeforePrune) {
+        this.agentDispatchAttemptExportBeforePrune = agentDispatchAttemptExportBeforePrune;
+    }
+
+    public Boolean getAgentDispatchAttemptPruningAutomaticEnabled() {
+        return agentDispatchAttemptPruningAutomaticEnabled;
+    }
+
+    public void setAgentDispatchAttemptPruningAutomaticEnabled(Boolean agentDispatchAttemptPruningAutomaticEnabled) {
+        this.agentDispatchAttemptPruningAutomaticEnabled = agentDispatchAttemptPruningAutomaticEnabled;
+    }
+
+    public Integer getAgentDispatchAttemptPruningIntervalMinutes() {
+        return agentDispatchAttemptPruningIntervalMinutes;
+    }
+
+    public void setAgentDispatchAttemptPruningIntervalMinutes(Integer agentDispatchAttemptPruningIntervalMinutes) {
+        this.agentDispatchAttemptPruningIntervalMinutes = agentDispatchAttemptPruningIntervalMinutes;
+    }
+
+    public LocalTime getAgentDispatchAttemptPruningWindowStart() {
+        return agentDispatchAttemptPruningWindowStart;
+    }
+
+    public void setAgentDispatchAttemptPruningWindowStart(LocalTime agentDispatchAttemptPruningWindowStart) {
+        this.agentDispatchAttemptPruningWindowStart = agentDispatchAttemptPruningWindowStart;
+    }
+
+    public LocalTime getAgentDispatchAttemptPruningWindowEnd() {
+        return agentDispatchAttemptPruningWindowEnd;
+    }
+
+    public void setAgentDispatchAttemptPruningWindowEnd(LocalTime agentDispatchAttemptPruningWindowEnd) {
+        this.agentDispatchAttemptPruningWindowEnd = agentDispatchAttemptPruningWindowEnd;
+    }
+
+    public OffsetDateTime getAgentDispatchAttemptPruningLastStartedAt() {
+        return agentDispatchAttemptPruningLastStartedAt;
+    }
+
+    public void setAgentDispatchAttemptPruningLastStartedAt(OffsetDateTime agentDispatchAttemptPruningLastStartedAt) {
+        this.agentDispatchAttemptPruningLastStartedAt = agentDispatchAttemptPruningLastStartedAt;
+    }
+
+    public OffsetDateTime getAgentDispatchAttemptPruningLastFinishedAt() {
+        return agentDispatchAttemptPruningLastFinishedAt;
+    }
+
+    public void setAgentDispatchAttemptPruningLastFinishedAt(OffsetDateTime agentDispatchAttemptPruningLastFinishedAt) {
+        this.agentDispatchAttemptPruningLastFinishedAt = agentDispatchAttemptPruningLastFinishedAt;
     }
 
     public OffsetDateTime getUpdatedAt() {

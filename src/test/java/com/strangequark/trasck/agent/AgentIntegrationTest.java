@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.automation.AutomationWorkerScheduler;
 import com.strangequark.trasck.event.DomainEventOutboxDispatcher;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -17,6 +18,7 @@ import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -52,6 +54,9 @@ class AgentIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private AutomationWorkerScheduler automationWorkerScheduler;
 
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
@@ -114,6 +119,15 @@ class AgentIntegrationTest {
         assertThat(hostedRuntimePreview.at("/runtimeMode").asText()).isEqualTo("hosted_api");
         assertThat(hostedRuntimePreview.at("/previewPayload/hostedApi/baseUrl").asText()).isEqualTo("https://codex.example.invalid");
         assertThat(hostedRuntimePreview.toString()).doesNotContain("privateKey").doesNotContain("BEGIN PRIVATE KEY");
+        assertThat(post("/api/v1/agent-providers/" + uuid(hostedCodexProvider, "/id") + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "temporary_api_token")
+                .put("secret", "invalid-codex-credential"), accessToken).statusCode()).isEqualTo(400);
+        JsonNode codexCredential = read(post("/api/v1/agent-providers/" + uuid(hostedCodexProvider, "/id") + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "codex_api_key")
+                .put("secret", "sk-codex-test-secret-value")
+                .set("metadata", objectMapper.createObjectNode().put("authScheme", "bearer")), accessToken));
+        assertThat(codexCredential.at("/credentialType").asText()).isEqualTo("codex_api_key");
+        assertThat(codexCredential.toString()).doesNotContain("sk-codex-test-secret-value").doesNotContain("encryptedSecret");
         ObjectNode claudeRuntime = objectMapper.createObjectNode();
         ObjectNode cliRuntime = objectMapper.createObjectNode()
                 .put("mode", "cli_worker")
@@ -134,6 +148,15 @@ class AgentIntegrationTest {
         assertThat(cliRuntimePreview.at("/valid").asBoolean()).isTrue();
         assertThat(cliRuntimePreview.at("/runtimeMode").asText()).isEqualTo("cli_worker");
         assertThat(cliRuntimePreview.at("/previewPayload/cliWorker/commandProfile").asText()).isEqualTo("claude-code-local");
+        assertThat(post("/api/v1/agent-providers/" + uuid(claudeProvider, "/id") + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "anthropic_api_key")
+                .put("secret", "short"), accessToken).statusCode()).isEqualTo(400);
+        JsonNode claudeCredential = read(post("/api/v1/agent-providers/" + uuid(claudeProvider, "/id") + "/credentials", objectMapper.createObjectNode()
+                .put("credentialType", "anthropic_api_key")
+                .put("secret", "sk-ant-test-secret-value")
+                .set("metadata", objectMapper.createObjectNode().put("authScheme", "api_key")), accessToken));
+        assertThat(claudeCredential.at("/credentialType").asText()).isEqualTo("anthropic_api_key");
+        assertThat(claudeCredential.toString()).doesNotContain("sk-ant-test-secret-value").doesNotContain("encryptedSecret");
         ObjectNode workerProviderConfig = objectMapper.createObjectNode();
         workerProviderConfig.set("workerWebhook", objectMapper.createObjectNode()
                 .put("maxAttempts", 1)
@@ -218,7 +241,7 @@ class AgentIntegrationTest {
                 .put("displayName", "Codex Failure Agent")
                 .put("username", "codex-failure-agent")
                 .put("roleId", memberRoleId.toString())
-                .put("maxConcurrentTasks", 1);
+                .put("maxConcurrentTasks", 2);
         codexProfileRequest.set("projectIds", objectMapper.createArrayNode().add(projectId.toString()));
         JsonNode codexProfile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", codexProfileRequest, accessToken));
         UUID codexProfileId = uuid(codexProfile, "/id");
@@ -365,6 +388,24 @@ class AgentIntegrationTest {
                 .put("exportBeforePrune", true), accessToken));
         assertThat(dispatchAttemptPrune.at("/attemptsPruned").asInt()).isGreaterThanOrEqualTo(4);
         assertThat(dispatchAttemptPrune.at("/exportJobId").isMissingNode() || dispatchAttemptPrune.at("/exportJobId").isNull()).isFalse();
+        JsonNode scheduledPruneWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("title", "Agent scheduled prune dispatch failure")
+                .put("typeKey", "story")
+                .put("reporterId", adminUserId.toString()), accessToken));
+        JsonNode scheduledPruneTask = read(post("/api/v1/work-items/" + uuid(scheduledPruneWorkItem, "/id") + "/assign-agent", objectMapper.createObjectNode()
+                .put("agentProfileId", codexProfileId.toString()), accessToken));
+        assertThat(scheduledPruneTask.at("/status").asText()).isEqualTo("failed");
+        jdbcTemplate.update("update agent_dispatch_attempts set started_at = now() - interval '40 days' where workspace_id = ? and provider_id = ?", workspaceId, codexProviderId);
+        JsonNode agentRetentionSettings = read(patch("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings", objectMapper.createObjectNode()
+                .put("agentDispatchAttemptRetentionEnabled", true)
+                .put("agentDispatchAttemptRetentionDays", 30)
+                .put("agentDispatchAttemptExportBeforePrune", true)
+                .put("agentDispatchAttemptPruningAutomaticEnabled", true)
+                .put("agentDispatchAttemptPruningIntervalMinutes", 5), accessToken));
+        assertThat(agentRetentionSettings.at("/agentDispatchAttemptPruningAutomaticEnabled").asBoolean()).isTrue();
+        automationWorkerScheduler.runAutomaticAgentDispatchAttemptPruning();
+        JsonNode scheduledPrunedAttempts = read(get("/api/v1/workspaces/" + workspaceId + "/agent-dispatch-attempts?providerId=" + codexProviderId + "&status=failed&limit=10", accessToken));
+        assertThat(scheduledPrunedAttempts.at("/items")).isEmpty();
 
         ObjectNode workerAssignRequest = objectMapper.createObjectNode()
                 .put("agentProfileId", workerProfileId.toString());
@@ -374,7 +415,7 @@ class AgentIntegrationTest {
         UUID workerTaskId = uuid(workerTask, "/id");
         assertThat(workerTask.at("/status").asText()).isEqualTo("running");
         assertThat(workerTask.at("/dispatchAttempts/0/requestPayload/protocolVersion").asText()).isEqualTo("trasck.worker.v1");
-        domainEventOutboxDispatcher.dispatchPending();
+        dispatchPendingUntil(() -> !workerWebhook.deliveries().isEmpty(), 20);
         assertThat(workerWebhook.deliveries()).hasSize(1);
         JsonNode durablePushDispatch = workerWebhook.deliveries().get(0);
         assertThat(durablePushDispatch.at("/protocolVersion").asText()).isEqualTo("trasck.worker.v1");
@@ -470,7 +511,7 @@ class AgentIntegrationTest {
         JsonNode deadLetterTask = read(post("/api/v1/work-items/" + uuid(deadLetterWorkItem, "/id") + "/assign-agent", objectMapper.createObjectNode()
                 .put("agentProfileId", workerProfileId.toString()), accessToken));
         assertThat(deadLetterTask.at("/status").asText()).isEqualTo("running");
-        domainEventOutboxDispatcher.dispatchPending();
+        dispatchPendingUntil(() -> deliveryCount("agent-worker-webhook-" + workerProviderId, "dead_lettered") >= 1, 20);
         assertThat(deliveryCount("agent-worker-webhook-" + workerProviderId, "dead_lettered")).isGreaterThanOrEqualTo(1);
 
         ObjectNode restrictedAssignRequest = objectMapper.createObjectNode()
@@ -483,7 +524,7 @@ class AgentIntegrationTest {
         assertThat(acceptedTask.at("/status").asText()).isEqualTo("completed");
         assertThat(uuid(read(get("/api/v1/work-items/" + workItemId, accessToken)), "/statusId")).isEqualTo(statusId(setup, "approval"));
 
-        domainEventOutboxDispatcher.dispatchPending();
+        dispatchPendingCycles(20);
         JsonNode activity = read(get("/api/v1/work-items/" + workItemId + "/activity?limit=100", accessToken));
         assertThat(eventTypes(activity)).contains("work_item.agent_assigned", "agent.task.review_requested", "work_item.comment_created", "work_item.agent_acceptance_transitioned");
         JsonNode audit = read(get("/api/v1/workspaces/" + workspaceId + "/audit-log?limit=100", accessToken));
@@ -528,6 +569,14 @@ class AgentIntegrationTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> patch(String path, JsonNode body, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
@@ -597,6 +646,18 @@ class AgentIntegrationTest {
                 deliveryStatus
         );
         return count == null ? 0 : count;
+    }
+
+    private void dispatchPendingUntil(BooleanSupplier condition, int maxAttempts) {
+        for (int attempt = 0; attempt < maxAttempts && !condition.getAsBoolean(); attempt++) {
+            domainEventOutboxDispatcher.dispatchPending();
+        }
+    }
+
+    private void dispatchPendingCycles(int cycles) {
+        for (int cycle = 0; cycle < cycles; cycle++) {
+            domainEventOutboxDispatcher.dispatchPending();
+        }
     }
 
     private UUID uuid(JsonNode node, String pointer) {
