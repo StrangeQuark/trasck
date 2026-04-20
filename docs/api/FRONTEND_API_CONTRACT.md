@@ -558,6 +558,50 @@ export interface ImportJobRecord {
   conflictMaterializationRunId?: UUID;
 }
 
+export interface ImportJobRecordVersion {
+  id: UUID;
+  importJobRecordId: UUID;
+  importJobId: UUID;
+  version: number;
+  changeType:
+    | "created"
+    | "updated"
+    | "parsed"
+    | "reparsed"
+    | "materialized_created"
+    | "materialized_updated"
+    | "materialization_failed"
+    | "conflict_opened"
+    | "conflict_resolved"
+    | string;
+  changedById?: UUID;
+  snapshot: unknown;
+  createdAt: ISODateTime;
+}
+
+export interface ImportRecordListQuery {
+  status?: "pending" | "imported" | "failed" | "skipped" | "conflict" | string;
+  conflictStatus?: "open" | "resolved" | string;
+  sourceType?: string;
+}
+
+export interface ImportConflictBulkResolutionRequest {
+  recordIds: UUID[];
+  resolution: "skip" | "update_existing" | "create_new";
+}
+
+export interface ImportConflictBulkResolutionResponse {
+  importJobId: UUID;
+  resolution: ImportConflictBulkResolutionRequest["resolution"];
+  requested: number;
+  resolved: number;
+  records: ImportJobRecord[];
+}
+
+export interface ImportJobCompleteRequest {
+  acceptOpenConflicts?: boolean;
+}
+
 export interface ImportJob {
   id: UUID;
   workspaceId: UUID;
@@ -594,6 +638,29 @@ export interface ImportTransformPresetVersion {
   changeType: "created" | "updated" | "disabled" | string;
   createdById?: UUID;
   createdAt: ISODateTime;
+}
+
+export interface ImportTransformPresetRetargetTemplate {
+  id: UUID;
+  name: string;
+  provider: string;
+  currentTransformPresetId?: UUID;
+  newTransformPresetId?: UUID;
+  willRetarget: boolean;
+  reason?: string;
+}
+
+export interface ImportTransformPresetRetargetResponse {
+  workspaceId: UUID;
+  sourcePresetId: UUID;
+  sourceVersionId: UUID;
+  sourceVersion: number;
+  clonedPreset?: ImportTransformPreset;
+  cloneName: string;
+  cloneDescription?: string;
+  transformationConfig: unknown;
+  enabled: boolean;
+  templates: ImportTransformPresetRetargetTemplate[];
 }
 
 export interface ImportMaterializationRun {
@@ -678,7 +745,7 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 5. Product configuration: create custom fields/contexts, add field configurations for project/type overrides, create screens/fields/assignments, then create/update work items to exercise required-field enforcement.
 6. Planning configuration: list/create boards with columns and saved-filter/query-backed swimlanes, read board work items with backend swimlane groupings, use board-scoped rank/transition/move commands for drag/drop, send `targetColumnId` and/or `targetStatusId` when deriving transitions from a target column/status, include card-level `previousWorkItemId`/`nextWorkItemId` from the target column when rank should update in the same board move, create releases and release scope, create project/workspace roadmaps, and add roadmap items linked to work items.
 7. Automation configuration: create a notification preference, configure webhooks, create automation rules/actions, configure workspace Maildev/SMTP email provider settings, run `POST /api/v1/automation-rules/{ruleId}/execute`, then read automation jobs/logs, current-user notifications, webhook delivery rows, email delivery rows, worker runs, worker health, and scheduled worker settings. Webhook/email deliveries can be inspected, retried, cancelled, and processed manually; scheduled workers and worker run retention settings are controlled per workspace, worker run retention export/prune is admin-triggered, and automatic worker-run pruning can be toggled per workspace with interval/window/last-run settings.
-8. Import review/materialization: create an import job, parse CSV/Jira/Rally content into records, edit source records with `PATCH /api/v1/import-job-records/{recordId}` when needed, create reusable versioned import transform presets, review preset version history with `GET /api/v1/import-transform-presets/{presetId}/versions`, clone historical preset versions into standalone presets, create an import mapping template that can reference a preset and optional local transformation overrides, add value lookups or type/status translations where needed, materialize records into work items, review/resolve conflicts, rerun materialization snapshots with the source `updateExisting` flag or an explicit override, display materialization run snapshots including skipped/conflicted counters, and move the job through start/complete/fail/cancel states while showing records on the job detail screen.
+8. Import review/materialization: create an import job, parse CSV/Jira/Rally content into records, filter records by status/conflict/source type, edit source records with `PATCH /api/v1/import-job-records/{recordId}` when needed, show lifecycle versions from `GET /api/v1/import-job-records/{recordId}/versions`, create reusable versioned import transform presets, review preset version history with `GET /api/v1/import-transform-presets/{presetId}/versions`, clone historical preset versions into standalone presets, preview/apply clone-and-retarget of selected mapping templates, create an import mapping template that can reference a preset and optional local transformation overrides, add value lookups or type/status translations where needed, materialize records into work items, review/resolve single or selected bulk conflicts, rerun materialization snapshots with the source `updateExisting` flag or an explicit override, display materialization run snapshots including skipped/conflicted counters, and move the job through start/complete/fail/cancel states while warning before completion when open conflicts require `acceptOpenConflicts`.
 9. Dashboard builder: create a saved filter, optionally execute it with `GET /api/v1/saved-filters/{savedFilterId}/work-items`, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
 10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
 11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
@@ -693,7 +760,7 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 - Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, saved-filter-ID and inline-query board swimlanes, board work item columns/swimlanes, board-scoped rank/transition/move commands with target column/status transition derivation and card-level relative insertion, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists and cursor-paged work item execution, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
-- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings, worker run/health/export/prune APIs, automatic worker-run pruning interval/window settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, parser, editable record APIs, versioned transform preset plus immutable preset version history, clone-from-version, mapping-template, value lookup, transformation pipeline validation, type/status translation, materialization snapshot/skipped/conflicted counters, conflict review/resolve, and exact/modified rerun APIs.
+- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings, worker run/health/export/prune APIs, automatic worker-run pruning interval/window settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, parser, editable record APIs, filtered record lists, record version history, versioned transform preset plus immutable preset version history, clone-from-version, clone-retarget preview/apply, mapping-template, value lookup, transformation pipeline validation, type/status translation, materialization snapshot/skipped/conflicted counters, single and bulk conflict review/resolve, guarded completion with open-conflict acceptance, and exact/modified rerun APIs.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
 

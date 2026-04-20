@@ -8,5 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ImportMappingTemplateRepository extends JpaRepository<ImportMappingTemplate, UUID> {
     List<ImportMappingTemplate> findByWorkspaceIdOrderByNameAsc(UUID workspaceId);
 
+    List<ImportMappingTemplate> findByIdInAndWorkspaceIdOrderByNameAsc(List<UUID> ids, UUID workspaceId);
+
     Optional<ImportMappingTemplate> findByIdAndWorkspaceId(UUID id, UUID workspaceId);
 }

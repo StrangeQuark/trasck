@@ -341,6 +341,9 @@ class ConfigurationApiIntegrationTest {
                 .put("status", "imported")
                 .set("rawPayload", manualImportPayload));
         assertThat(updatedImportRecord.at("/rawPayload/fields/summary").asText()).contains("Manual");
+        JsonNode importRecordVersions = getJson("/api/v1/import-job-records/" + importRecord.at("/id").asText() + "/versions");
+        assertThat(importRecordVersions).hasSize(2);
+        assertThat(importRecordVersions.at("/0/changeType").asText()).isEqualTo("updated");
         ObjectNode parseBody = objectMapper.createObjectNode()
                 .put("content", """
                         {"issues":[{"key":"JIRA-2","fields":{"summary":"  Imported: Parsed    story  ","issuetype":{"name":"Story"},"status":{"name":"To Do"},"security":"Public"}}]}
@@ -348,6 +351,9 @@ class ConfigurationApiIntegrationTest {
         JsonNode parsedImport = postJson("/api/v1/import-jobs/" + importJobId + "/parse", parseBody);
         assertThat(parsedImport.at("/recordsParsed").asInt()).isEqualTo(1);
         assertThat(parsedImport.at("/records/0/sourceId").asText()).isEqualTo("JIRA-2");
+        JsonNode pendingIssueRecords = getJson("/api/v1/import-jobs/" + importJobId + "/records?status=pending&sourceType=issue");
+        assertThat(pendingIssueRecords).hasSize(1);
+        assertThat(pendingIssueRecords.at("/0/sourceId").asText()).isEqualTo("JIRA-2");
         ObjectNode presetConfig = objectMapper.createObjectNode();
         presetConfig.set("title", objectMapper.createArrayNode()
                 .add(objectMapper.createObjectNode().put("function", "trim"))
@@ -411,6 +417,8 @@ class ConfigurationApiIntegrationTest {
         JsonNode importedWorkItem = getJson("/api/v1/work-items/" + importedWorkItemId);
         assertThat(importedWorkItem.at("/title").asText()).isEqualTo("Parsed story");
         assertThat(importedWorkItem.at("/visibility").asText()).isEqualTo("public");
+        JsonNode parsedRecordVersions = getJson("/api/v1/import-job-records/" + materialized.at("/records/1/id").asText() + "/versions");
+        assertThat(parsedRecordVersions.at("/0/changeType").asText()).isEqualTo("materialized_created");
         ObjectNode updatedPresetConfig = presetConfig.deepCopy();
         ((com.fasterxml.jackson.databind.node.ArrayNode) updatedPresetConfig.get("title"))
                 .add(objectMapper.createObjectNode()
@@ -454,12 +462,20 @@ class ConfigurationApiIntegrationTest {
         assertThat(parsedConflict.at("/status").asText()).isEqualTo("conflict");
         assertThat(parsedConflict.at("/conflictStatus").asText()).isEqualTo("open");
         assertThat(parsedConflict.at("/conflictReason").asText()).contains("updateExisting is false");
-        JsonNode resolvedCreateNewConflict = postJson(
-                "/api/v1/import-job-records/" + parsedConflict.at("/id").asText() + "/resolve-conflict",
-                objectMapper.createObjectNode().put("resolution", "create_new"));
+        JsonNode parsedConflictVersions = getJson("/api/v1/import-job-records/" + parsedConflict.at("/id").asText() + "/versions");
+        assertThat(parsedConflictVersions.at("/0/changeType").asText()).isEqualTo("conflict_opened");
+        ObjectNode bulkResolveBody = objectMapper.createObjectNode().put("resolution", "create_new");
+        bulkResolveBody.set("recordIds", objectMapper.createArrayNode().add(parsedConflict.at("/id").asText()));
+        JsonNode bulkResolvedCreateNewConflict = postJson(
+                "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve",
+                bulkResolveBody);
+        assertThat(bulkResolvedCreateNewConflict.at("/resolved").asInt()).isEqualTo(1);
+        JsonNode resolvedCreateNewConflict = bulkResolvedCreateNewConflict.at("/records/0");
         assertThat(resolvedCreateNewConflict.at("/status").asText()).isEqualTo("pending");
         assertThat(resolvedCreateNewConflict.at("/targetId").isMissingNode() || resolvedCreateNewConflict.at("/targetId").isNull()).isTrue();
         assertThat(resolvedCreateNewConflict.at("/conflictStatus").asText()).isEqualTo("resolved");
+        JsonNode resolvedConflictVersions = getJson("/api/v1/import-job-records/" + parsedConflict.at("/id").asText() + "/versions");
+        assertThat(resolvedConflictVersions.at("/0/changeType").asText()).isEqualTo("conflict_resolved");
         JsonNode rerunMaterialized = postJson("/api/v1/import-materialization-runs/" + skippedRunId + "/rerun", objectMapper.createObjectNode()
                 .put("limit", 10));
         assertThat(rerunMaterialized.at("/materializationRunId").asText()).isNotEqualTo(skippedRunId.toString());
@@ -491,11 +507,32 @@ class ConfigurationApiIntegrationTest {
                 objectMapper.createObjectNode().put("resolution", "skip"));
         assertThat(resolvedSkipConflict.at("/status").asText()).isEqualTo("skipped");
         assertThat(resolvedSkipConflict.at("/conflictResolution").asText()).isEqualTo("skip");
+        JsonNode openConflictRecords = getJson("/api/v1/import-jobs/" + importJobId + "/records?status=conflict&conflictStatus=open&sourceType=issue");
+        assertThat(openConflictRecords).hasSizeGreaterThanOrEqualTo(1);
+        ObjectNode retargetBody = objectMapper.createObjectNode()
+                .put("name", "Jira title cleanup v1 retarget clone")
+                .put("enabled", true);
+        retargetBody.set("mappingTemplateIds", objectMapper.createArrayNode().add(mapping.at("/id").asText()));
+        JsonNode retargetPreview = postJson(
+                "/api/v1/import-transform-presets/" + transformPreset.at("/id").asText() + "/versions/" + presetVersions.at("/1/id").asText() + "/retarget-preview",
+                retargetBody);
+        assertThat(retargetPreview.at("/clonedPreset").isMissingNode() || retargetPreview.at("/clonedPreset").isNull()).isTrue();
+        assertThat(retargetPreview.at("/templates/0/id").asText()).isEqualTo(mapping.at("/id").asText());
+        JsonNode retargetApplied = postJson(
+                "/api/v1/import-transform-presets/" + transformPreset.at("/id").asText() + "/versions/" + presetVersions.at("/1/id").asText() + "/retarget",
+                retargetBody);
+        UUID retargetedPresetId = uuid(retargetApplied, "/clonedPreset/id");
+        assertThat(uuid(retargetApplied, "/templates/0/newTransformPresetId")).isEqualTo(retargetedPresetId);
+        JsonNode retargetedMapping = findRecordById(getJson("/api/v1/workspaces/" + workspaceId + "/import-mapping-templates"), mapping.at("/id").asText());
+        assertThat(uuid(retargetedMapping, "/transformPresetId")).isEqualTo(retargetedPresetId);
         JsonNode updatedMaterializationRuns = getJson("/api/v1/import-jobs/" + importJobId + "/materialization-runs");
         assertThat(updatedMaterializationRuns).hasSize(6);
         assertThat(updatedMaterializationRuns.at("/0/recordsSkipped").asInt()).isGreaterThanOrEqualTo(1);
         assertThat(updatedMaterializationRuns.at("/0/mappingRulesSnapshot/typeTranslations")).hasSize(1);
-        JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
+        HttpResponse<String> blockedComplete = post("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
+        assertThat(blockedComplete.statusCode()).isEqualTo(409);
+        JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode()
+                .put("acceptOpenConflicts", true));
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
     }
 
@@ -633,5 +670,14 @@ class ConfigurationApiIntegrationTest {
             }
         }
         throw new IllegalStateException("Record not found: " + sourceId);
+    }
+
+    private JsonNode findRecordById(JsonNode records, String id) {
+        for (JsonNode record : records) {
+            if (id.equals(record.at("/id").asText())) {
+                return record;
+            }
+        }
+        throw new IllegalStateException("Record not found: " + id);
     }
 }
