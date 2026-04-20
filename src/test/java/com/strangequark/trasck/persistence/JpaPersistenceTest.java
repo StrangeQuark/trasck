@@ -45,6 +45,8 @@ import com.strangequark.trasck.integration.ImportJob;
 import com.strangequark.trasck.integration.ImportJobRepository;
 import com.strangequark.trasck.integration.ImportMappingTemplate;
 import com.strangequark.trasck.integration.ImportMappingTemplateRepository;
+import com.strangequark.trasck.integration.ImportWorkspaceSettings;
+import com.strangequark.trasck.integration.ImportWorkspaceSettingsRepository;
 import com.strangequark.trasck.integration.ImportTransformPreset;
 import com.strangequark.trasck.integration.ImportTransformPresetRepository;
 import com.strangequark.trasck.integration.ImportTransformPresetVersion;
@@ -189,6 +191,9 @@ class JpaPersistenceTest {
     @Autowired
     private ImportMappingTemplateRepository importMappingTemplateRepository;
 
+    @Autowired
+    private ImportWorkspaceSettingsRepository importWorkspaceSettingsRepository;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -207,9 +212,9 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(129);
+        assertThat(tableCount).isEqualTo(130);
         assertThat(permissionCount).isEqualTo(31);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(126);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(127);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_automatic_enabled")).isTrue();
@@ -225,6 +230,7 @@ class JpaPersistenceTest {
         assertThat(columnExists("import_job_records", "conflict_status")).isTrue();
         assertThat(columnExists("import_job_records", "conflict_materialization_run_id")).isTrue();
         assertThat(columnExists("import_job_record_versions", "snapshot")).isTrue();
+        assertThat(columnExists("import_workspace_settings", "sample_jobs_enabled")).isTrue();
     }
 
     @Test
@@ -440,6 +446,11 @@ class JpaPersistenceTest {
         emailSettings.setActive(true);
         emailProviderSettingsRepository.saveAndFlush(emailSettings);
 
+        ImportWorkspaceSettings importSettings = new ImportWorkspaceSettings();
+        importSettings.setWorkspaceId(fixture.workspace.getId());
+        importSettings.setSampleJobsEnabled(true);
+        importWorkspaceSettingsRepository.saveAndFlush(importSettings);
+
         ImportTransformPreset preset = new ImportTransformPreset();
         preset.setWorkspaceId(fixture.workspace.getId());
         preset.setName("Jira cleanup");
@@ -573,6 +584,7 @@ class JpaPersistenceTest {
         assertThat(reloadedWorkerSettings.getWorkerRunPruningWindowStart()).isEqualTo(LocalTime.of(1, 0));
         assertThat(reloadedEmailSettings.getProvider()).isEqualTo("smtp");
         assertThat(reloadedEmailSettings.getSmtpPasswordEncrypted()).isEqualTo("aesgcm:v1:test");
+        assertThat(importWorkspaceSettingsRepository.findByWorkspaceId(fixture.workspace.getId()).orElseThrow().getSampleJobsEnabled()).isTrue();
         assertThat(importTransformPresetRepository.findById(preset.getId()).orElseThrow().getVersion()).isEqualTo(1);
         assertThat(importTransformPresetVersionRepository.findById(presetVersion.getId()).orElseThrow().getChangeType()).isEqualTo("created");
         assertThat(importMappingTemplateRepository.findById(template.getId()).orElseThrow().getTransformPresetId()).isEqualTo(preset.getId());

@@ -12,6 +12,8 @@ import org.springframework.data.repository.query.Param;
 public interface AutomationWorkerRunRepository extends JpaRepository<AutomationWorkerRun, UUID> {
     List<AutomationWorkerRun> findTop50ByWorkspaceIdOrderByStartedAtDesc(UUID workspaceId);
 
+    List<AutomationWorkerRun> findTop50ByWorkspaceIdAndWorkerTypeOrderByStartedAtDesc(UUID workspaceId, String workerType);
+
     long countByWorkspaceIdAndStartedAtBefore(UUID workspaceId, OffsetDateTime cutoff);
 
     List<AutomationWorkerRun> findByWorkspaceIdAndStartedAtBeforeOrderByStartedAtAsc(UUID workspaceId, OffsetDateTime cutoff, Pageable pageable);

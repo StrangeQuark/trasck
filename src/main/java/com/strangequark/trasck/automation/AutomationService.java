@@ -59,6 +59,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Properties;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
@@ -383,21 +384,29 @@ public class AutomationService {
     }
 
     @Transactional(readOnly = true)
-    public List<AutomationWorkerRunHistoryResponse> listWorkerRuns(UUID workspaceId) {
+    public List<AutomationWorkerRunHistoryResponse> listWorkerRuns(UUID workspaceId, String workerType) {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
-        return automationWorkerRunRepository.findTop50ByWorkspaceIdOrderByStartedAtDesc(workspaceId).stream()
+        String normalizedWorkerType = normalizeWorkerTypeFilter(workerType);
+        List<AutomationWorkerRun> runs = normalizedWorkerType == null
+                ? automationWorkerRunRepository.findTop50ByWorkspaceIdOrderByStartedAtDesc(workspaceId)
+                : automationWorkerRunRepository.findTop50ByWorkspaceIdAndWorkerTypeOrderByStartedAtDesc(workspaceId, normalizedWorkerType);
+        return runs.stream()
                 .map(AutomationWorkerRunHistoryResponse::from)
                 .toList();
     }
 
     @Transactional(readOnly = true)
-    public List<AutomationWorkerHealthResponse> listWorkerHealth(UUID workspaceId) {
+    public List<AutomationWorkerHealthResponse> listWorkerHealth(UUID workspaceId, String workerType) {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
-        return automationWorkerHealthRepository.findByWorkspaceIdOrderByWorkerTypeAsc(workspaceId).stream()
+        String normalizedWorkerType = normalizeWorkerTypeFilter(workerType);
+        List<AutomationWorkerHealth> healthRows = normalizedWorkerType == null
+                ? automationWorkerHealthRepository.findByWorkspaceIdOrderByWorkerTypeAsc(workspaceId)
+                : automationWorkerHealthRepository.findByWorkspaceIdAndWorkerTypeOrderByWorkerTypeAsc(workspaceId, normalizedWorkerType);
+        return healthRows.stream()
                 .map(AutomationWorkerHealthResponse::from)
                 .toList();
     }
@@ -1706,6 +1715,17 @@ public class AutomationService {
             throw badRequest("limit must be between 1 and 100");
         }
         return limit;
+    }
+
+    private String normalizeWorkerTypeFilter(String workerType) {
+        if (!hasText(workerType) || "all".equalsIgnoreCase(workerType.trim())) {
+            return null;
+        }
+        String normalized = workerType.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (!List.of("automation", "webhook", "email", "import_conflict_resolution").contains(normalized)) {
+            throw badRequest("workerType must be automation, webhook, email, or import_conflict_resolution");
+        }
+        return normalized;
     }
 
     private int normalizeRetentionExportLimit(Integer limit) {

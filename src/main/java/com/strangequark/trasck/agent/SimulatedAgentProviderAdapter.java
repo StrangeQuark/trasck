@@ -43,7 +43,18 @@ public class SimulatedAgentProviderAdapter implements AgentProviderAdapter {
     private AgentDispatchResult result(AgentTask task, String action) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("adapter", providerType())
+                .put("protocolVersion", "trasck.agent-runtime.v1")
                 .put("action", action)
+                .put("providerRuntime", "stub")
+                .put("transport", "internal_stub")
+                .put("externalDispatch", false)
+                .put("callbackHeaderName", AgentCallbackJwtService.CALLBACK_HEADER)
+                .put("requiresCallbackJwt", true)
+                .put("retrySupported", true)
+                .put("cancelSupported", true)
+                .put("requestChangesSupported", true)
+                .put("artifactCallbackSupported", true)
+                .put("idempotencyKey", providerType() + ":" + task.getId() + ":" + action)
                 .put("agentTaskId", task.getId().toString());
         return new AgentDispatchResult("simulated-" + task.getId(), payload);
     }
