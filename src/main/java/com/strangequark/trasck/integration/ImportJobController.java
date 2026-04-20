@@ -317,6 +317,29 @@ public class ImportJobController {
         return importJobService.previewResolveConflicts(importJobId, request);
     }
 
+    @GetMapping("/import-jobs/{importJobId}/conflict-resolution-jobs")
+    public List<ImportConflictResolutionJobResponse> listConflictResolutionJobs(@PathVariable UUID importJobId) {
+        return importJobService.listConflictResolutionJobs(importJobId);
+    }
+
+    @PostMapping("/import-jobs/{importJobId}/conflicts/resolve-async")
+    public ResponseEntity<ImportConflictResolutionJobResponse> createConflictResolutionJob(
+            @PathVariable UUID importJobId,
+            @RequestBody ImportConflictBulkResolutionRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createConflictResolutionJob(importJobId, request));
+    }
+
+    @GetMapping("/import-conflict-resolution-jobs/{jobId}")
+    public ImportConflictResolutionJobResponse getConflictResolutionJob(@PathVariable UUID jobId) {
+        return importJobService.getConflictResolutionJob(jobId);
+    }
+
+    @PostMapping("/import-conflict-resolution-jobs/{jobId}/run")
+    public ImportConflictResolutionJobResponse runConflictResolutionJob(@PathVariable UUID jobId) {
+        return importJobService.runConflictResolutionJob(jobId);
+    }
+
     @PatchMapping("/import-job-records/{recordId}")
     public ImportJobRecordResponse updateRecord(
             @PathVariable UUID recordId,
@@ -333,6 +356,16 @@ public class ImportJobController {
     @GetMapping("/import-job-records/{recordId}/version-diffs")
     public List<ImportJobRecordVersionDiffResponse> listRecordVersionDiffs(@PathVariable UUID recordId) {
         return importJobService.listRecordVersionDiffs(recordId);
+    }
+
+    @GetMapping("/import-jobs/{importJobId}/version-diffs")
+    public ImportJobVersionDiffResponse listJobVersionDiffs(@PathVariable UUID importJobId) {
+        return importJobService.listJobVersionDiffs(importJobId);
+    }
+
+    @GetMapping("/import-jobs/{importJobId}/version-diffs/export")
+    public ImportJobVersionDiffExportResponse exportJobVersionDiffs(@PathVariable UUID importJobId) {
+        return importJobService.exportJobVersionDiffs(importJobId);
     }
 
     @PostMapping("/import-jobs/{importJobId}/records")

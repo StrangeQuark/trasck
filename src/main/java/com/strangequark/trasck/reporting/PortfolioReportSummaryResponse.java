@@ -13,6 +13,7 @@ public record PortfolioReportSummaryResponse(
         ProjectReportSummaryResponse.ThroughputMetricsResponse throughput,
         ProjectReportSummaryResponse.EstimateTimeMetricsResponse estimateAndTime,
         ProjectReportSummaryResponse.CycleTimeMetricsResponse cycleTime,
+        ProjectReportSummaryResponse.ImportCompletionMetricsResponse importCompletions,
         List<ProjectReportSummaryResponse.DimensionCountResponse> byProject,
         List<ProjectReportSummaryResponse.DimensionCountResponse> byTeam,
         List<ProjectReportSummaryResponse.DimensionCountResponse> byType,

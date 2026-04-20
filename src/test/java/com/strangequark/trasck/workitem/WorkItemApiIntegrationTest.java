@@ -431,8 +431,9 @@ class WorkItemApiIntegrationTest {
         assertThat(projectSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
         assertThat(projectSummary.at("/estimateAndTime/workLogDeletedBehavior").asText()).isEqualTo("soft_deleted_excluded");
         assertThat(projectSummary.at("/cycleTime/completedWorkItems").asLong()).isGreaterThanOrEqualTo(1);
+        assertThat(projectSummary.at("/importCompletions/completedJobs").asLong()).isZero();
         assertThat(projectSummary.at("/byStatus")).isNotEmpty();
-        assertThat(projectSummary.at("/widgets")).hasSize(8);
+        assertThat(projectSummary.at("/widgets")).hasSize(9);
 
         JsonNode teamIterationSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z&teamId=" + reportingScope.teamId() + "&iterationId=" + reportingScope.iterationId());
         assertThat(teamIterationSummary.at("/scope/scopeType").asText()).isEqualTo("iteration");
