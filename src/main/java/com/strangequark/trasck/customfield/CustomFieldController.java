@@ -91,6 +91,43 @@ public class CustomFieldController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/workspaces/{workspaceId}/field-configurations")
+    public List<FieldConfigurationResponse> listFieldConfigurations(@PathVariable UUID workspaceId) {
+        return customFieldService.listFieldConfigurations(workspaceId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/field-configurations")
+    public ResponseEntity<FieldConfigurationResponse> createFieldConfiguration(
+            @PathVariable UUID workspaceId,
+            @RequestBody FieldConfigurationRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(customFieldService.createFieldConfiguration(workspaceId, request));
+    }
+
+    @GetMapping("/custom-fields/{customFieldId}/field-configurations")
+    public List<FieldConfigurationResponse> listFieldConfigurationsForField(@PathVariable UUID customFieldId) {
+        return customFieldService.listFieldConfigurationsForField(customFieldId);
+    }
+
+    @GetMapping("/field-configurations/{fieldConfigurationId}")
+    public FieldConfigurationResponse getFieldConfiguration(@PathVariable UUID fieldConfigurationId) {
+        return customFieldService.getFieldConfiguration(fieldConfigurationId);
+    }
+
+    @PatchMapping("/field-configurations/{fieldConfigurationId}")
+    public FieldConfigurationResponse updateFieldConfiguration(
+            @PathVariable UUID fieldConfigurationId,
+            @RequestBody FieldConfigurationRequest request
+    ) {
+        return customFieldService.updateFieldConfiguration(fieldConfigurationId, request);
+    }
+
+    @DeleteMapping("/field-configurations/{fieldConfigurationId}")
+    public ResponseEntity<Void> deleteFieldConfiguration(@PathVariable UUID fieldConfigurationId) {
+        customFieldService.deleteFieldConfiguration(fieldConfigurationId);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/work-items/{workItemId}/custom-fields")
     public List<CustomFieldValueResponse> listValues(@PathVariable UUID workItemId) {
         return customFieldService.listValues(workItemId);

@@ -68,6 +68,7 @@ public class CustomFieldService {
     private final ScreenRepository screenRepository;
     private final ScreenFieldRepository screenFieldRepository;
     private final ScreenAssignmentRepository screenAssignmentRepository;
+    private final FieldConfigurationRepository fieldConfigurationRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final WorkItemRepository workItemRepository;
@@ -84,6 +85,7 @@ public class CustomFieldService {
             ScreenRepository screenRepository,
             ScreenFieldRepository screenFieldRepository,
             ScreenAssignmentRepository screenAssignmentRepository,
+            FieldConfigurationRepository fieldConfigurationRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             WorkItemRepository workItemRepository,
@@ -99,6 +101,7 @@ public class CustomFieldService {
         this.screenRepository = screenRepository;
         this.screenFieldRepository = screenFieldRepository;
         this.screenAssignmentRepository = screenAssignmentRepository;
+        this.fieldConfigurationRepository = fieldConfigurationRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.workItemRepository = workItemRepository;
@@ -224,6 +227,83 @@ public class CustomFieldService {
                 .orElseThrow(() -> notFound("Custom field context not found"));
         customFieldContextRepository.delete(context);
         recordFieldEvent(field, "custom_field.context_deleted", actorId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<FieldConfigurationResponse> listFieldConfigurations(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.read");
+        return fieldConfigurationRepository.findByWorkspaceIdOrderByCustomFieldIdAscProjectIdAscWorkItemTypeIdAsc(workspaceId).stream()
+                .map(FieldConfigurationResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<FieldConfigurationResponse> listFieldConfigurationsForField(UUID customFieldId) {
+        UUID actorId = currentUserService.requireUserId();
+        CustomField field = customField(customFieldId);
+        activeWorkspace(field.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, field.getWorkspaceId(), "workspace.read");
+        return fieldConfigurationRepository.findByCustomFieldIdOrderByProjectIdAscWorkItemTypeIdAsc(field.getId()).stream()
+                .map(FieldConfigurationResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public FieldConfigurationResponse getFieldConfiguration(UUID fieldConfigurationId) {
+        UUID actorId = currentUserService.requireUserId();
+        FieldConfiguration configuration = fieldConfiguration(fieldConfigurationId);
+        activeWorkspace(configuration.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, configuration.getWorkspaceId(), "workspace.read");
+        return FieldConfigurationResponse.from(configuration);
+    }
+
+    @Transactional
+    public FieldConfigurationResponse createFieldConfiguration(UUID workspaceId, FieldConfigurationRequest request) {
+        FieldConfigurationRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        CustomField field = customField(required(createRequest.customFieldId(), "customFieldId"));
+        validateCustomFieldWorkspace(workspaceId, field);
+        FieldConfiguration configuration = new FieldConfiguration();
+        configuration.setWorkspaceId(workspaceId);
+        configuration.setCustomFieldId(field.getId());
+        applyFieldConfigurationRequest(workspaceId, configuration, createRequest, true);
+        FieldConfiguration saved = fieldConfigurationRepository.save(configuration);
+        recordFieldConfigurationEvent(saved, field, "field_configuration.created", actorId);
+        return FieldConfigurationResponse.from(saved);
+    }
+
+    @Transactional
+    public FieldConfigurationResponse updateFieldConfiguration(UUID fieldConfigurationId, FieldConfigurationRequest request) {
+        FieldConfigurationRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        FieldConfiguration configuration = fieldConfiguration(fieldConfigurationId);
+        activeWorkspace(configuration.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, configuration.getWorkspaceId(), "workspace.admin");
+        CustomField field = customField(configuration.getCustomFieldId());
+        if (updateRequest.customFieldId() != null && !updateRequest.customFieldId().equals(configuration.getCustomFieldId())) {
+            field = customField(updateRequest.customFieldId());
+            validateCustomFieldWorkspace(configuration.getWorkspaceId(), field);
+            configuration.setCustomFieldId(field.getId());
+        }
+        applyFieldConfigurationRequest(configuration.getWorkspaceId(), configuration, updateRequest, false);
+        FieldConfiguration saved = fieldConfigurationRepository.save(configuration);
+        recordFieldConfigurationEvent(saved, field, "field_configuration.updated", actorId);
+        return FieldConfigurationResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteFieldConfiguration(UUID fieldConfigurationId) {
+        UUID actorId = currentUserService.requireUserId();
+        FieldConfiguration configuration = fieldConfiguration(fieldConfigurationId);
+        activeWorkspace(configuration.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, configuration.getWorkspaceId(), "workspace.admin");
+        CustomField field = customField(configuration.getCustomFieldId());
+        fieldConfigurationRepository.delete(configuration);
+        recordFieldConfigurationEvent(configuration, field, "field_configuration.deleted", actorId);
     }
 
     @Transactional(readOnly = true)
@@ -593,6 +673,34 @@ public class CustomFieldService {
         }
     }
 
+    private void applyFieldConfigurationRequest(UUID workspaceId, FieldConfiguration configuration, FieldConfigurationRequest request, boolean create) {
+        if (create || request.projectId() != null) {
+            configuration.setProjectId(request.projectId() == null ? null : validateProject(workspaceId, request.projectId()).getId());
+        }
+        if (create || request.workItemTypeId() != null) {
+            configuration.setWorkItemTypeId(request.workItemTypeId() == null ? null : validateWorkItemType(workspaceId, request.workItemTypeId()).getId());
+        }
+        if (create) {
+            configuration.setRequired(Boolean.TRUE.equals(request.required()));
+            configuration.setHidden(Boolean.TRUE.equals(request.hidden()));
+            configuration.setDefaultValue(toJsonNullable(request.defaultValue()));
+            configuration.setValidationConfig(toJsonObject(request.validationConfig()));
+        } else {
+            if (request.required() != null) {
+                configuration.setRequired(request.required());
+            }
+            if (request.hidden() != null) {
+                configuration.setHidden(request.hidden());
+            }
+            if (request.defaultValue() != null) {
+                configuration.setDefaultValue(toJsonNullable(request.defaultValue()));
+            }
+            if (request.validationConfig() != null) {
+                configuration.setValidationConfig(toJsonObject(request.validationConfig()));
+            }
+        }
+    }
+
     private void applyScreenRequest(Screen screen, ScreenRequest request, boolean create) {
         if (create || hasText(request.name())) {
             screen.setName(requiredText(request.name(), "name"));
@@ -866,6 +974,10 @@ public class CustomFieldService {
         return customFieldRepository.findById(customFieldId).orElseThrow(() -> notFound("Custom field not found"));
     }
 
+    private FieldConfiguration fieldConfiguration(UUID fieldConfigurationId) {
+        return fieldConfigurationRepository.findById(fieldConfigurationId).orElseThrow(() -> notFound("Field configuration not found"));
+    }
+
     private Screen screen(UUID screenId) {
         return screenRepository.findById(screenId).orElseThrow(() -> notFound("Screen not found"));
     }
@@ -896,6 +1008,12 @@ public class CustomFieldService {
             throw badRequest("Work item type not found in this workspace");
         }
         return type;
+    }
+
+    private void validateCustomFieldWorkspace(UUID workspaceId, CustomField field) {
+        if (!workspaceId.equals(field.getWorkspaceId()) || Boolean.TRUE.equals(field.getArchived())) {
+            throw badRequest("Custom field does not belong to this workspace");
+        }
     }
 
     private JsonNode toJsonNullable(Object value) {
@@ -1101,6 +1219,21 @@ public class CustomFieldService {
                 .put("customFieldKey", field.getKey())
                 .put("actorUserId", actorId.toString());
         domainEventService.record(field.getWorkspaceId(), "custom_field", field.getId(), eventType, payload);
+    }
+
+    private void recordFieldConfigurationEvent(FieldConfiguration configuration, CustomField field, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("fieldConfigurationId", configuration.getId().toString())
+                .put("customFieldId", configuration.getCustomFieldId().toString())
+                .put("customFieldKey", field.getKey())
+                .put("actorUserId", actorId.toString());
+        if (configuration.getProjectId() != null) {
+            payload.put("projectId", configuration.getProjectId().toString());
+        }
+        if (configuration.getWorkItemTypeId() != null) {
+            payload.put("workItemTypeId", configuration.getWorkItemTypeId().toString());
+        }
+        domainEventService.record(configuration.getWorkspaceId(), "field_configuration", configuration.getId(), eventType, payload);
     }
 
     private void recordScreenEvent(Screen screen, String eventType, UUID actorId) {

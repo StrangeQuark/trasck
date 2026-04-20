@@ -1,0 +1,324 @@
+package com.strangequark.trasck.configuration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Testcontainers
+class ConfigurationApiIntegrationTest {
+
+    @Container
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:13.1-alpine")
+            .withDatabaseName("trasck_configuration_test")
+            .withUsername("trasck")
+            .withPassword("trasck");
+
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    private String accessToken;
+
+    @DynamicPropertySource
+    static void postgresProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
+        registry.add("spring.flyway.enabled", () -> "true");
+    }
+
+    @Test
+    void managesConfigurationPlanningAutomationNotificationAndImportApis() throws Exception {
+        JsonNode setup = postSetup();
+        UUID actorId = uuid(setup, "/adminUser/id");
+        UUID workspaceId = uuid(setup, "/workspace/id");
+        UUID projectId = uuid(setup, "/project/id");
+        accessToken = login(setup);
+
+        JsonNode story = createWorkItem(projectId, actorId, "story", "Configurable delivery story");
+        UUID storyId = uuid(story, "/id");
+        UUID storyTypeId = uuid(story, "/typeId");
+
+        JsonNode customerField = postJson("/api/v1/workspaces/" + workspaceId + "/custom-fields", objectMapper.createObjectNode()
+                .put("name", "Customer Tier")
+                .put("key", "customer-tier")
+                .put("fieldType", "single_select")
+                .put("searchable", true));
+        UUID customerFieldId = uuid(customerField, "/id");
+        ObjectNode fieldConfigBody = objectMapper.createObjectNode()
+                .put("customFieldId", customerFieldId.toString())
+                .put("projectId", projectId.toString())
+                .put("workItemTypeId", storyTypeId.toString())
+                .put("required", true)
+                .put("hidden", false)
+                .put("defaultValue", "gold");
+        fieldConfigBody.set("validationConfig", objectMapper.createObjectNode().put("allowEmpty", false));
+        JsonNode fieldConfiguration = postJson("/api/v1/workspaces/" + workspaceId + "/field-configurations", fieldConfigBody);
+        UUID fieldConfigurationId = uuid(fieldConfiguration, "/id");
+        assertThat(fieldConfiguration.at("/required").asBoolean()).isTrue();
+        JsonNode updatedFieldConfiguration = patch("/api/v1/field-configurations/" + fieldConfigurationId, objectMapper.createObjectNode()
+                .put("required", false));
+        assertThat(updatedFieldConfiguration.at("/required").asBoolean()).isFalse();
+        assertThat(getJson("/api/v1/custom-fields/" + customerFieldId + "/field-configurations")).hasSize(1);
+
+        ObjectNode boardBody = objectMapper.createObjectNode()
+                .put("name", "Delivery Board")
+                .put("type", "kanban")
+                .put("active", true);
+        boardBody.set("filterConfig", objectMapper.createObjectNode().put("query", "project = TRK"));
+        JsonNode board = postJson("/api/v1/projects/" + projectId + "/boards", boardBody);
+        UUID boardId = uuid(board, "/id");
+        ObjectNode columnBody = objectMapper.createObjectNode()
+                .put("name", "Done")
+                .put("position", 1)
+                .put("doneColumn", true);
+        columnBody.set("statusIds", objectMapper.createArrayNode().add(statusId(setup, "done").toString()));
+        JsonNode column = postJson("/api/v1/boards/" + boardId + "/columns", columnBody);
+        assertThat(column.at("/doneColumn").asBoolean()).isTrue();
+        ObjectNode swimlaneBody = objectMapper.createObjectNode()
+                .put("name", "By assignee")
+                .put("swimlaneType", "assignee")
+                .put("position", 0)
+                .put("enabled", true);
+        swimlaneBody.set("query", objectMapper.createObjectNode());
+        JsonNode swimlane = postJson("/api/v1/boards/" + boardId + "/swimlanes", swimlaneBody);
+        assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("assignee");
+        assertThat(getJson("/api/v1/projects/" + projectId + "/boards")).hasSizeGreaterThanOrEqualTo(2);
+
+        JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
+                .put("name", "Release 1")
+                .put("version", "1.0.0")
+                .put("startDate", "2026-04-20")
+                .put("releaseDate", "2026-05-01")
+                .put("status", "planned")
+                .put("description", "First release"));
+        UUID releaseId = uuid(release, "/id");
+        JsonNode releaseWorkItem = postJson("/api/v1/releases/" + releaseId + "/work-items", objectMapper.createObjectNode()
+                .put("workItemId", storyId.toString()));
+        assertThat(uuid(releaseWorkItem, "/workItemId")).isEqualTo(storyId);
+
+        ObjectNode roadmapBody = objectMapper.createObjectNode()
+                .put("projectId", projectId.toString())
+                .put("name", "Delivery Roadmap")
+                .put("visibility", "workspace");
+        roadmapBody.set("config", objectMapper.createObjectNode().put("groupBy", "type"));
+        JsonNode roadmap = postJson("/api/v1/workspaces/" + workspaceId + "/roadmaps", roadmapBody);
+        UUID roadmapId = uuid(roadmap, "/id");
+        ObjectNode roadmapItemBody = objectMapper.createObjectNode()
+                .put("workItemId", storyId.toString())
+                .put("startDate", "2026-04-20")
+                .put("endDate", "2026-05-01")
+                .put("position", 0);
+        roadmapItemBody.set("displayConfig", objectMapper.createObjectNode().put("color", "green"));
+        JsonNode roadmapItem = postJson("/api/v1/roadmaps/" + roadmapId + "/items", roadmapItemBody);
+        assertThat(uuid(roadmapItem, "/workItemId")).isEqualTo(storyId);
+
+        JsonNode preference = postJson("/api/v1/workspaces/" + workspaceId + "/notification-preferences", objectMapper.createObjectNode()
+                .put("channel", "in_app")
+                .put("eventType", "automation.rule_executed")
+                .put("enabled", true));
+        assertThat(preference.at("/enabled").asBoolean()).isTrue();
+
+        ObjectNode webhookBody = objectMapper.createObjectNode()
+                .put("name", "Automation Webhook")
+                .put("url", "https://example.com/trasck")
+                .put("secret", "development-secret")
+                .put("enabled", true);
+        webhookBody.set("eventTypes", objectMapper.createArrayNode().add("automation.test"));
+        JsonNode webhook = postJson("/api/v1/workspaces/" + workspaceId + "/webhooks", webhookBody);
+        UUID webhookId = uuid(webhook, "/id");
+        assertThat(webhook.at("/secretConfigured").asBoolean()).isTrue();
+
+        ObjectNode ruleBody = objectMapper.createObjectNode()
+                .put("name", "Notify and webhook")
+                .put("triggerType", "manual")
+                .put("enabled", true);
+        ruleBody.set("triggerConfig", objectMapper.createObjectNode());
+        JsonNode rule = postJson("/api/v1/workspaces/" + workspaceId + "/automation-rules", ruleBody);
+        UUID ruleId = uuid(rule, "/id");
+        ObjectNode notificationConfig = objectMapper.createObjectNode()
+                .put("userId", actorId.toString())
+                .put("title", "Automation completed")
+                .put("body", "The rule executed.")
+                .put("targetType", "work_item")
+                .put("targetId", storyId.toString());
+        ObjectNode notificationAction = objectMapper.createObjectNode()
+                .put("actionType", "create_notification")
+                .put("executionMode", "sync")
+                .put("position", 0);
+        notificationAction.set("config", notificationConfig);
+        postJson("/api/v1/automation-rules/" + ruleId + "/actions", notificationAction);
+        ObjectNode webhookConfig = objectMapper.createObjectNode()
+                .put("webhookId", webhookId.toString())
+                .put("eventType", "automation.test");
+        ObjectNode webhookAction = objectMapper.createObjectNode()
+                .put("actionType", "webhook")
+                .put("executionMode", "async")
+                .put("position", 1);
+        webhookAction.set("config", webhookConfig);
+        postJson("/api/v1/automation-rules/" + ruleId + "/actions", webhookAction);
+        ObjectNode executionBody = objectMapper.createObjectNode()
+                .put("sourceEntityType", "work_item")
+                .put("sourceEntityId", storyId.toString());
+        executionBody.set("payload", objectMapper.createObjectNode().put("workItemId", storyId.toString()));
+        JsonNode execution = postJson("/api/v1/automation-rules/" + ruleId + "/execute", executionBody);
+        assertThat(execution.at("/status").asText()).isEqualTo("succeeded");
+        assertThat(execution.at("/logs")).hasSize(2);
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/notifications")).hasSize(1);
+        assertThat(getJson("/api/v1/webhooks/" + webhookId + "/deliveries")).hasSize(1);
+
+        JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
+                .put("provider", "jira"));
+        UUID importJobId = uuid(importJob, "/id");
+        JsonNode importRecord = postJson("/api/v1/import-jobs/" + importJobId + "/records", objectMapper.createObjectNode()
+                .put("sourceType", "issue")
+                .put("sourceId", "JIRA-1")
+                .put("targetType", "work_item")
+                .put("targetId", storyId.toString())
+                .put("status", "imported"));
+        assertThat(importRecord.at("/sourceId").asText()).isEqualTo("JIRA-1");
+        postJson("/api/v1/import-jobs/" + importJobId + "/start", objectMapper.createObjectNode());
+        JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
+        assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
+    }
+
+    private JsonNode postSetup() throws Exception {
+        String unique = UUID.randomUUID().toString().replace("-", "");
+        ObjectNode body = objectMapper.createObjectNode();
+        body.set("adminUser", objectMapper.createObjectNode()
+                .put("email", "configuration-" + unique + "@example.com")
+                .put("username", "configuration-" + unique)
+                .put("displayName", "Configuration Admin")
+                .put("password", "correct-horse-battery-staple"));
+        body.set("organization", objectMapper.createObjectNode()
+                .put("name", "Configuration Organization")
+                .put("slug", "configuration-" + unique));
+        body.set("workspace", objectMapper.createObjectNode()
+                .put("name", "Configuration Workspace")
+                .put("key", "CF" + unique.substring(0, 6))
+                .put("timezone", "America/Chicago")
+                .put("locale", "en-US")
+                .put("anonymousReadEnabled", true));
+        body.set("project", objectMapper.createObjectNode()
+                .put("name", "Configuration Project")
+                .put("key", "CFG" + unique.substring(0, 6))
+                .put("description", "Project created by configuration integration test")
+                .put("visibility", "public"));
+        HttpResponse<String> response = rawPost("/api/v1/setup", body);
+        assertThat(response.statusCode()).isEqualTo(201);
+        return objectMapper.readTree(response.body());
+    }
+
+    private String login(JsonNode setup) throws Exception {
+        ObjectNode body = objectMapper.createObjectNode()
+                .put("identifier", setup.at("/adminUser/email").asText())
+                .put("password", "correct-horse-battery-staple");
+        HttpResponse<String> response = rawPost("/api/v1/auth/login", body);
+        assertThat(response.statusCode()).isEqualTo(200);
+        return objectMapper.readTree(response.body()).at("/accessToken").asText();
+    }
+
+    private JsonNode createWorkItem(UUID projectId, UUID actorId, String typeKey, String title) throws Exception {
+        ObjectNode body = objectMapper.createObjectNode()
+                .put("typeKey", typeKey)
+                .put("title", title)
+                .put("descriptionMarkdown", "Test work item")
+                .put("reporterId", actorId.toString());
+        body.set("descriptionDocument", objectMapper.createObjectNode()
+                .put("type", "doc")
+                .put("title", title));
+        HttpResponse<String> response = post("/api/v1/projects/" + projectId + "/work-items", body);
+        assertThat(response.statusCode()).isEqualTo(201);
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode postJson(String path, JsonNode body) throws Exception {
+        HttpResponse<String> response = post(path, body);
+        assertThat(response.statusCode()).isBetween(200, 299);
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode patch(String path, JsonNode body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder);
+        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).isBetween(200, 299);
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode getJson(String path) throws Exception {
+        HttpResponse<String> response = get(path);
+        assertThat(response.statusCode()).isEqualTo(200);
+        return objectMapper.readTree(response.body());
+    }
+
+    private HttpResponse<String> post(String path, JsonNode body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> rawPost(String path, JsonNode body) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                .build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> get(String path) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
+        authorize(builder);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void authorize(HttpRequest.Builder builder) {
+        if (accessToken != null) {
+            builder.header("Authorization", "Bearer " + accessToken);
+        }
+    }
+
+    private URI uri(String path) {
+        return URI.create("http://localhost:" + port + path);
+    }
+
+    private UUID uuid(JsonNode node, String pointer) {
+        return UUID.fromString(node.at(pointer).asText());
+    }
+
+    private UUID statusId(JsonNode setup, String key) {
+        for (JsonNode status : setup.at("/seedData/workflow/statuses")) {
+            if (key.equals(status.at("/key").asText())) {
+                return UUID.fromString(status.at("/id").asText());
+            }
+        }
+        throw new IllegalStateException("Status not found: " + key);
+    }
+}
