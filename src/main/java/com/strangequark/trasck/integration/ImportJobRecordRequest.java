@@ -7,6 +7,7 @@ public record ImportJobRecordRequest(
         String sourceId,
         String targetType,
         UUID targetId,
+        Boolean clearTarget,
         String status,
         String errorMessage,
         Object rawPayload

@@ -1,6 +1,7 @@
 package com.strangequark.trasck.integration;
 
 public record ImportMaterializationRerunRequest(
-        Integer limit
+        Integer limit,
+        Boolean updateExisting
 ) {
 }
