@@ -10,6 +10,8 @@ public record ImportConflictBulkResolutionRequest(
         String status,
         String conflictStatus,
         String sourceType,
+        Integer page,
+        Integer pageSize,
         Integer expectedCount,
         String confirmation
 ) {

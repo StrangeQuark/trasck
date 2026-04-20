@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.JsonValues;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
@@ -20,9 +21,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.PatternSyntaxException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +38,9 @@ public class ImportJobService {
 
     private static final String COMPLETE_OPEN_CONFLICTS_CONFIRMATION = "COMPLETE WITH OPEN CONFLICTS";
     private static final String RESOLVE_FILTERED_CONFLICTS_CONFIRMATION = "RESOLVE FILTERED CONFLICTS";
+    private static final int DEFAULT_CONFLICT_PREVIEW_PAGE_SIZE = 50;
+    private static final int MAX_CONFLICT_PREVIEW_PAGE_SIZE = 200;
+    private static final int MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE = 500;
 
     private static final Set<String> SUPPORTED_TRANSFORM_FUNCTIONS = Set.of(
             "trim",
@@ -525,6 +533,19 @@ public class ImportJobService {
         }
         job.setStatus("completed");
         job.setFinishedAt(OffsetDateTime.now());
+        if (openConflicts > 0) {
+            job.setOpenConflictCompletionAccepted(true);
+            job.setOpenConflictCompletionCount(Math.toIntExact(openConflicts));
+            job.setOpenConflictCompletedById(actorId);
+            job.setOpenConflictCompletedAt(job.getFinishedAt());
+            job.setOpenConflictCompletionReason(openConflictReason);
+        } else {
+            job.setOpenConflictCompletionAccepted(false);
+            job.setOpenConflictCompletionCount(0);
+            job.setOpenConflictCompletedById(null);
+            job.setOpenConflictCompletedAt(null);
+            job.setOpenConflictCompletionReason(null);
+        }
         ImportJob saved = importJobRepository.save(job);
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("openConflictCount", openConflicts);
@@ -736,6 +757,7 @@ public class ImportJobService {
         if ("filtered".equals(scope)) {
             validateFilteredConflictConfirmation(resolutionRequest, records.size());
         }
+        validateConflictResolutionBatchSize(records.size());
         List<ImportJobRecordResponse> responses = new ArrayList<>();
         for (ImportJobRecord record : records) {
             applyConflictResolution(record, resolution, actorId);
@@ -755,10 +777,22 @@ public class ImportJobService {
         ImportJob job = importJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
         String scope = conflictResolutionScope(resolutionRequest.scope());
-        List<ImportJobRecordResponse> records = conflictResolutionRecords(job, resolutionRequest, scope, true).stream()
+        ConflictResolutionPreview preview = conflictResolutionPreview(job, resolutionRequest, scope);
+        List<ImportJobRecordResponse> records = preview.records().stream()
                 .map(ImportJobRecordResponse::from)
                 .toList();
-        return new ImportConflictBulkResolutionPreviewResponse(job.getId(), resolution, scope, records.size(), records);
+        return new ImportConflictBulkResolutionPreviewResponse(
+                job.getId(),
+                resolution,
+                scope,
+                Math.toIntExact(preview.matched()),
+                records.size(),
+                preview.page(),
+                preview.pageSize(),
+                preview.hasMore(),
+                MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE,
+                records
+        );
     }
 
     private String conflictResolutionScope(String value) {
@@ -769,6 +803,29 @@ public class ImportJobService {
         return scope;
     }
 
+    private ConflictResolutionPreview conflictResolutionPreview(
+            ImportJob job,
+            ImportConflictBulkResolutionRequest request,
+            String scope
+    ) {
+        int page = normalizePreviewPage(request.page());
+        int pageSize = normalizePreviewPageSize(request.pageSize());
+        if ("filtered".equals(scope)) {
+            validateFilteredConflictFilters(request);
+            long matched = countFilteredConflicts(job, request);
+            List<ImportJobRecord> records = importJobRecordRepository.findFiltered(
+                    job.getId(),
+                    normalizedFilter(request.status()),
+                    "open",
+                    normalizedFilter(request.sourceType()),
+                    PageRequest.of(page, pageSize)
+            );
+            return new ConflictResolutionPreview(matched, records, page, pageSize, ((long) (page + 1) * pageSize) < matched);
+        }
+        List<ImportJobRecord> records = conflictResolutionRecords(job, request, scope, true);
+        return new ConflictResolutionPreview(records.size(), records, page, pageSize, false);
+    }
+
     private List<ImportJobRecord> conflictResolutionRecords(
             ImportJob job,
             ImportConflictBulkResolutionRequest request,
@@ -776,14 +833,19 @@ public class ImportJobService {
             boolean allowEmpty
     ) {
         if ("filtered".equals(scope)) {
-            if (hasText(request.conflictStatus()) && !"open".equals(normalizedFilter(request.conflictStatus()))) {
-                throw badRequest("Filtered bulk conflict resolution only supports open conflicts");
+            validateFilteredConflictFilters(request);
+            long matched = countFilteredConflicts(job, request);
+            if (matched > MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE) {
+                throw badRequest("Filtered bulk conflict resolution supports at most "
+                        + MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE
+                        + " open conflicts at a time; narrow the filters or resolve selected preview records in batches");
             }
             List<ImportJobRecord> records = importJobRecordRepository.findFiltered(
                     job.getId(),
                     normalizedFilter(request.status()),
                     "open",
-                    normalizedFilter(request.sourceType())
+                    normalizedFilter(request.sourceType()),
+                    PageRequest.of(0, MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE)
             );
             if (records.isEmpty() && !allowEmpty) {
                 throw badRequest("No open conflicts match the requested filters");
@@ -797,6 +859,7 @@ public class ImportJobService {
         if (recordIds.isEmpty()) {
             throw badRequest("recordIds is required");
         }
+        validateConflictResolutionBatchSize(recordIds.size());
         List<ImportJobRecord> records = importJobRecordRepository.findByIdInAndImportJobIdOrderBySourceTypeAscSourceIdAsc(recordIds, job.getId());
         if (records.size() != recordIds.size()) {
             throw badRequest("All import job records must belong to the import job");
@@ -811,6 +874,49 @@ public class ImportJobService {
         if (request.expectedCount() == null || request.expectedCount() != matchedCount) {
             throw badRequest("expectedCount must match the current filtered open conflict count");
         }
+    }
+
+    private void validateFilteredConflictFilters(ImportConflictBulkResolutionRequest request) {
+        if (hasText(request.conflictStatus()) && !"open".equals(normalizedFilter(request.conflictStatus()))) {
+            throw badRequest("Filtered bulk conflict resolution only supports open conflicts");
+        }
+    }
+
+    private long countFilteredConflicts(ImportJob job, ImportConflictBulkResolutionRequest request) {
+        return importJobRecordRepository.countFiltered(
+                job.getId(),
+                normalizedFilter(request.status()),
+                "open",
+                normalizedFilter(request.sourceType())
+        );
+    }
+
+    private void validateConflictResolutionBatchSize(int recordCount) {
+        if (recordCount > MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE) {
+            throw badRequest("Bulk conflict resolution supports at most "
+                    + MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE
+                    + " records at a time");
+        }
+    }
+
+    private int normalizePreviewPage(Integer page) {
+        if (page == null) {
+            return 0;
+        }
+        if (page < 0) {
+            throw badRequest("page must be zero or greater");
+        }
+        return page;
+    }
+
+    private int normalizePreviewPageSize(Integer pageSize) {
+        if (pageSize == null) {
+            return DEFAULT_CONFLICT_PREVIEW_PAGE_SIZE;
+        }
+        if (pageSize < 1 || pageSize > MAX_CONFLICT_PREVIEW_PAGE_SIZE) {
+            throw badRequest("pageSize must be between 1 and " + MAX_CONFLICT_PREVIEW_PAGE_SIZE);
+        }
+        return pageSize;
     }
 
     @Transactional(readOnly = true)
@@ -833,6 +939,23 @@ public class ImportJobService {
         return importJobRecordVersionRepository.findByImportJobRecordIdOrderByVersionDesc(record.getId()).stream()
                 .map(ImportJobRecordVersionResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportJobRecordVersionDiffResponse> listRecordVersionDiffs(UUID recordId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJobRecord record = importJobRecordRepository.findById(recordId)
+                .orElseThrow(() -> notFound("Import job record not found"));
+        ImportJob job = importJob(record.getImportJobId());
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        List<ImportJobRecordVersion> versions = importJobRecordVersionRepository.findByImportJobRecordIdOrderByVersionDesc(record.getId());
+        List<ImportJobRecordVersionDiffResponse> responses = new ArrayList<>();
+        for (int index = 0; index < versions.size(); index++) {
+            ImportJobRecordVersion current = versions.get(index);
+            ImportJobRecordVersion previous = index + 1 < versions.size() ? versions.get(index + 1) : null;
+            responses.add(recordVersionDiff(current, previous));
+        }
+        return responses;
     }
 
     private ImportMaterializeResponse processMaterialization(
@@ -2097,6 +2220,65 @@ public class ImportJobService {
         return snapshot;
     }
 
+    private ImportJobRecordVersionDiffResponse recordVersionDiff(
+            ImportJobRecordVersion current,
+            ImportJobRecordVersion previous
+    ) {
+        Map<String, JsonNode> currentFields = flattenSnapshot(current.getSnapshot());
+        Map<String, JsonNode> previousFields = previous == null ? Map.of() : flattenSnapshot(previous.getSnapshot());
+        Set<String> paths = new TreeSet<>();
+        paths.addAll(currentFields.keySet());
+        paths.addAll(previousFields.keySet());
+        List<ImportJobRecordFieldDiffResponse> fieldDiffs = new ArrayList<>();
+        for (String path : paths) {
+            boolean existedBefore = previousFields.containsKey(path);
+            boolean existsNow = currentFields.containsKey(path);
+            JsonNode previousValue = previousFields.get(path);
+            JsonNode currentValue = currentFields.get(path);
+            if (!existedBefore) {
+                fieldDiffs.add(new ImportJobRecordFieldDiffResponse(path, "added", null, JsonValues.toJavaValue(currentValue)));
+            } else if (!existsNow) {
+                fieldDiffs.add(new ImportJobRecordFieldDiffResponse(path, "removed", JsonValues.toJavaValue(previousValue), null));
+            } else if (!previousValue.equals(currentValue)) {
+                fieldDiffs.add(new ImportJobRecordFieldDiffResponse(
+                        path,
+                        "changed",
+                        JsonValues.toJavaValue(previousValue),
+                        JsonValues.toJavaValue(currentValue)
+                ));
+            }
+        }
+        return new ImportJobRecordVersionDiffResponse(
+                current.getId(),
+                current.getImportJobRecordId(),
+                current.getImportJobId(),
+                current.getVersion(),
+                previous == null ? null : previous.getVersion(),
+                current.getChangeType(),
+                current.getChangedById(),
+                current.getCreatedAt(),
+                fieldDiffs
+        );
+    }
+
+    private Map<String, JsonNode> flattenSnapshot(JsonNode snapshot) {
+        Map<String, JsonNode> fields = new TreeMap<>();
+        flattenSnapshot(snapshot == null ? objectMapper.createObjectNode() : snapshot, "", fields);
+        return fields;
+    }
+
+    private void flattenSnapshot(JsonNode value, String prefix, Map<String, JsonNode> fields) {
+        if (value != null && value.isObject()) {
+            value.fields().forEachRemaining(entry -> flattenSnapshot(
+                    entry.getValue(),
+                    prefix.isBlank() ? entry.getKey() : prefix + "." + entry.getKey(),
+                    fields
+            ));
+            return;
+        }
+        fields.put(prefix.isBlank() ? "value" : prefix, value == null ? objectMapper.nullNode() : value);
+    }
+
     private void recordMappingTemplateEvent(ImportMappingTemplate template, String eventType, UUID actorId) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("mappingTemplateId", template.getId().toString())
@@ -2213,6 +2395,15 @@ public class ImportJobService {
     }
 
     private record MaterializedWorkItem(WorkItemResponse response, boolean created) {
+    }
+
+    private record ConflictResolutionPreview(
+            long matched,
+            List<ImportJobRecord> records,
+            int page,
+            int pageSize,
+            boolean hasMore
+    ) {
     }
 
     private record ImportMappingRules(

@@ -14,6 +14,11 @@ public record ImportJobResponse(
         Object config,
         OffsetDateTime startedAt,
         OffsetDateTime finishedAt,
+        Boolean openConflictCompletionAccepted,
+        Integer openConflictCompletionCount,
+        UUID openConflictCompletedById,
+        OffsetDateTime openConflictCompletedAt,
+        String openConflictCompletionReason,
         List<ImportJobRecordResponse> records
 ) {
     static ImportJobResponse from(ImportJob job, List<ImportJobRecord> records) {
@@ -26,6 +31,11 @@ public record ImportJobResponse(
                 JsonValues.toJavaValue(job.getConfig()),
                 job.getStartedAt(),
                 job.getFinishedAt(),
+                Boolean.TRUE.equals(job.getOpenConflictCompletionAccepted()),
+                job.getOpenConflictCompletionCount() == null ? 0 : job.getOpenConflictCompletionCount(),
+                job.getOpenConflictCompletedById(),
+                job.getOpenConflictCompletedAt(),
+                job.getOpenConflictCompletionReason(),
                 records.stream().map(ImportJobRecordResponse::from).toList()
         );
     }

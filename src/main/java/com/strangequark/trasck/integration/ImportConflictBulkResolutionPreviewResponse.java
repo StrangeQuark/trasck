@@ -8,6 +8,11 @@ public record ImportConflictBulkResolutionPreviewResponse(
         String resolution,
         String scope,
         Integer matched,
+        Integer returned,
+        Integer page,
+        Integer pageSize,
+        Boolean hasMore,
+        Integer maxResolutionBatchSize,
         List<ImportJobRecordResponse> records
 ) {
 }

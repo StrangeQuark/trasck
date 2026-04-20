@@ -346,6 +346,11 @@ class ConfigurationApiIntegrationTest {
         JsonNode importRecordVersions = getJson("/api/v1/import-job-records/" + importRecord.at("/id").asText() + "/versions");
         assertThat(importRecordVersions).hasSize(2);
         assertThat(importRecordVersions.at("/0/changeType").asText()).isEqualTo("updated");
+        JsonNode importRecordDiffs = getJson("/api/v1/import-job-records/" + importRecord.at("/id").asText() + "/version-diffs");
+        assertThat(importRecordDiffs).hasSize(2);
+        assertThat(importRecordDiffs.at("/0/version").asInt()).isEqualTo(2);
+        assertThat(importRecordDiffs.at("/0/comparedToVersion").asInt()).isEqualTo(1);
+        assertThat(hasDiffField(importRecordDiffs.at("/0/fields"), "rawPayload.fields.summary", "added")).isTrue();
         ObjectNode parseBody = objectMapper.createObjectNode()
                 .put("content", """
                         {"issues":[{"key":"JIRA-2","fields":{"summary":"  Imported: Parsed    story  ","issuetype":{"name":"Story"},"status":{"name":"To Do"},"security":"Public"}}]}
@@ -519,9 +524,17 @@ class ConfigurationApiIntegrationTest {
                 .put("resolution", "update_existing");
         JsonNode filteredResolvePreview = postJson(
                 "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve-preview",
-                filteredResolveBody);
+                ((ObjectNode) filteredResolveBody.deepCopy()).put("pageSize", 1));
         assertThat(filteredResolvePreview.at("/scope").asText()).isEqualTo("filtered");
         assertThat(filteredResolvePreview.at("/matched").asInt()).isEqualTo(openConflictRecords.size());
+        assertThat(filteredResolvePreview.at("/returned").asInt()).isEqualTo(1);
+        assertThat(filteredResolvePreview.at("/page").asInt()).isZero();
+        assertThat(filteredResolvePreview.at("/pageSize").asInt()).isEqualTo(1);
+        assertThat(filteredResolvePreview.at("/maxResolutionBatchSize").asInt()).isEqualTo(500);
+        HttpResponse<String> blockedFilteredPreview = post(
+                "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve-preview",
+                ((ObjectNode) filteredResolveBody.deepCopy()).put("pageSize", 201));
+        assertThat(blockedFilteredPreview.statusCode()).isEqualTo(400);
         HttpResponse<String> blockedFilteredResolve = post(
                 "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve",
                 ((ObjectNode) filteredResolveBody.deepCopy())
@@ -570,6 +583,11 @@ class ConfigurationApiIntegrationTest {
                 .put("openConflictConfirmation", "COMPLETE WITH OPEN CONFLICTS")
                 .put("openConflictReason", "Manual import exercise accepts these staged open conflicts."));
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
+        assertThat(completedImportJob.at("/openConflictCompletionAccepted").asBoolean()).isTrue();
+        assertThat(completedImportJob.at("/openConflictCompletionCount").asInt()).isGreaterThan(0);
+        assertThat(uuid(completedImportJob, "/openConflictCompletedById")).isEqualTo(actorId);
+        assertThat(completedImportJob.at("/openConflictCompletedAt").isMissingNode() || completedImportJob.at("/openConflictCompletedAt").isNull()).isFalse();
+        assertThat(completedImportJob.at("/openConflictCompletionReason").asText()).contains("Manual import exercise");
         JsonNode replayedEvents = postJson("/api/v1/workspaces/" + workspaceId + "/domain-events/replay", objectMapper.createObjectNode());
         assertThat(replayedEvents.at("/eventsMatched").asInt()).isGreaterThan(0);
         JsonNode activity = getJson("/api/v1/workspaces/" + workspaceId + "/activity?limit=100");
@@ -723,6 +741,15 @@ class ConfigurationApiIntegrationTest {
             }
         }
         throw new IllegalStateException("Record not found: " + id);
+    }
+
+    private boolean hasDiffField(JsonNode fields, String path, String changeType) {
+        for (JsonNode field : fields) {
+            if (path.equals(field.at("/path").asText()) && changeType.equals(field.at("/changeType").asText())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> eventTypes(JsonNode records, String field) {
