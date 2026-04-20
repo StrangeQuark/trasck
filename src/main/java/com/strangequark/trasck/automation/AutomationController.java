@@ -1,5 +1,8 @@
 package com.strangequark.trasck.automation;
 
+import com.strangequark.trasck.integration.EmailDeliveryResponse;
+import com.strangequark.trasck.integration.EmailDeliveryWorkerRequest;
+import com.strangequark.trasck.integration.EmailDeliveryWorkerResponse;
 import com.strangequark.trasck.integration.WebhookDeliveryResponse;
 import com.strangequark.trasck.integration.WebhookDeliveryWorkerRequest;
 import com.strangequark.trasck.integration.WebhookDeliveryWorkerResponse;
@@ -129,6 +132,19 @@ public class AutomationController {
         return automationService.runQueuedJobs(workspaceId, request == null ? null : request.limit());
     }
 
+    @GetMapping("/workspaces/{workspaceId}/automation-worker-settings")
+    public AutomationWorkerSettingsResponse getWorkerSettings(@PathVariable UUID workspaceId) {
+        return automationService.getWorkerSettings(workspaceId);
+    }
+
+    @PatchMapping("/workspaces/{workspaceId}/automation-worker-settings")
+    public AutomationWorkerSettingsResponse updateWorkerSettings(
+            @PathVariable UUID workspaceId,
+            @RequestBody AutomationWorkerSettingsRequest request
+    ) {
+        return automationService.updateWorkerSettings(workspaceId, request);
+    }
+
     @GetMapping("/automation-jobs/{jobId}")
     public AutomationExecutionJobResponse getJob(@PathVariable UUID jobId) {
         return automationService.getJob(jobId);
@@ -160,11 +176,54 @@ public class AutomationController {
         return automationService.listWebhookDeliveries(webhookId);
     }
 
+    @GetMapping("/webhook-deliveries/{deliveryId}")
+    public WebhookDeliveryResponse getWebhookDelivery(@PathVariable UUID deliveryId) {
+        return automationService.getWebhookDelivery(deliveryId);
+    }
+
+    @PostMapping("/webhook-deliveries/{deliveryId}/retry")
+    public WebhookDeliveryResponse retryWebhookDelivery(@PathVariable UUID deliveryId) {
+        return automationService.retryWebhookDelivery(deliveryId);
+    }
+
+    @PostMapping("/webhook-deliveries/{deliveryId}/cancel")
+    public WebhookDeliveryResponse cancelWebhookDelivery(@PathVariable UUID deliveryId) {
+        return automationService.cancelWebhookDelivery(deliveryId);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/webhook-deliveries/process")
     public WebhookDeliveryWorkerResponse processWebhookDeliveries(
             @PathVariable UUID workspaceId,
             @RequestBody(required = false) WebhookDeliveryWorkerRequest request
     ) {
         return automationService.processWebhookDeliveries(workspaceId, request);
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/email-deliveries")
+    public List<EmailDeliveryResponse> listEmailDeliveries(@PathVariable UUID workspaceId) {
+        return automationService.listEmailDeliveries(workspaceId);
+    }
+
+    @GetMapping("/email-deliveries/{deliveryId}")
+    public EmailDeliveryResponse getEmailDelivery(@PathVariable UUID deliveryId) {
+        return automationService.getEmailDelivery(deliveryId);
+    }
+
+    @PostMapping("/email-deliveries/{deliveryId}/retry")
+    public EmailDeliveryResponse retryEmailDelivery(@PathVariable UUID deliveryId) {
+        return automationService.retryEmailDelivery(deliveryId);
+    }
+
+    @PostMapping("/email-deliveries/{deliveryId}/cancel")
+    public EmailDeliveryResponse cancelEmailDelivery(@PathVariable UUID deliveryId) {
+        return automationService.cancelEmailDelivery(deliveryId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/email-deliveries/process")
+    public EmailDeliveryWorkerResponse processEmailDeliveries(
+            @PathVariable UUID workspaceId,
+            @RequestBody(required = false) EmailDeliveryWorkerRequest request
+    ) {
+        return automationService.processEmailDeliveries(workspaceId, request);
     }
 }

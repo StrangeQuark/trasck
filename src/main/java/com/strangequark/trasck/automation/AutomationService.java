@@ -7,6 +7,13 @@ import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.access.WorkspaceMembershipRepository;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.identity.User;
+import com.strangequark.trasck.identity.UserRepository;
+import com.strangequark.trasck.integration.EmailDelivery;
+import com.strangequark.trasck.integration.EmailDeliveryRepository;
+import com.strangequark.trasck.integration.EmailDeliveryResponse;
+import com.strangequark.trasck.integration.EmailDeliveryWorkerRequest;
+import com.strangequark.trasck.integration.EmailDeliveryWorkerResponse;
 import com.strangequark.trasck.integration.Webhook;
 import com.strangequark.trasck.integration.WebhookDelivery;
 import com.strangequark.trasck.integration.WebhookDeliveryRepository;
@@ -33,7 +40,11 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -47,15 +58,21 @@ public class AutomationService {
     private final AutomationActionRepository automationActionRepository;
     private final AutomationExecutionJobRepository automationExecutionJobRepository;
     private final AutomationExecutionLogRepository automationExecutionLogRepository;
+    private final AutomationWorkerSettingsRepository automationWorkerSettingsRepository;
     private final WebhookRepository webhookRepository;
     private final WebhookDeliveryRepository webhookDeliveryRepository;
+    private final EmailDeliveryRepository emailDeliveryRepository;
     private final NotificationRepository notificationRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final WorkspaceMembershipRepository workspaceMembershipRepository;
+    private final UserRepository userRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+    private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final String emailProvider;
+    private final String defaultFromEmail;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2))
             .build();
@@ -67,15 +84,21 @@ public class AutomationService {
             AutomationActionRepository automationActionRepository,
             AutomationExecutionJobRepository automationExecutionJobRepository,
             AutomationExecutionLogRepository automationExecutionLogRepository,
+            AutomationWorkerSettingsRepository automationWorkerSettingsRepository,
             WebhookRepository webhookRepository,
             WebhookDeliveryRepository webhookDeliveryRepository,
+            EmailDeliveryRepository emailDeliveryRepository,
             NotificationRepository notificationRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             WorkspaceMembershipRepository workspaceMembershipRepository,
+            UserRepository userRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
-            DomainEventService domainEventService
+            DomainEventService domainEventService,
+            ObjectProvider<JavaMailSender> mailSenderProvider,
+            @Value("${trasck.email.provider:maildev}") String emailProvider,
+            @Value("${trasck.email.from:no-reply@trasck.local}") String defaultFromEmail
     ) {
         this.objectMapper = objectMapper;
         this.automationRuleRepository = automationRuleRepository;
@@ -83,15 +106,21 @@ public class AutomationService {
         this.automationActionRepository = automationActionRepository;
         this.automationExecutionJobRepository = automationExecutionJobRepository;
         this.automationExecutionLogRepository = automationExecutionLogRepository;
+        this.automationWorkerSettingsRepository = automationWorkerSettingsRepository;
         this.webhookRepository = webhookRepository;
         this.webhookDeliveryRepository = webhookDeliveryRepository;
+        this.emailDeliveryRepository = emailDeliveryRepository;
         this.notificationRepository = notificationRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.workspaceMembershipRepository = workspaceMembershipRepository;
+        this.userRepository = userRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
+        this.mailSenderProvider = mailSenderProvider;
+        this.emailProvider = emailProvider;
+        this.defaultFromEmail = defaultFromEmail;
     }
 
     @Transactional(readOnly = true)
@@ -272,6 +301,35 @@ public class AutomationService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return runQueuedJobsInternal(workspaceId, limit, actorId);
+    }
+
+    @Transactional(readOnly = true)
+    public AutomationWorkerSettingsResponse getWorkerSettings(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return AutomationWorkerSettingsResponse.from(workerSettings(workspaceId));
+    }
+
+    @Transactional
+    public AutomationWorkerSettingsResponse updateWorkerSettings(UUID workspaceId, AutomationWorkerSettingsRequest request) {
+        AutomationWorkerSettingsRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        AutomationWorkerSettings settings = workerSettings(workspaceId);
+        applyWorkerSettings(settings, updateRequest);
+        AutomationWorkerSettings saved = automationWorkerSettingsRepository.save(settings);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(workspaceId, "automation_worker_settings", workspaceId, "automation_worker_settings.updated", payload);
+        return AutomationWorkerSettingsResponse.from(saved);
+    }
+
+    @Transactional
+    public AutomationWorkerRunResponse runQueuedJobsInternal(UUID workspaceId, Integer limit, UUID actorId) {
         int pageLimit = normalizeWorkerLimit(limit);
         List<AutomationExecutionJob> jobs = automationExecutionJobRepository.findProcessableJobs(workspaceId, OffsetDateTime.now(), pageLimit);
         List<AutomationExecutionJobResponse> responses = new ArrayList<>();
@@ -369,6 +427,54 @@ public class AutomationService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return processWebhookDeliveriesInternal(workspaceId, request);
+    }
+
+    @Transactional(readOnly = true)
+    public WebhookDeliveryResponse getWebhookDelivery(UUID deliveryId) {
+        UUID actorId = currentUserService.requireUserId();
+        WebhookDelivery delivery = webhookDelivery(deliveryId);
+        Webhook webhook = webhook(delivery.getWebhookId());
+        permissionService.requireWorkspacePermission(actorId, webhook.getWorkspaceId(), "automation.admin");
+        return WebhookDeliveryResponse.from(delivery);
+    }
+
+    @Transactional
+    public WebhookDeliveryResponse retryWebhookDelivery(UUID deliveryId) {
+        UUID actorId = currentUserService.requireUserId();
+        WebhookDelivery delivery = webhookDelivery(deliveryId);
+        Webhook webhook = webhook(delivery.getWebhookId());
+        permissionService.requireWorkspacePermission(actorId, webhook.getWorkspaceId(), "automation.admin");
+        if ("delivered".equals(delivery.getStatus())) {
+            throw badRequest("Delivered webhook deliveries cannot be retried");
+        }
+        delivery.setStatus("queued");
+        delivery.setNextRetryAt(null);
+        delivery.setResponseBody(null);
+        delivery.setResponseCode(null);
+        WebhookDelivery saved = webhookDeliveryRepository.save(delivery);
+        recordWebhookDeliveryEvent(saved, webhook, "webhook_delivery.retry_queued", actorId);
+        return WebhookDeliveryResponse.from(saved);
+    }
+
+    @Transactional
+    public WebhookDeliveryResponse cancelWebhookDelivery(UUID deliveryId) {
+        UUID actorId = currentUserService.requireUserId();
+        WebhookDelivery delivery = webhookDelivery(deliveryId);
+        Webhook webhook = webhook(delivery.getWebhookId());
+        permissionService.requireWorkspacePermission(actorId, webhook.getWorkspaceId(), "automation.admin");
+        if ("delivered".equals(delivery.getStatus())) {
+            throw badRequest("Delivered webhook deliveries cannot be cancelled");
+        }
+        delivery.setStatus("cancelled");
+        delivery.setNextRetryAt(null);
+        WebhookDelivery saved = webhookDeliveryRepository.save(delivery);
+        recordWebhookDeliveryEvent(saved, webhook, "webhook_delivery.cancelled", actorId);
+        return WebhookDeliveryResponse.from(saved);
+    }
+
+    @Transactional
+    public WebhookDeliveryWorkerResponse processWebhookDeliveriesInternal(UUID workspaceId, WebhookDeliveryWorkerRequest request) {
         int limit = normalizeWorkerLimit(request == null ? null : request.limit());
         int maxAttempts = normalizeMaxAttempts(request == null ? null : request.maxAttempts());
         boolean dryRun = request == null || !Boolean.FALSE.equals(request.dryRun());
@@ -389,6 +495,90 @@ public class AutomationService {
             responses.add(WebhookDeliveryResponse.from(delivery));
         }
         return new WebhookDeliveryWorkerResponse(workspaceId, responses.size(), delivered, failed, deadLettered, responses);
+    }
+
+    @Transactional(readOnly = true)
+    public List<EmailDeliveryResponse> listEmailDeliveries(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return emailDeliveryRepository.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).stream()
+                .map(EmailDeliveryResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public EmailDeliveryResponse getEmailDelivery(UUID deliveryId) {
+        UUID actorId = currentUserService.requireUserId();
+        EmailDelivery delivery = emailDelivery(deliveryId);
+        permissionService.requireWorkspacePermission(actorId, delivery.getWorkspaceId(), "automation.admin");
+        return EmailDeliveryResponse.from(delivery);
+    }
+
+    @Transactional
+    public EmailDeliveryResponse retryEmailDelivery(UUID deliveryId) {
+        UUID actorId = currentUserService.requireUserId();
+        EmailDelivery delivery = emailDelivery(deliveryId);
+        permissionService.requireWorkspacePermission(actorId, delivery.getWorkspaceId(), "automation.admin");
+        if ("sent".equals(delivery.getStatus())) {
+            throw badRequest("Sent email deliveries cannot be retried");
+        }
+        delivery.setStatus("queued");
+        delivery.setNextRetryAt(null);
+        delivery.setResponseBody(null);
+        EmailDelivery saved = emailDeliveryRepository.save(delivery);
+        recordEmailDeliveryEvent(saved, "email_delivery.retry_queued", actorId);
+        return EmailDeliveryResponse.from(saved);
+    }
+
+    @Transactional
+    public EmailDeliveryResponse cancelEmailDelivery(UUID deliveryId) {
+        UUID actorId = currentUserService.requireUserId();
+        EmailDelivery delivery = emailDelivery(deliveryId);
+        permissionService.requireWorkspacePermission(actorId, delivery.getWorkspaceId(), "automation.admin");
+        if ("sent".equals(delivery.getStatus())) {
+            throw badRequest("Sent email deliveries cannot be cancelled");
+        }
+        delivery.setStatus("cancelled");
+        delivery.setNextRetryAt(null);
+        EmailDelivery saved = emailDeliveryRepository.save(delivery);
+        recordEmailDeliveryEvent(saved, "email_delivery.cancelled", actorId);
+        return EmailDeliveryResponse.from(saved);
+    }
+
+    @Transactional
+    public EmailDeliveryWorkerResponse processEmailDeliveries(UUID workspaceId, EmailDeliveryWorkerRequest request) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return processEmailDeliveriesInternal(workspaceId, request, actorId);
+    }
+
+    @Transactional
+    public EmailDeliveryWorkerResponse processEmailDeliveriesInternal(UUID workspaceId, EmailDeliveryWorkerRequest request, UUID actorId) {
+        int limit = normalizeWorkerLimit(request == null ? null : request.limit());
+        int maxAttempts = normalizeMaxAttempts(request == null ? null : request.maxAttempts());
+        boolean dryRun = request == null || !Boolean.FALSE.equals(request.dryRun());
+        List<EmailDelivery> deliveries = emailDeliveryRepository.findProcessableDeliveries(workspaceId, OffsetDateTime.now(), limit);
+        List<EmailDeliveryResponse> responses = new ArrayList<>();
+        int sent = 0;
+        int failed = 0;
+        int deadLettered = 0;
+        for (EmailDelivery delivery : deliveries) {
+            processEmailDelivery(delivery, maxAttempts, dryRun);
+            if ("sent".equals(delivery.getStatus())) {
+                sent++;
+            } else if ("dead_letter".equals(delivery.getStatus())) {
+                deadLettered++;
+            } else {
+                failed++;
+            }
+            if (actorId != null) {
+                recordEmailDeliveryEvent(delivery, "email_delivery.processed", actorId);
+            }
+            responses.add(EmailDeliveryResponse.from(delivery));
+        }
+        return new EmailDeliveryWorkerResponse(workspaceId, responses.size(), sent, failed, deadLettered, responses);
     }
 
     private void processJob(AutomationRule rule, AutomationExecutionJob job, UUID actorId) {
@@ -425,7 +615,7 @@ public class AutomationService {
     private void runAction(AutomationRule rule, AutomationExecutionJob job, AutomationAction action, UUID actorId) {
         switch (action.getActionType()) {
             case "create_notification", "notification" -> runNotificationAction(rule, job, action, actorId);
-            case "email" -> log(job, action, "queued", "Email delivery queued for worker dispatch", action.getConfig());
+            case "email" -> runEmailAction(rule, job, action, actorId);
             case "webhook" -> runWebhookAction(rule, job, action);
             default -> log(job, action, "skipped", "No executable runner is registered for action type " + action.getActionType(), action.getConfig());
         }
@@ -465,7 +655,41 @@ public class AutomationService {
         webhookDeliveryRepository.save(delivery);
     }
 
+    private void processEmailDelivery(EmailDelivery delivery, int maxAttempts, boolean dryRun) {
+        int attempt = delivery.getAttemptCount() == null ? 1 : delivery.getAttemptCount() + 1;
+        delivery.setAttemptCount(attempt);
+        if (dryRun) {
+            delivery.setStatus("sent");
+            delivery.setSentAt(OffsetDateTime.now());
+            delivery.setResponseBody("Dry-run email accepted by Trasck " + delivery.getProvider() + " provider");
+            delivery.setNextRetryAt(null);
+            emailDeliveryRepository.save(delivery);
+            return;
+        }
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(firstText(delivery.getFromEmail(), defaultFromEmail));
+            message.setTo(delivery.getRecipientEmail());
+            message.setSubject(delivery.getSubject());
+            message.setText(delivery.getBody());
+            mailSenderProvider.getObject().send(message);
+            delivery.setStatus("sent");
+            delivery.setSentAt(OffsetDateTime.now());
+            delivery.setResponseBody("Email accepted by " + delivery.getProvider());
+            delivery.setNextRetryAt(null);
+        } catch (Exception ex) {
+            markEmailDeliveryFailed(delivery, attempt, maxAttempts, ex.getMessage());
+        }
+        emailDeliveryRepository.save(delivery);
+    }
+
     private void markWebhookDeliveryFailed(WebhookDelivery delivery, int attempt, int maxAttempts, String message) {
+        delivery.setStatus(attempt >= maxAttempts ? "dead_letter" : "failed");
+        delivery.setResponseBody(truncate(message, 4000));
+        delivery.setNextRetryAt(attempt >= maxAttempts ? null : OffsetDateTime.now().plusMinutes(Math.min(60, attempt * 5L)));
+    }
+
+    private void markEmailDeliveryFailed(EmailDelivery delivery, int attempt, int maxAttempts, String message) {
         delivery.setStatus(attempt >= maxAttempts ? "dead_letter" : "failed");
         delivery.setResponseBody(truncate(message, 4000));
         delivery.setNextRetryAt(attempt >= maxAttempts ? null : OffsetDateTime.now().plusMinutes(Math.min(60, attempt * 5L)));
@@ -490,6 +714,38 @@ public class AutomationService {
         Notification saved = notificationRepository.save(notification);
         ObjectNode metadata = objectMapper.createObjectNode().put("notificationId", saved.getId().toString());
         log(job, action, "succeeded", "Notification created", metadata);
+    }
+
+    private void runEmailAction(AutomationRule rule, AutomationExecutionJob job, AutomationAction action, UUID actorId) {
+        JsonNode config = jsonObject(action.getConfig());
+        String recipient = firstText(
+                text(config, "toEmail", null),
+                text(config, "recipientEmail", null),
+                text(config, "to", null),
+                userEmail(config, "userId"),
+                actorId == null ? null : userEmail(actorId)
+        );
+        if (!hasText(recipient)) {
+            throw badRequest("Email action config must include to, toEmail, recipientEmail, userId, or run as a known actor");
+        }
+        EmailDelivery delivery = new EmailDelivery();
+        delivery.setWorkspaceId(rule.getWorkspaceId());
+        delivery.setAutomationJobId(job.getId());
+        delivery.setActionId(action.getId());
+        delivery.setProvider(text(config, "provider", emailProvider));
+        delivery.setFromEmail(text(config, "fromEmail", defaultFromEmail));
+        delivery.setRecipientEmail(recipient);
+        delivery.setSubject(requiredText(text(config, "subject", null), "config.subject"));
+        delivery.setBody(text(config, "body", ""));
+        delivery.setStatus("queued");
+        delivery.setAttemptCount(0);
+        delivery.setCreatedAt(OffsetDateTime.now());
+        EmailDelivery saved = emailDeliveryRepository.save(delivery);
+        ObjectNode metadata = objectMapper.createObjectNode()
+                .put("emailDeliveryId", saved.getId().toString())
+                .put("provider", saved.getProvider())
+                .put("recipientEmail", saved.getRecipientEmail());
+        log(job, action, "queued", "Email delivery queued for " + saved.getProvider(), metadata);
     }
 
     private void runWebhookAction(AutomationRule rule, AutomationExecutionJob job, AutomationAction action) {
@@ -621,6 +877,32 @@ public class AutomationService {
         return webhookRepository.findById(webhookId).orElseThrow(() -> notFound("Webhook not found"));
     }
 
+    private WebhookDelivery webhookDelivery(UUID deliveryId) {
+        return webhookDeliveryRepository.findById(deliveryId).orElseThrow(() -> notFound("Webhook delivery not found"));
+    }
+
+    private EmailDelivery emailDelivery(UUID deliveryId) {
+        return emailDeliveryRepository.findById(deliveryId).orElseThrow(() -> notFound("Email delivery not found"));
+    }
+
+    private AutomationWorkerSettings workerSettings(UUID workspaceId) {
+        return automationWorkerSettingsRepository.findById(workspaceId).orElseGet(() -> {
+            AutomationWorkerSettings settings = new AutomationWorkerSettings();
+            settings.setWorkspaceId(workspaceId);
+            settings.setAutomationJobsEnabled(false);
+            settings.setWebhookDeliveriesEnabled(false);
+            settings.setEmailDeliveriesEnabled(false);
+            settings.setAutomationLimit(25);
+            settings.setWebhookLimit(25);
+            settings.setEmailLimit(25);
+            settings.setWebhookMaxAttempts(3);
+            settings.setEmailMaxAttempts(3);
+            settings.setWebhookDryRun(true);
+            settings.setEmailDryRun(true);
+            return settings;
+        });
+    }
+
     private Workspace activeWorkspace(UUID workspaceId) {
         Workspace workspace = workspaceRepository.findById(workspaceId).orElseThrow(() -> notFound("Workspace not found"));
         if (workspace.getDeletedAt() != null || !"active".equals(workspace.getStatus())) {
@@ -662,6 +944,56 @@ public class AutomationService {
                 .put("webhookName", webhook.getName())
                 .put("actorUserId", actorId.toString());
         domainEventService.record(webhook.getWorkspaceId(), "webhook", webhook.getId(), eventType, payload);
+    }
+
+    private void recordWebhookDeliveryEvent(WebhookDelivery delivery, Webhook webhook, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("webhookDeliveryId", delivery.getId().toString())
+                .put("webhookId", webhook.getId().toString())
+                .put("status", delivery.getStatus())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(webhook.getWorkspaceId(), "webhook_delivery", delivery.getId(), eventType, payload);
+    }
+
+    private void recordEmailDeliveryEvent(EmailDelivery delivery, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("emailDeliveryId", delivery.getId().toString())
+                .put("status", delivery.getStatus())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(delivery.getWorkspaceId(), "email_delivery", delivery.getId(), eventType, payload);
+    }
+
+    private void applyWorkerSettings(AutomationWorkerSettings settings, AutomationWorkerSettingsRequest request) {
+        if (request.automationJobsEnabled() != null) {
+            settings.setAutomationJobsEnabled(request.automationJobsEnabled());
+        }
+        if (request.webhookDeliveriesEnabled() != null) {
+            settings.setWebhookDeliveriesEnabled(request.webhookDeliveriesEnabled());
+        }
+        if (request.emailDeliveriesEnabled() != null) {
+            settings.setEmailDeliveriesEnabled(request.emailDeliveriesEnabled());
+        }
+        if (request.automationLimit() != null) {
+            settings.setAutomationLimit(normalizeWorkerLimit(request.automationLimit()));
+        }
+        if (request.webhookLimit() != null) {
+            settings.setWebhookLimit(normalizeWorkerLimit(request.webhookLimit()));
+        }
+        if (request.emailLimit() != null) {
+            settings.setEmailLimit(normalizeWorkerLimit(request.emailLimit()));
+        }
+        if (request.webhookMaxAttempts() != null) {
+            settings.setWebhookMaxAttempts(normalizeMaxAttempts(request.webhookMaxAttempts()));
+        }
+        if (request.emailMaxAttempts() != null) {
+            settings.setEmailMaxAttempts(normalizeMaxAttempts(request.emailMaxAttempts()));
+        }
+        if (request.webhookDryRun() != null) {
+            settings.setWebhookDryRun(request.webhookDryRun());
+        }
+        if (request.emailDryRun() != null) {
+            settings.setEmailDryRun(request.emailDryRun());
+        }
     }
 
     private JsonNode toJsonNullable(Object value) {
@@ -720,6 +1052,29 @@ public class AutomationService {
 
     private String text(JsonNode config, String fieldName, String fallback) {
         return config != null && config.hasNonNull(fieldName) ? config.get(fieldName).asText() : fallback;
+    }
+
+    private String userEmail(JsonNode config, String fieldName) {
+        if (config == null || !config.hasNonNull(fieldName)) {
+            return null;
+        }
+        return userEmail(uuidFromConfig(config, fieldName));
+    }
+
+    private String userEmail(UUID userId) {
+        return userRepository.findById(userId)
+                .filter(user -> Boolean.TRUE.equals(user.getActive()))
+                .map(User::getEmail)
+                .orElse(null);
+    }
+
+    private String firstText(String... values) {
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private String normalizeExecutionMode(String executionMode) {

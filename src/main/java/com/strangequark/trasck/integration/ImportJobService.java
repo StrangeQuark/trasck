@@ -7,6 +7,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.project.Project;
+import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.workitem.WorkItemCreateRequest;
+import com.strangequark.trasck.workitem.WorkItemResponse;
+import com.strangequark.trasck.workitem.WorkItemService;
+import com.strangequark.trasck.workitem.WorkItemUpdateRequest;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
@@ -24,7 +30,10 @@ public class ImportJobService {
     private final ObjectMapper objectMapper;
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
+    private final ImportMappingTemplateRepository importMappingTemplateRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final ProjectRepository projectRepository;
+    private final WorkItemService workItemService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -33,7 +42,10 @@ public class ImportJobService {
             ObjectMapper objectMapper,
             ImportJobRepository importJobRepository,
             ImportJobRecordRepository importJobRecordRepository,
+            ImportMappingTemplateRepository importMappingTemplateRepository,
             WorkspaceRepository workspaceRepository,
+            ProjectRepository projectRepository,
+            WorkItemService workItemService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService
@@ -41,7 +53,10 @@ public class ImportJobService {
         this.objectMapper = objectMapper;
         this.importJobRepository = importJobRepository;
         this.importJobRecordRepository = importJobRecordRepository;
+        this.importMappingTemplateRepository = importMappingTemplateRepository;
         this.workspaceRepository = workspaceRepository;
+        this.projectRepository = projectRepository;
+        this.workItemService = workItemService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -80,6 +95,52 @@ public class ImportJobService {
         ImportJob saved = importJobRepository.save(job);
         recordJobEvent(saved, "import_job.created", actorId);
         return response(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportMappingTemplateResponse> listMappingTemplates(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return importMappingTemplateRepository.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
+                .map(ImportMappingTemplateResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public ImportMappingTemplateResponse createMappingTemplate(UUID workspaceId, ImportMappingTemplateRequest request) {
+        ImportMappingTemplateRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        ImportMappingTemplate template = new ImportMappingTemplate();
+        template.setWorkspaceId(workspaceId);
+        applyMappingTemplateRequest(template, createRequest, true);
+        ImportMappingTemplate saved = importMappingTemplateRepository.save(template);
+        recordMappingTemplateEvent(saved, "import_mapping_template.created", actorId);
+        return ImportMappingTemplateResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportMappingTemplateResponse updateMappingTemplate(UUID mappingTemplateId, ImportMappingTemplateRequest request) {
+        ImportMappingTemplateRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        applyMappingTemplateRequest(template, updateRequest, false);
+        ImportMappingTemplate saved = importMappingTemplateRepository.save(template);
+        recordMappingTemplateEvent(saved, "import_mapping_template.updated", actorId);
+        return ImportMappingTemplateResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteMappingTemplate(UUID mappingTemplateId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        template.setEnabled(false);
+        importMappingTemplateRepository.save(template);
+        recordMappingTemplateEvent(template, "import_mapping_template.disabled", actorId);
     }
 
     @Transactional
@@ -176,6 +237,72 @@ public class ImportJobService {
         return new ImportParseResponse(job.getId(), job.getProvider(), responses.size(), responses);
     }
 
+    @Transactional
+    public ImportMaterializeResponse materialize(UUID importJobId, ImportMaterializeRequest request) {
+        ImportMaterializeRequest materializeRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = mutableImportJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        ImportMappingTemplate template = importMappingTemplateRepository
+                .findByIdAndWorkspaceId(required(materializeRequest.mappingTemplateId(), "mappingTemplateId"), job.getWorkspaceId())
+                .orElseThrow(() -> badRequest("Mapping template not found in this workspace"));
+        if (!Boolean.TRUE.equals(template.getEnabled())) {
+            throw badRequest("Mapping template is disabled");
+        }
+        if (!job.getProvider().equals(template.getProvider())) {
+            throw badRequest("Mapping template provider must match the import job provider");
+        }
+        UUID projectId = materializeRequest.projectId() == null ? template.getProjectId() : materializeRequest.projectId();
+        Project project = activeProjectInWorkspace(projectId, job.getWorkspaceId());
+        int limit = normalizeMaterializeLimit(materializeRequest.limit());
+        boolean updateExisting = Boolean.TRUE.equals(materializeRequest.updateExisting());
+        List<ImportJobRecord> candidates = importJobRecordRepository
+                .findByImportJobIdAndStatusInOrderBySourceTypeAscSourceIdAsc(job.getId(), updateExisting ? List.of("pending", "failed", "imported") : List.of("pending", "failed"));
+        List<ImportJobRecordResponse> responses = new ArrayList<>();
+        int created = 0;
+        int updated = 0;
+        int failed = 0;
+        int processed = 0;
+        for (ImportJobRecord record : candidates) {
+            if (processed >= limit) {
+                break;
+            }
+            if (hasText(template.getSourceType()) && !template.getSourceType().equalsIgnoreCase(record.getSourceType())) {
+                continue;
+            }
+            processed++;
+            if (record.getTargetId() != null && !updateExisting) {
+                record.setStatus("imported");
+                record.setErrorMessage(null);
+                responses.add(ImportJobRecordResponse.from(importJobRecordRepository.save(record)));
+                continue;
+            }
+            try {
+                MaterializedWorkItem workItem = materializeRecord(job, template, project, record, updateExisting);
+                if (workItem.created()) {
+                    created++;
+                } else {
+                    updated++;
+                }
+                record.setTargetType("work_item");
+                record.setTargetId(workItem.response().id());
+                record.setStatus("imported");
+                record.setErrorMessage(null);
+            } catch (ResponseStatusException ex) {
+                failed++;
+                record.setStatus("failed");
+                record.setErrorMessage(ex.getReason());
+            } catch (RuntimeException ex) {
+                failed++;
+                record.setStatus("failed");
+                record.setErrorMessage(ex.getMessage());
+            }
+            responses.add(ImportJobRecordResponse.from(importJobRecordRepository.save(record)));
+        }
+        recordJobEvent(job, "import_job.materialized", actorId);
+        return new ImportMaterializeResponse(job.getId(), template.getId(), project.getId(), processed, created, updated, failed, responses);
+    }
+
     @Transactional(readOnly = true)
     public List<ImportJobRecordResponse> listRecords(UUID importJobId) {
         UUID actorId = currentUserService.requireUserId();
@@ -208,6 +335,193 @@ public class ImportJobService {
         if (create || request.rawPayload() != null) {
             record.setRawPayload(toJsonObject(request.rawPayload()));
         }
+    }
+
+    private void applyMappingTemplateRequest(ImportMappingTemplate template, ImportMappingTemplateRequest request, boolean create) {
+        if (create || hasText(request.name())) {
+            template.setName(requiredText(request.name(), "name"));
+        }
+        if (create || hasText(request.provider())) {
+            template.setProvider(requiredText(request.provider(), "provider").toLowerCase());
+        }
+        if (create || request.sourceType() != null) {
+            template.setSourceType(hasText(request.sourceType()) ? request.sourceType().trim() : null);
+        }
+        if (create || hasText(request.targetType())) {
+            String targetType = hasText(request.targetType()) ? request.targetType().trim().toLowerCase() : "work_item";
+            if (!"work_item".equals(targetType)) {
+                throw badRequest("targetType must be work_item");
+            }
+            template.setTargetType(targetType);
+        }
+        if (create || request.projectId() != null) {
+            UUID projectId = request.projectId();
+            template.setProjectId(projectId == null ? null : activeProjectInWorkspace(projectId, template.getWorkspaceId()).getId());
+        }
+        if (create || request.workItemTypeKey() != null) {
+            template.setWorkItemTypeKey(hasText(request.workItemTypeKey()) ? request.workItemTypeKey().trim() : null);
+        }
+        if (create || request.statusKey() != null) {
+            template.setStatusKey(hasText(request.statusKey()) ? request.statusKey().trim() : null);
+        }
+        if (create || request.fieldMapping() != null) {
+            template.setFieldMapping(toJsonObject(request.fieldMapping()));
+        }
+        if (create || request.defaults() != null) {
+            template.setDefaults(toJsonObject(request.defaults()));
+        }
+        if (request.enabled() != null) {
+            template.setEnabled(request.enabled());
+        } else if (create) {
+            template.setEnabled(true);
+        }
+    }
+
+    private MaterializedWorkItem materializeRecord(
+            ImportJob job,
+            ImportMappingTemplate template,
+            Project project,
+            ImportJobRecord record,
+            boolean updateExisting
+    ) {
+        JsonNode rawPayload = record.getRawPayload() == null ? objectMapper.createObjectNode() : record.getRawPayload();
+        JsonNode mapping = template.getFieldMapping() == null ? objectMapper.createObjectNode() : template.getFieldMapping();
+        JsonNode defaults = template.getDefaults() == null ? objectMapper.createObjectNode() : template.getDefaults();
+        if (record.getTargetId() != null && updateExisting) {
+            WorkItemUpdateRequest updateRequest = new WorkItemUpdateRequest(
+                    null,
+                    textValue(rawPayload, mapping, defaults, "typeKey", null),
+                    null,
+                    null,
+                    null,
+                    textValue(rawPayload, mapping, defaults, "priorityKey", null),
+                    null,
+                    null,
+                    textValue(rawPayload, mapping, defaults, "title", null),
+                    textValue(rawPayload, mapping, defaults, "descriptionMarkdown", null),
+                    null,
+                    textValue(rawPayload, mapping, defaults, "visibility", null),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    objectValue(rawPayload, mapping, defaults, "customFields")
+            );
+            return new MaterializedWorkItem(workItemService.update(record.getTargetId(), updateRequest), false);
+        }
+        String typeKey = firstText(
+                textValue(rawPayload, mapping, defaults, "typeKey", null),
+                template.getWorkItemTypeKey(),
+                defaultText(defaults, "typeKey")
+        );
+        String statusKey = firstText(
+                textValue(rawPayload, mapping, defaults, "statusKey", null),
+                template.getStatusKey(),
+                defaultText(defaults, "statusKey")
+        );
+        WorkItemCreateRequest createRequest = new WorkItemCreateRequest(
+                null,
+                typeKey,
+                null,
+                null,
+                statusKey,
+                null,
+                textValue(rawPayload, mapping, defaults, "priorityKey", null),
+                null,
+                null,
+                null,
+                requiredText(textValue(rawPayload, mapping, defaults, "title", null), "mapped title"),
+                textValue(rawPayload, mapping, defaults, "descriptionMarkdown", "Imported from " + job.getProvider() + " " + record.getSourceId()),
+                null,
+                textValue(rawPayload, mapping, defaults, "visibility", null),
+                null,
+                null,
+                null,
+                null,
+                null,
+                objectValue(rawPayload, mapping, defaults, "customFields")
+        );
+        return new MaterializedWorkItem(workItemService.create(project.getId(), createRequest), true);
+    }
+
+    private String textValue(JsonNode rawPayload, JsonNode mapping, JsonNode defaults, String targetField, String fallback) {
+        JsonNode mapped = mappedNode(rawPayload, mapping, targetField);
+        if (hasTextNode(mapped)) {
+            return mapped.isValueNode() ? mapped.asText().trim() : mapped.toString();
+        }
+        String defaultValue = defaultText(defaults, targetField);
+        return hasText(defaultValue) ? defaultValue : fallback;
+    }
+
+    private Object objectValue(JsonNode rawPayload, JsonNode mapping, JsonNode defaults, String targetField) {
+        JsonNode mapped = mappedNode(rawPayload, mapping, targetField);
+        if (mapped != null && !mapped.isMissingNode() && !mapped.isNull()) {
+            return mapped;
+        }
+        JsonNode defaultValue = defaults == null ? null : defaults.get(targetField);
+        return defaultValue == null || defaultValue.isNull() ? null : defaultValue;
+    }
+
+    private JsonNode mappedNode(JsonNode rawPayload, JsonNode mapping, String targetField) {
+        if (mapping == null || !mapping.has(targetField)) {
+            return null;
+        }
+        JsonNode source = mapping.get(targetField);
+        if (source.isArray()) {
+            for (JsonNode candidate : source) {
+                JsonNode value = nodeAtPath(rawPayload, candidate.asText());
+                if (hasTextNode(value)) {
+                    return value;
+                }
+            }
+            return null;
+        }
+        if (source.isTextual()) {
+            return nodeAtPath(rawPayload, source.asText());
+        }
+        if (source.isObject() && source.hasNonNull("path")) {
+            return nodeAtPath(rawPayload, source.get("path").asText());
+        }
+        if (source.isObject() && source.has("value")) {
+            return source.get("value");
+        }
+        return source;
+    }
+
+    private JsonNode nodeAtPath(JsonNode rawPayload, String path) {
+        if (!hasText(path) || rawPayload == null) {
+            return null;
+        }
+        JsonNode current = rawPayload;
+        String normalized = path.startsWith("$.") ? path.substring(2) : path;
+        if (normalized.startsWith("/")) {
+            JsonNode value = rawPayload.at(normalized);
+            return value.isMissingNode() ? null : value;
+        }
+        for (String segment : normalized.split("\\.")) {
+            if (current == null || current.isMissingNode() || current.isNull()) {
+                return null;
+            }
+            if (current.isArray()) {
+                try {
+                    current = current.get(Integer.parseInt(segment));
+                } catch (NumberFormatException ex) {
+                    return null;
+                }
+            } else {
+                current = current.get(segment);
+            }
+        }
+        return current;
+    }
+
+    private String defaultText(JsonNode defaults, String fieldName) {
+        return defaults != null && defaults.hasNonNull(fieldName) ? defaults.get(fieldName).asText() : null;
+    }
+
+    private boolean hasTextNode(JsonNode node) {
+        return node != null && !node.isMissingNode() && !node.isNull() && hasText(node.isValueNode() ? node.asText() : node.toString());
     }
 
     private ImportJobResponse response(ImportJob job) {
@@ -326,8 +640,21 @@ public class ImportJobService {
         return null;
     }
 
+    private String firstText(String... values) {
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
     private ImportJob importJob(UUID importJobId) {
         return importJobRepository.findById(importJobId).orElseThrow(() -> notFound("Import job not found"));
+    }
+
+    private ImportMappingTemplate mappingTemplate(UUID mappingTemplateId) {
+        return importMappingTemplateRepository.findById(mappingTemplateId).orElseThrow(() -> notFound("Import mapping template not found"));
     }
 
     private ImportJob mutableImportJob(UUID importJobId) {
@@ -344,6 +671,17 @@ public class ImportJobService {
             throw notFound("Workspace not found");
         }
         return workspace;
+    }
+
+    private Project activeProjectInWorkspace(UUID projectId, UUID workspaceId) {
+        if (projectId == null) {
+            throw badRequest("projectId is required");
+        }
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId).orElseThrow(() -> badRequest("Project not found in this workspace"));
+        if (!workspaceId.equals(project.getWorkspaceId()) || !"active".equals(project.getStatus())) {
+            throw badRequest("Project not found in this workspace");
+        }
+        return project;
     }
 
     private JsonNode toJsonNullable(Object value) {
@@ -376,6 +714,25 @@ public class ImportJobService {
         domainEventService.record(job.getWorkspaceId(), "import_job", job.getId(), eventType, payload);
     }
 
+    private void recordMappingTemplateEvent(ImportMappingTemplate template, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("mappingTemplateId", template.getId().toString())
+                .put("name", template.getName())
+                .put("provider", template.getProvider())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(template.getWorkspaceId(), "import_mapping_template", template.getId(), eventType, payload);
+    }
+
+    private int normalizeMaterializeLimit(Integer limit) {
+        if (limit == null) {
+            return 50;
+        }
+        if (limit < 1 || limit > 200) {
+            throw badRequest("limit must be between 1 and 200");
+        }
+        return limit;
+    }
+
     private <T> T required(T value, String fieldName) {
         if (value == null) {
             throw badRequest(fieldName + " is required");
@@ -403,5 +760,8 @@ public class ImportJobService {
     }
 
     private record ParsedImportRecord(String sourceType, String sourceId, JsonNode rawPayload) {
+    }
+
+    private record MaterializedWorkItem(WorkItemResponse response, boolean created) {
     }
 }
