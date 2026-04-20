@@ -29,6 +29,9 @@ public class AutomationWorkerSettings {
     @Column(name = "email_deliveries_enabled")
     private Boolean emailDeliveriesEnabled;
 
+    @Column(name = "import_conflict_resolution_enabled")
+    private Boolean importConflictResolutionEnabled;
+
     @Column(name = "automation_limit")
     private Integer automationLimit;
 
@@ -37,6 +40,9 @@ public class AutomationWorkerSettings {
 
     @Column(name = "email_limit")
     private Integer emailLimit;
+
+    @Column(name = "import_conflict_resolution_limit")
+    private Integer importConflictResolutionLimit;
 
     @Column(name = "webhook_max_attempts")
     private Integer webhookMaxAttempts;
@@ -112,6 +118,14 @@ public class AutomationWorkerSettings {
         this.emailDeliveriesEnabled = emailDeliveriesEnabled;
     }
 
+    public Boolean getImportConflictResolutionEnabled() {
+        return importConflictResolutionEnabled;
+    }
+
+    public void setImportConflictResolutionEnabled(Boolean importConflictResolutionEnabled) {
+        this.importConflictResolutionEnabled = importConflictResolutionEnabled;
+    }
+
     public Integer getAutomationLimit() {
         return automationLimit;
     }
@@ -134,6 +148,14 @@ public class AutomationWorkerSettings {
 
     public void setEmailLimit(Integer emailLimit) {
         this.emailLimit = emailLimit;
+    }
+
+    public Integer getImportConflictResolutionLimit() {
+        return importConflictResolutionLimit;
+    }
+
+    public void setImportConflictResolutionLimit(Integer importConflictResolutionLimit) {
+        this.importConflictResolutionLimit = importConflictResolutionLimit;
     }
 
     public Integer getWebhookMaxAttempts() {

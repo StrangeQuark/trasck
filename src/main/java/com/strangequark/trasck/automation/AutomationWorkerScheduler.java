@@ -1,6 +1,7 @@
 package com.strangequark.trasck.automation;
 
 import com.strangequark.trasck.integration.EmailDeliveryWorkerRequest;
+import com.strangequark.trasck.integration.ImportJobService;
 import com.strangequark.trasck.integration.WebhookDeliveryWorkerRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,13 +15,16 @@ public class AutomationWorkerScheduler {
 
     private final AutomationWorkerSettingsRepository automationWorkerSettingsRepository;
     private final AutomationService automationService;
+    private final ImportJobService importJobService;
 
     public AutomationWorkerScheduler(
             AutomationWorkerSettingsRepository automationWorkerSettingsRepository,
-            AutomationService automationService
+            AutomationService automationService,
+            ImportJobService importJobService
     ) {
         this.automationWorkerSettingsRepository = automationWorkerSettingsRepository;
         this.automationService = automationService;
+        this.importJobService = importJobService;
     }
 
     @Scheduled(fixedDelayString = "${trasck.automation.workers.fixed-delay-ms:30000}")
@@ -65,6 +69,13 @@ public class AutomationWorkerScheduler {
                                 settings.getEmailMaxAttempts(),
                                 settings.getEmailDryRun()
                         ),
+                        null
+                );
+            }
+            if (Boolean.TRUE.equals(settings.getImportConflictResolutionEnabled())) {
+                importJobService.processConflictResolutionJobsInternal(
+                        settings.getWorkspaceId(),
+                        settings.getImportConflictResolutionLimit(),
                         null
                 );
             }

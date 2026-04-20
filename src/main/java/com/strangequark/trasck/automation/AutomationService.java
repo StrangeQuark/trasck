@@ -1182,9 +1182,11 @@ public class AutomationService {
             settings.setAutomationJobsEnabled(false);
             settings.setWebhookDeliveriesEnabled(false);
             settings.setEmailDeliveriesEnabled(false);
+            settings.setImportConflictResolutionEnabled(false);
             settings.setAutomationLimit(25);
             settings.setWebhookLimit(25);
             settings.setEmailLimit(25);
+            settings.setImportConflictResolutionLimit(10);
             settings.setWebhookMaxAttempts(3);
             settings.setEmailMaxAttempts(3);
             settings.setWebhookDryRun(true);
@@ -1437,6 +1439,9 @@ public class AutomationService {
         if (request.emailDeliveriesEnabled() != null) {
             settings.setEmailDeliveriesEnabled(request.emailDeliveriesEnabled());
         }
+        if (request.importConflictResolutionEnabled() != null) {
+            settings.setImportConflictResolutionEnabled(request.importConflictResolutionEnabled());
+        }
         if (request.automationLimit() != null) {
             settings.setAutomationLimit(normalizeWorkerLimit(request.automationLimit()));
         }
@@ -1445,6 +1450,9 @@ public class AutomationService {
         }
         if (request.emailLimit() != null) {
             settings.setEmailLimit(normalizeWorkerLimit(request.emailLimit()));
+        }
+        if (request.importConflictResolutionLimit() != null) {
+            settings.setImportConflictResolutionLimit(normalizeWorkerLimit(request.importConflictResolutionLimit()));
         }
         if (request.webhookMaxAttempts() != null) {
             settings.setWebhookMaxAttempts(normalizeMaxAttempts(request.webhookMaxAttempts()));
@@ -1496,6 +1504,12 @@ public class AutomationService {
         }
         if (settings.getWorkerRunPruningIntervalMinutes() == null) {
             settings.setWorkerRunPruningIntervalMinutes(1440);
+        }
+        if (settings.getImportConflictResolutionEnabled() == null) {
+            settings.setImportConflictResolutionEnabled(false);
+        }
+        if (settings.getImportConflictResolutionLimit() == null) {
+            settings.setImportConflictResolutionLimit(10);
         }
     }
 
