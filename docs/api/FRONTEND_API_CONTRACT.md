@@ -31,8 +31,9 @@ Cursor-page requests accept `limit` and `cursor`. Clients should request the nex
 Small configuration or scoped-detail endpoints still return arrays:
 
 - Setup seed data, auth token lists, service-token lists.
-- Workspace/project configuration lists: teams, team memberships, project-team assignments, labels, boards, workflows, statuses, roles.
+- Workspace/project configuration lists: teams, team memberships, project-team assignments, labels, boards, board columns, board swimlanes, workflows, statuses, roles, field configurations, releases, release work items, roadmaps, and roadmap items.
 - Dashboard, dashboard widget, saved filter, saved view, report query catalog, repository connection, agent provider/profile/credential lists, including workspace/project/team scoped dashboard/filter/view/catalog lists.
+- Notification, notification preference, automation rule, automation condition, automation action, automation job/log, webhook/delivery, import job, and import record lists.
 - Work item collaboration lists: comments, links, watchers, work logs, labels, attachments.
 - Reporting history lists for one work item or one scoped report.
 
@@ -327,6 +328,223 @@ export interface ExportJob {
   finishedAt?: ISODateTime;
 }
 
+export interface FieldConfiguration {
+  id: UUID;
+  workspaceId: UUID;
+  customFieldId: UUID;
+  projectId?: UUID;
+  workItemTypeId?: UUID;
+  required: boolean;
+  hidden: boolean;
+  defaultValue?: unknown;
+  validationConfig?: unknown;
+}
+
+export interface BoardColumn {
+  id: UUID;
+  boardId: UUID;
+  name: string;
+  statusIds: unknown;
+  position: number;
+  wipLimit?: number;
+  doneColumn: boolean;
+}
+
+export interface BoardSwimlane {
+  id: UUID;
+  boardId: UUID;
+  name: string;
+  swimlaneType: string;
+  query: unknown;
+  position: number;
+  enabled: boolean;
+}
+
+export interface Board {
+  id: UUID;
+  workspaceId: UUID;
+  projectId: UUID;
+  teamId?: UUID;
+  name: string;
+  type: "scrum" | "kanban" | "portfolio" | string;
+  filterConfig: unknown;
+  active: boolean;
+  version: number;
+  columns: BoardColumn[];
+  swimlanes: BoardSwimlane[];
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+export interface Release {
+  id: UUID;
+  projectId: UUID;
+  name: string;
+  version: string;
+  startDate?: ISODate;
+  releaseDate?: ISODate;
+  status: "planned" | "in_progress" | "released" | "archived" | string;
+  description?: string;
+}
+
+export interface ReleaseWorkItem {
+  releaseId: UUID;
+  workItemId: UUID;
+  addedById?: UUID;
+  addedAt: ISODateTime;
+}
+
+export interface RoadmapItem {
+  id: UUID;
+  roadmapId: UUID;
+  workItemId: UUID;
+  startDate?: ISODate;
+  endDate?: ISODate;
+  position: number;
+  displayConfig: unknown;
+}
+
+export interface Roadmap {
+  id: UUID;
+  workspaceId: UUID;
+  projectId?: UUID;
+  name: string;
+  config: unknown;
+  ownerId: UUID;
+  visibility: Dashboard["visibility"];
+  items: RoadmapItem[];
+}
+
+export interface Notification {
+  id: UUID;
+  userId: UUID;
+  actorId?: UUID;
+  workspaceId: UUID;
+  type: string;
+  title: string;
+  body?: string;
+  targetType?: string;
+  targetId?: UUID;
+  readAt?: ISODateTime;
+  createdAt: ISODateTime;
+}
+
+export interface NotificationPreference {
+  id: UUID;
+  userId: UUID;
+  workspaceId: UUID;
+  channel: "in_app" | "email" | "webhook" | string;
+  eventType: string;
+  enabled: boolean;
+  config: unknown;
+}
+
+export interface AutomationCondition {
+  id: UUID;
+  ruleId: UUID;
+  conditionType: string;
+  config: unknown;
+  position: number;
+}
+
+export interface AutomationAction {
+  id: UUID;
+  ruleId: UUID;
+  actionType: "create_notification" | "notification" | "email" | "webhook" | string;
+  executionMode: "sync" | "async" | string;
+  config: unknown;
+  position: number;
+}
+
+export interface AutomationRule {
+  id: UUID;
+  workspaceId: UUID;
+  projectId?: UUID;
+  name: string;
+  triggerType: string;
+  triggerConfig: unknown;
+  enabled: boolean;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+export interface AutomationExecutionLog {
+  id: UUID;
+  jobId: UUID;
+  actionId?: UUID;
+  status: "succeeded" | "failed" | "skipped" | string;
+  message: string;
+  metadata: unknown;
+  createdAt: ISODateTime;
+}
+
+export interface AutomationExecutionJob {
+  id: UUID;
+  ruleId: UUID;
+  workspaceId: UUID;
+  sourceEntityType?: string;
+  sourceEntityId?: UUID;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+  payload: unknown;
+  attempts: number;
+  nextAttemptAt?: ISODateTime;
+  startedAt?: ISODateTime;
+  completedAt?: ISODateTime;
+  failedAt?: ISODateTime;
+  lastError?: string;
+  createdAt: ISODateTime;
+  logs: AutomationExecutionLog[];
+}
+
+export interface Webhook {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  url: string;
+  secretConfigured: boolean;
+  eventTypes: unknown;
+  enabled: boolean;
+}
+
+export interface WebhookDelivery {
+  id: UUID;
+  webhookId: UUID;
+  eventType: string;
+  payload: unknown;
+  status: "queued" | "delivered" | "failed" | "dead_letter" | string;
+  responseCode?: number;
+  responseBody?: string;
+  attemptCount: number;
+  nextRetryAt?: ISODateTime;
+  createdAt: ISODateTime;
+}
+
+export interface ImportJobRecord {
+  id: UUID;
+  importJobId: UUID;
+  sourceType: string;
+  sourceId: string;
+  targetType?: string;
+  targetId?: UUID;
+  status: "pending" | "imported" | "failed" | "skipped" | string;
+  errorMessage?: string;
+  rawPayload?: unknown;
+}
+
+export interface ImportJob {
+  id: UUID;
+  workspaceId: UUID;
+  requestedById?: UUID;
+  provider: "jira" | "rally" | "csv" | string;
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | string;
+  config: unknown;
+  startedAt?: ISODateTime;
+  finishedAt?: ISODateTime;
+  records: ImportJobRecord[];
+}
+
 export interface AgentTask {
   id: UUID;
   workspaceId: UUID;
@@ -362,19 +580,25 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 2. Login: `POST /api/v1/auth/login`; browser sessions should prefer the HTTP-only cookie plus `GET /api/v1/auth/csrf` for unsafe requests. The returned `accessToken` remains available for API tools and development overrides.
 3. Project work list: `GET /api/v1/projects/{projectId}/work-items?limit=50`, optionally add one typed custom-field filter, follow `nextCursor` for more pages, then `GET /api/v1/work-items/{workItemId}` for detail.
 4. Work item detail tabs: comments, links, watchers, work logs, labels, attachments, activity, and reporting history all hang off the selected work item ID.
-5. Dashboard builder: create a saved filter, optionally execute it with `GET /api/v1/saved-filters/{savedFilterId}/work-items`, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
-6. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
-7. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
-8. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
+5. Product configuration: create custom fields/contexts, add field configurations for project/type overrides, create screens/fields/assignments, then create/update work items to exercise required-field enforcement.
+6. Planning configuration: list/create boards with columns and swimlanes, create releases and release scope, create project/workspace roadmaps, and add roadmap items linked to work items.
+7. Automation configuration: create a notification preference, configure webhooks, create automation rules/actions, run `POST /api/v1/automation-rules/{ruleId}/execute`, then read automation jobs/logs, current-user notifications, and webhook delivery rows. The first email runner logs execution only; real delivery workers are future work.
+8. Import review: create an import job, add source records, move it through start/complete/fail/cancel states, and show records on the job detail screen. Source-specific parsers are future work.
+9. Dashboard builder: create a saved filter, optionally execute it with `GET /api/v1/saved-filters/{savedFilterId}/work-items`, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
+10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
+11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
+12. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
 
 ## Endpoint Coverage
 
 - Setup: `POST /setup`
 - Auth: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation.
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
-- Teams/planning: team CRUD, memberships, project-team assignment, iteration CRUD, scope, commit, close, carryover.
+- Product configuration: custom field/context/value CRUD, field configuration CRUD with project/type overrides, screen/field/assignment CRUD.
+- Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists and cursor-paged work item execution, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
+- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, webhook CRUD plus queued delivery records, import job lifecycle and record APIs.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
 
