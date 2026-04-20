@@ -183,6 +183,11 @@ class ImportSampleFixtureIntegrationTest {
         assertThat(completedWorkerRun.at("/completed").asInt()).isEqualTo(1);
         assertThat(completedWorkerRun.at("/jobs/0/resolvedCount").asInt()).isEqualTo(501);
         assertThat(openConflictCount(importJobId)).isZero();
+        JsonNode workerRuns = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs");
+        assertThat(hasWorkerRun(workerRuns, "import_conflict_resolution", "succeeded")).isTrue();
+        assertThat(hasWorkerRun(workerRuns, "import_conflict_resolution", "failed")).isTrue();
+        JsonNode workerHealth = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-health");
+        assertThat(hasWorkerHealth(workerHealth, "import_conflict_resolution", "succeeded")).isTrue();
 
         JsonNode workspaceJobs = getJson("/api/v1/workspaces/" + workspaceId + "/import-conflict-resolution-jobs?status=completed");
         assertThat(workspaceJobs).isNotEmpty();
@@ -435,6 +440,24 @@ class ImportSampleFixtureIntegrationTest {
                 """, Integer.class, workspaceId, eventType);
         assertThat(activityCount).isNotNull().isGreaterThan(0);
         assertThat(auditCount).isNotNull().isGreaterThan(0);
+    }
+
+    private boolean hasWorkerRun(JsonNode runs, String workerType, String status) {
+        for (JsonNode run : runs) {
+            if (workerType.equals(run.at("/workerType").asText()) && status.equals(run.at("/status").asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasWorkerHealth(JsonNode healthRows, String workerType, String status) {
+        for (JsonNode health : healthRows) {
+            if (workerType.equals(health.at("/workerType").asText()) && status.equals(health.at("/lastStatus").asText())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void createTypeTranslation(JsonNode mapping, String source, String target) throws Exception {

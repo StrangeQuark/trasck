@@ -13,6 +13,11 @@ import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
 import com.strangequark.trasck.activity.storage.AttachmentStorageService;
 import com.strangequark.trasck.activity.storage.AttachmentUpload;
 import com.strangequark.trasck.activity.storage.StoredAttachment;
+import com.strangequark.trasck.automation.AutomationWorkerHealth;
+import com.strangequark.trasck.automation.AutomationWorkerHealthId;
+import com.strangequark.trasck.automation.AutomationWorkerHealthRepository;
+import com.strangequark.trasck.automation.AutomationWorkerRun;
+import com.strangequark.trasck.automation.AutomationWorkerRunRepository;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
@@ -36,6 +41,9 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.PatternSyntaxException;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -52,6 +60,7 @@ public class ImportJobService {
     private static final int MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE = 500;
     private static final int DEFAULT_CONFLICT_RESOLUTION_WORKER_LIMIT = 10;
     private static final int MAX_CONFLICT_RESOLUTION_WORKER_LIMIT = 50;
+    private static final String IMPORT_CONFLICT_RESOLUTION_WORKER_TYPE = "import_conflict_resolution";
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
     private static final Set<String> SUPPORTED_TRANSFORM_FUNCTIONS = Set.of(
@@ -188,12 +197,16 @@ public class ImportJobService {
     private final AttachmentRepository attachmentRepository;
     private final AttachmentStorageService attachmentStorageService;
     private final ExportJobRepository exportJobRepository;
+    private final AutomationWorkerRunRepository automationWorkerRunRepository;
+    private final AutomationWorkerHealthRepository automationWorkerHealthRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final WorkItemService workItemService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+    private final Environment environment;
+    private final boolean sampleJobsEnabled;
 
     public ImportJobService(
             ObjectMapper objectMapper,
@@ -212,12 +225,16 @@ public class ImportJobService {
             AttachmentRepository attachmentRepository,
             AttachmentStorageService attachmentStorageService,
             ExportJobRepository exportJobRepository,
+            AutomationWorkerRunRepository automationWorkerRunRepository,
+            AutomationWorkerHealthRepository automationWorkerHealthRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             WorkItemService workItemService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
-            DomainEventService domainEventService
+            DomainEventService domainEventService,
+            Environment environment,
+            @Value("${trasck.imports.sample-jobs.enabled:false}") boolean sampleJobsEnabled
     ) {
         this.objectMapper = objectMapper;
         this.importJobRepository = importJobRepository;
@@ -235,12 +252,16 @@ public class ImportJobService {
         this.attachmentRepository = attachmentRepository;
         this.attachmentStorageService = attachmentStorageService;
         this.exportJobRepository = exportJobRepository;
+        this.automationWorkerRunRepository = automationWorkerRunRepository;
+        this.automationWorkerHealthRepository = automationWorkerHealthRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.workItemService = workItemService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
+        this.environment = environment;
+        this.sampleJobsEnabled = sampleJobsEnabled;
     }
 
     @Transactional(readOnly = true)
@@ -283,6 +304,7 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        requireSampleJobsEnabled();
         return IMPORT_SAMPLES.stream()
                 .map(ImportSampleDefinition::response)
                 .toList();
@@ -295,6 +317,7 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        requireSampleJobsEnabled();
         UUID projectId = sampleRequest.projectId();
         boolean createMappingTemplate = Boolean.TRUE.equals(sampleRequest.createMappingTemplate())
                 || (sampleRequest.createMappingTemplate() == null && projectId != null);
@@ -1180,7 +1203,22 @@ public class ImportJobService {
         if (workspaceId != null) {
             activeWorkspace(workspaceId);
         }
-        return processQueuedConflictResolutionJobs(workspaceId, normalizeConflictResolutionWorkerLimit(limit), actorId);
+        int normalizedLimit = normalizeConflictResolutionWorkerLimit(limit);
+        AutomationWorkerRun run = startImportConflictResolutionWorkerRun(workspaceId, normalizedLimit, actorId);
+        try {
+            ImportConflictResolutionWorkerResponse response = processQueuedConflictResolutionJobs(workspaceId, normalizedLimit, actorId);
+            finishImportConflictResolutionWorkerRun(
+                    run,
+                    response.processed(),
+                    response.completed(),
+                    response.failed(),
+                    null
+            );
+            return response;
+        } catch (RuntimeException ex) {
+            finishImportConflictResolutionWorkerRun(run, 0, 0, 1, ex.getMessage());
+            throw ex;
+        }
     }
 
     private ImportConflictResolutionWorkerResponse processQueuedConflictResolutionJobs(UUID workspaceId, int limit, UUID actorId) {
@@ -1203,6 +1241,75 @@ public class ImportJobService {
             }
         }
         return new ImportConflictResolutionWorkerResponse(workspaceId, responses.size(), completed, failed, responses);
+    }
+
+    private AutomationWorkerRun startImportConflictResolutionWorkerRun(UUID workspaceId, Integer limit, UUID actorId) {
+        if (workspaceId == null) {
+            throw badRequest("workspaceId is required for import conflict resolution worker runs");
+        }
+        AutomationWorkerRun run = new AutomationWorkerRun();
+        run.setWorkspaceId(workspaceId);
+        run.setWorkerType(IMPORT_CONFLICT_RESOLUTION_WORKER_TYPE);
+        run.setTriggerType(actorId == null ? "scheduled" : "manual");
+        run.setStatus("running");
+        run.setDryRun(false);
+        run.setRequestedLimit(limit);
+        run.setMaxAttempts(null);
+        run.setProcessedCount(0);
+        run.setSuccessCount(0);
+        run.setFailureCount(0);
+        run.setDeadLetterCount(0);
+        ObjectNode metadata = objectMapper.createObjectNode()
+                .put("worker", IMPORT_CONFLICT_RESOLUTION_WORKER_TYPE);
+        if (actorId != null) {
+            metadata.put("actorUserId", actorId.toString());
+        }
+        run.setMetadata(metadata);
+        run.setStartedAt(OffsetDateTime.now());
+        AutomationWorkerRun saved = automationWorkerRunRepository.save(run);
+        updateImportConflictResolutionWorkerHealth(saved);
+        return saved;
+    }
+
+    private void finishImportConflictResolutionWorkerRun(
+            AutomationWorkerRun run,
+            int processed,
+            int completed,
+            int failed,
+            String errorMessage
+    ) {
+        run.setProcessedCount(processed);
+        run.setSuccessCount(completed);
+        run.setFailureCount(failed);
+        run.setDeadLetterCount(0);
+        run.setErrorMessage(truncateText(errorMessage, 4000));
+        run.setStatus(hasText(errorMessage) || failed > 0 ? "failed" : "succeeded");
+        run.setFinishedAt(OffsetDateTime.now());
+        AutomationWorkerRun saved = automationWorkerRunRepository.save(run);
+        updateImportConflictResolutionWorkerHealth(saved);
+    }
+
+    private void updateImportConflictResolutionWorkerHealth(AutomationWorkerRun run) {
+        AutomationWorkerHealth health = automationWorkerHealthRepository
+                .findById(new AutomationWorkerHealthId(run.getWorkspaceId(), run.getWorkerType()))
+                .orElseGet(() -> {
+                    AutomationWorkerHealth created = new AutomationWorkerHealth();
+                    created.setWorkspaceId(run.getWorkspaceId());
+                    created.setWorkerType(run.getWorkerType());
+                    created.setConsecutiveFailures(0);
+                    return created;
+                });
+        health.setLastRunId(run.getId());
+        health.setLastStatus(run.getStatus());
+        health.setLastStartedAt(run.getStartedAt());
+        health.setLastFinishedAt(run.getFinishedAt());
+        health.setLastError(run.getErrorMessage());
+        if ("failed".equals(run.getStatus())) {
+            health.setConsecutiveFailures((health.getConsecutiveFailures() == null ? 0 : health.getConsecutiveFailures()) + 1);
+        } else if ("succeeded".equals(run.getStatus())) {
+            health.setConsecutiveFailures(0);
+        }
+        automationWorkerHealthRepository.save(health);
     }
 
     private ImportConflictResolutionJobResponse runConflictResolutionJob(ImportConflictResolutionJob resolutionJob, UUID actorId) {
@@ -2650,8 +2757,29 @@ public class ImportJobService {
                 .orElseThrow(() -> notFound("Import sample not found"));
     }
 
+    private void requireSampleJobsEnabled() {
+        if (sampleJobsEnabled || isLocalSampleRuntime()) {
+            return;
+        }
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Import sample demo endpoints are disabled for this deployment"
+        );
+    }
+
+    private boolean isLocalSampleRuntime() {
+        return !environment.acceptsProfiles(Profiles.of("prod", "production", "staging", "hosted"));
+    }
+
     private String shortId() {
         return UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    private String truncateText(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private void recordMaterializationConflict(ImportJobRecord record, ImportMaterializationRun run, String reason) {
