@@ -47,6 +47,21 @@ public class ImportJob {
     @Column(name = "finished_at")
     private OffsetDateTime finishedAt;
 
+    @Column(name = "open_conflict_completion_accepted")
+    private Boolean openConflictCompletionAccepted;
+
+    @Column(name = "open_conflict_completion_count")
+    private Integer openConflictCompletionCount;
+
+    @Column(name = "open_conflict_completed_by_id")
+    private UUID openConflictCompletedById;
+
+    @Column(name = "open_conflict_completed_at")
+    private OffsetDateTime openConflictCompletedAt;
+
+    @Column(name = "open_conflict_completion_reason")
+    private String openConflictCompletionReason;
+
 
     public UUID getId() {
         return id;
@@ -110,5 +125,45 @@ public class ImportJob {
 
     public void setFinishedAt(OffsetDateTime finishedAt) {
         this.finishedAt = finishedAt;
+    }
+
+    public Boolean getOpenConflictCompletionAccepted() {
+        return openConflictCompletionAccepted;
+    }
+
+    public void setOpenConflictCompletionAccepted(Boolean openConflictCompletionAccepted) {
+        this.openConflictCompletionAccepted = openConflictCompletionAccepted;
+    }
+
+    public Integer getOpenConflictCompletionCount() {
+        return openConflictCompletionCount;
+    }
+
+    public void setOpenConflictCompletionCount(Integer openConflictCompletionCount) {
+        this.openConflictCompletionCount = openConflictCompletionCount;
+    }
+
+    public UUID getOpenConflictCompletedById() {
+        return openConflictCompletedById;
+    }
+
+    public void setOpenConflictCompletedById(UUID openConflictCompletedById) {
+        this.openConflictCompletedById = openConflictCompletedById;
+    }
+
+    public OffsetDateTime getOpenConflictCompletedAt() {
+        return openConflictCompletedAt;
+    }
+
+    public void setOpenConflictCompletedAt(OffsetDateTime openConflictCompletedAt) {
+        this.openConflictCompletedAt = openConflictCompletedAt;
+    }
+
+    public String getOpenConflictCompletionReason() {
+        return openConflictCompletionReason;
+    }
+
+    public void setOpenConflictCompletionReason(String openConflictCompletionReason) {
+        this.openConflictCompletionReason = openConflictCompletionReason;
     }
 }

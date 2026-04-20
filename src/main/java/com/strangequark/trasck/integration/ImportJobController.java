@@ -330,6 +330,11 @@ public class ImportJobController {
         return importJobService.listRecordVersions(recordId);
     }
 
+    @GetMapping("/import-job-records/{recordId}/version-diffs")
+    public List<ImportJobRecordVersionDiffResponse> listRecordVersionDiffs(@PathVariable UUID recordId) {
+        return importJobService.listRecordVersionDiffs(recordId);
+    }
+
     @PostMapping("/import-jobs/{importJobId}/records")
     public ResponseEntity<ImportJobRecordResponse> createRecord(
             @PathVariable UUID importJobId,

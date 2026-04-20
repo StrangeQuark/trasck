@@ -552,6 +552,9 @@ class JpaPersistenceTest {
         assertThat(importTransformPresetRepository.findById(preset.getId()).orElseThrow().getVersion()).isEqualTo(1);
         assertThat(importTransformPresetVersionRepository.findById(presetVersion.getId()).orElseThrow().getChangeType()).isEqualTo("created");
         assertThat(importMappingTemplateRepository.findById(template.getId()).orElseThrow().getTransformPresetId()).isEqualTo(preset.getId());
+        ImportJob reloadedImportJob = importJobRepository.findById(importJob.getId()).orElseThrow();
+        assertThat(reloadedImportJob.getOpenConflictCompletionAccepted()).isFalse();
+        assertThat(reloadedImportJob.getOpenConflictCompletionCount()).isZero();
         assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getTransformPresetVersion()).isEqualTo(1);
         assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getRecordsSkipped()).isZero();
         assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getMappingRulesSnapshot().get("typeTranslations")).hasSize(1);

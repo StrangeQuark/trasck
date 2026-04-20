@@ -3,6 +3,7 @@ package com.strangequark.trasck.integration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -26,6 +27,38 @@ public interface ImportJobRecordRepository extends JpaRepository<ImportJobRecord
             order by record.sourceType asc, record.sourceId asc
             """)
     List<ImportJobRecord> findFiltered(
+            @Param("importJobId") UUID importJobId,
+            @Param("status") String status,
+            @Param("conflictStatus") String conflictStatus,
+            @Param("sourceType") String sourceType
+    );
+
+    @Query("""
+            select record
+            from ImportJobRecord record
+            where record.importJobId = :importJobId
+              and (:status is null or record.status = :status)
+              and (:conflictStatus is null or record.conflictStatus = :conflictStatus)
+              and (:sourceType is null or lower(record.sourceType) = lower(:sourceType))
+            order by record.sourceType asc, record.sourceId asc
+            """)
+    List<ImportJobRecord> findFiltered(
+            @Param("importJobId") UUID importJobId,
+            @Param("status") String status,
+            @Param("conflictStatus") String conflictStatus,
+            @Param("sourceType") String sourceType,
+            Pageable pageable
+    );
+
+    @Query("""
+            select count(record)
+            from ImportJobRecord record
+            where record.importJobId = :importJobId
+              and (:status is null or record.status = :status)
+              and (:conflictStatus is null or record.conflictStatus = :conflictStatus)
+              and (:sourceType is null or lower(record.sourceType) = lower(:sourceType))
+            """)
+    long countFiltered(
             @Param("importJobId") UUID importJobId,
             @Param("status") String status,
             @Param("conflictStatus") String conflictStatus,
