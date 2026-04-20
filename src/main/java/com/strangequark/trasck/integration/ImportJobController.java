@@ -37,6 +37,20 @@ public class ImportJobController {
         return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createImportJob(workspaceId, request));
     }
 
+    @GetMapping("/workspaces/{workspaceId}/import-samples")
+    public List<ImportSampleResponse> listImportSamples(@PathVariable UUID workspaceId) {
+        return importJobService.listImportSamples(workspaceId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/import-samples/{sampleKey}/jobs")
+    public ResponseEntity<ImportSampleJobResponse> createSampleImportJob(
+            @PathVariable UUID workspaceId,
+            @PathVariable String sampleKey,
+            @RequestBody(required = false) ImportSampleJobRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createSampleImportJob(workspaceId, sampleKey, request));
+    }
+
     @GetMapping("/workspaces/{workspaceId}/import-mapping-templates")
     public List<ImportMappingTemplateResponse> listMappingTemplates(@PathVariable UUID workspaceId) {
         return importJobService.listMappingTemplates(workspaceId);

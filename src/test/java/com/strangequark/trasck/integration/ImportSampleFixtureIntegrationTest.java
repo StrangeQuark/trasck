@@ -65,6 +65,24 @@ class ImportSampleFixtureIntegrationTest {
         UUID projectId = uuid(setup, "/project/id");
         accessToken = login(setup);
 
+        JsonNode sampleCatalog = getJson("/api/v1/workspaces/" + workspaceId + "/import-samples");
+        assertThat(sampleKeys(sampleCatalog)).contains("csv", "jira", "rally");
+        JsonNode sampleJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-samples/csv/jobs", objectMapper.createObjectNode()
+                .put("projectId", projectId.toString())
+                .put("createMappingTemplate", true));
+        assertThat(sampleJob.at("/sample/key").asText()).isEqualTo("csv");
+        assertThat(sampleJob.at("/parse/recordsParsed").asInt()).isEqualTo(3);
+        assertThat(sampleJob.at("/mappingTemplate/provider").asText()).isEqualTo("csv");
+
+        JsonNode workerSettings = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings");
+        assertThat(workerSettings.at("/importConflictResolutionEnabled").asBoolean()).isFalse();
+        assertThat(workerSettings.at("/importConflictResolutionLimit").asInt()).isEqualTo(10);
+        JsonNode updatedWorkerSettings = patch("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings", objectMapper.createObjectNode()
+                .put("importConflictResolutionEnabled", true)
+                .put("importConflictResolutionLimit", 5));
+        assertThat(updatedWorkerSettings.at("/importConflictResolutionEnabled").asBoolean()).isTrue();
+        assertThat(updatedWorkerSettings.at("/importConflictResolutionLimit").asInt()).isEqualTo(5);
+
         List<SampleSpec> samples = List.of(
                 new SampleSpec(
                         "CSV",
@@ -576,6 +594,14 @@ class ImportSampleFixtureIntegrationTest {
             types.add(widget.at("/widgetType").asText());
         }
         return types;
+    }
+
+    private List<String> sampleKeys(JsonNode samples) {
+        java.util.ArrayList<String> keys = new java.util.ArrayList<>();
+        for (JsonNode sample : samples) {
+            keys.add(sample.at("/key").asText());
+        }
+        return keys;
     }
 
     private void setTextAtPath(ObjectNode root, String path, String value) {

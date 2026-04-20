@@ -36,10 +36,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.PatternSyntaxException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -72,6 +70,108 @@ public class ImportJobService {
             "substring"
     );
 
+    private static final List<ImportSampleDefinition> IMPORT_SAMPLES = List.of(
+            new ImportSampleDefinition(
+                    "csv",
+                    "CSV sample",
+                    "csv",
+                    "row",
+                    "Small CSV job with story, bug, status, visibility, and description fields.",
+                    "visibility",
+                    """
+                    id,title,type,status,visibility,description
+                    CSV-1,"  Imported: CSV    story  ",Story,To Do,Public,"  First CSV story imported through Trasck.  "
+                    CSV-2,"Imported: CSV bug",Bug,In Progress,Private,"Bug row that should map to a Trasck bug."
+                    CSV-3,"Imported: CSV done story",Story,Done,Public,"Completed source item for status translation checks."
+                    """
+            ),
+            new ImportSampleDefinition(
+                    "jira",
+                    "Jira sample",
+                    "jira",
+                    "issue",
+                    "Jira-shaped JSON job with issue summaries, types, statuses, security, and descriptions.",
+                    "fields.security",
+                    """
+                    {
+                      "issues": [
+                        {
+                          "key": "JIRA-1",
+                          "fields": {
+                            "summary": "  Imported: Jira    story  ",
+                            "issuetype": { "name": "Story" },
+                            "status": { "name": "To Do" },
+                            "security": "Public",
+                            "description": "  Jira story that should trim and collapse whitespace.  "
+                          }
+                        },
+                        {
+                          "key": "JIRA-2",
+                          "fields": {
+                            "summary": "Imported: Jira bug",
+                            "issuetype": { "name": "Bug" },
+                            "status": { "name": "In Progress" },
+                            "security": "Private",
+                            "description": "Jira bug for type and status translation."
+                          }
+                        },
+                        {
+                          "key": "JIRA-3",
+                          "fields": {
+                            "summary": "Imported: Jira accepted story",
+                            "issuetype": { "name": "Story" },
+                            "status": { "name": "Done" },
+                            "security": "Public",
+                            "description": "Source item that should map to a done status."
+                          }
+                        }
+                      ]
+                    }
+                    """
+            ),
+            new ImportSampleDefinition(
+                    "rally",
+                    "Rally sample",
+                    "rally",
+                    "artifact",
+                    "Rally-shaped JSON job with user stories, defects, schedule states, and descriptions.",
+                    "Visibility",
+                    """
+                    {
+                      "results": [
+                        {
+                          "_refObjectUUID": "rally-story-1",
+                          "FormattedID": "US101",
+                          "Name": "  Imported: Rally    story  ",
+                          "_type": "HierarchicalRequirement",
+                          "ScheduleState": "Defined",
+                          "Visibility": "Public",
+                          "Description": "  Rally user story for transform and lookup testing.  "
+                        },
+                        {
+                          "_refObjectUUID": "rally-defect-1",
+                          "FormattedID": "DE102",
+                          "Name": "Imported: Rally defect",
+                          "_type": "Defect",
+                          "ScheduleState": "In-Progress",
+                          "Visibility": "Private",
+                          "Description": "Rally defect for bug translation."
+                        },
+                        {
+                          "_refObjectUUID": "rally-story-2",
+                          "FormattedID": "US103",
+                          "Name": "Imported: Rally accepted story",
+                          "_type": "HierarchicalRequirement",
+                          "ScheduleState": "Accepted",
+                          "Visibility": "Public",
+                          "Description": "Rally item for closed status mapping."
+                        }
+                      ]
+                    }
+                    """
+            )
+    );
+
     private final ObjectMapper objectMapper;
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
@@ -94,12 +194,6 @@ public class ImportJobService {
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
-
-    @Value("${trasck.imports.conflict-resolution.scheduler.enabled:false}")
-    private boolean scheduledConflictResolutionJobsEnabled;
-
-    @Value("${trasck.imports.conflict-resolution.scheduler.limit:10}")
-    private int scheduledConflictResolutionJobLimit;
 
     public ImportJobService(
             ObjectMapper objectMapper,
@@ -182,6 +276,134 @@ public class ImportJobService {
         ImportJob saved = importJobRepository.save(job);
         recordJobEvent(saved, "import_job.created", actorId);
         return response(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportSampleResponse> listImportSamples(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return IMPORT_SAMPLES.stream()
+                .map(ImportSampleDefinition::response)
+                .toList();
+    }
+
+    @Transactional
+    public ImportSampleJobResponse createSampleImportJob(UUID workspaceId, String sampleKey, ImportSampleJobRequest request) {
+        ImportSampleDefinition sample = importSample(sampleKey);
+        ImportSampleJobRequest sampleRequest = request == null ? new ImportSampleJobRequest(null, null) : request;
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        UUID projectId = sampleRequest.projectId();
+        boolean createMappingTemplate = Boolean.TRUE.equals(sampleRequest.createMappingTemplate())
+                || (sampleRequest.createMappingTemplate() == null && projectId != null);
+        if (createMappingTemplate && projectId == null) {
+            throw badRequest("projectId is required when createMappingTemplate is true");
+        }
+
+        ObjectNode config = objectMapper.createObjectNode()
+                .put("demoSample", true)
+                .put("sampleKey", sample.key());
+        if (projectId != null) {
+            activeProjectInWorkspace(projectId, workspaceId);
+            config.put("targetProjectId", projectId.toString());
+        }
+
+        ImportJobResponse importJob = createImportJob(workspaceId, new ImportJobRequest(sample.provider(), config));
+        ImportParseResponse parse = parse(importJob.id(), new ImportParseRequest(sample.content(), null, sample.sourceType()));
+
+        ImportTransformPresetResponse transformPreset = null;
+        ImportMappingTemplateResponse mappingTemplate = null;
+        if (createMappingTemplate) {
+            transformPreset = createSampleTransformPreset(workspaceId, sample);
+            mappingTemplate = createSampleMappingTemplate(workspaceId, projectId, sample, transformPreset.id());
+        }
+
+        ImportJob savedJob = importJob(importJob.id());
+        recordSampleJobEvent(savedJob, sample, actorId, mappingTemplate);
+        return new ImportSampleJobResponse(sample.response(), response(savedJob), parse, transformPreset, mappingTemplate);
+    }
+
+    private ImportTransformPresetResponse createSampleTransformPreset(UUID workspaceId, ImportSampleDefinition sample) {
+        ObjectNode transformationConfig = objectMapper.createObjectNode();
+        ArrayNode titleSteps = objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("function", "trim"))
+                .add(objectMapper.createObjectNode()
+                        .put("function", "replace")
+                        .put("target", "Imported: ")
+                        .put("replacement", ""))
+                .add(objectMapper.createObjectNode().put("function", "collapse_whitespace"));
+        transformationConfig.set("title", titleSteps);
+        transformationConfig.set("descriptionMarkdown", objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("function", "trim")));
+        return createTransformPreset(workspaceId, new ImportTransformPresetRequest(
+                sample.label() + " demo cleanup " + shortId(),
+                "Generated by the Trasck sample import walkthrough.",
+                transformationConfig,
+                true
+        ));
+    }
+
+    private ImportMappingTemplateResponse createSampleMappingTemplate(
+            UUID workspaceId,
+            UUID projectId,
+            ImportSampleDefinition sample,
+            UUID transformPresetId
+    ) {
+        ObjectNode fieldMapping = objectMapper.createObjectNode();
+        fieldMapping.set("title", textArray("title", "fields.summary", "Name"));
+        fieldMapping.set("typeKey", textArray("type", "fields.issuetype.name", "_type"));
+        fieldMapping.set("statusKey", textArray("status", "fields.status.name", "ScheduleState"));
+        fieldMapping.set("descriptionMarkdown", textArray("description", "fields.description", "Description"));
+        ObjectNode defaults = objectMapper.createObjectNode()
+                .put("descriptionMarkdown", "Imported through the Trasck sample import walkthrough.");
+        ImportMappingTemplateResponse mapping = createMappingTemplate(workspaceId, new ImportMappingTemplateRequest(
+                sample.label() + " demo mapping " + shortId(),
+                sample.provider(),
+                sample.sourceType(),
+                "work_item",
+                projectId,
+                "story",
+                null,
+                transformPresetId,
+                null,
+                fieldMapping,
+                defaults,
+                objectMapper.createObjectNode(),
+                true
+        ));
+
+        createSampleTypeTranslations(mapping.id());
+        createSampleStatusTranslations(mapping.id());
+        createValueLookup(mapping.id(), new ImportMappingValueLookupRequest(
+                sample.visibilityPath(),
+                "Public",
+                "visibility",
+                "public",
+                0,
+                true
+        ));
+        return mapping;
+    }
+
+    private void createSampleTypeTranslations(UUID mappingTemplateId) {
+        createTypeTranslation(mappingTemplateId, new ImportMappingTypeTranslationRequest("Story", "story", true));
+        createTypeTranslation(mappingTemplateId, new ImportMappingTypeTranslationRequest("User Story", "story", true));
+        createTypeTranslation(mappingTemplateId, new ImportMappingTypeTranslationRequest("HierarchicalRequirement", "story", true));
+        createTypeTranslation(mappingTemplateId, new ImportMappingTypeTranslationRequest("Bug", "bug", true));
+        createTypeTranslation(mappingTemplateId, new ImportMappingTypeTranslationRequest("Defect", "bug", true));
+    }
+
+    private void createSampleStatusTranslations(UUID mappingTemplateId) {
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("To Do", "open", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("Defined", "open", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("Open", "open", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("In Progress", "in_progress", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("In-Progress", "in_progress", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("Done", "done", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("Accepted", "done", true));
+        createStatusTranslation(mappingTemplateId, new ImportMappingStatusTranslationRequest("Closed", "done", true));
     }
 
     @Transactional(readOnly = true)
@@ -950,16 +1172,15 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
-        return processQueuedConflictResolutionJobs(workspaceId, normalizeConflictResolutionWorkerLimit(limit), actorId);
+        return processConflictResolutionJobsInternal(workspaceId, limit, actorId);
     }
 
-    @Scheduled(fixedDelayString = "${trasck.imports.conflict-resolution.fixed-delay-ms:5000}")
     @Transactional
-    public void runScheduledConflictResolutionJobs() {
-        if (!scheduledConflictResolutionJobsEnabled) {
-            return;
+    public ImportConflictResolutionWorkerResponse processConflictResolutionJobsInternal(UUID workspaceId, Integer limit, UUID actorId) {
+        if (workspaceId != null) {
+            activeWorkspace(workspaceId);
         }
-        processQueuedConflictResolutionJobs(null, normalizeConflictResolutionWorkerLimit(scheduledConflictResolutionJobLimit), null);
+        return processQueuedConflictResolutionJobs(workspaceId, normalizeConflictResolutionWorkerLimit(limit), actorId);
     }
 
     private ImportConflictResolutionWorkerResponse processQueuedConflictResolutionJobs(UUID workspaceId, int limit, UUID actorId) {
@@ -2413,6 +2634,26 @@ public class ImportJobService {
         return json;
     }
 
+    private ArrayNode textArray(String... values) {
+        ArrayNode array = objectMapper.createArrayNode();
+        for (String value : values) {
+            array.add(value);
+        }
+        return array;
+    }
+
+    private ImportSampleDefinition importSample(String sampleKey) {
+        String normalized = requiredText(sampleKey, "sampleKey").toLowerCase(Locale.ROOT);
+        return IMPORT_SAMPLES.stream()
+                .filter(sample -> sample.key().equals(normalized))
+                .findFirst()
+                .orElseThrow(() -> notFound("Import sample not found"));
+    }
+
+    private String shortId() {
+        return UUID.randomUUID().toString().substring(0, 8);
+    }
+
     private void recordMaterializationConflict(ImportJobRecord record, ImportMaterializationRun run, String reason) {
         if (!"open".equals(record.getConflictStatus())) {
             record.setConflictDetectedAt(OffsetDateTime.now());
@@ -2466,6 +2707,22 @@ public class ImportJobService {
             additionalPayload.fields().forEachRemaining(entry -> payload.set(entry.getKey(), entry.getValue()));
         }
         domainEventService.record(job.getWorkspaceId(), "import_job", job.getId(), eventType, payload);
+    }
+
+    private void recordSampleJobEvent(
+            ImportJob job,
+            ImportSampleDefinition sample,
+            UUID actorId,
+            ImportMappingTemplateResponse mappingTemplate
+    ) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("sampleKey", sample.key())
+                .put("sampleProvider", sample.provider())
+                .put("sourceType", sample.sourceType());
+        if (mappingTemplate != null) {
+            payload.put("mappingTemplateId", mappingTemplate.id().toString());
+        }
+        recordJobEvent(job, "import_job.sample_created", actorId, payload);
     }
 
     private void recordMaterializationEvent(ImportJob job, ImportMaterializationRun run, UUID actorId) {
@@ -2798,6 +3055,20 @@ public class ImportJobService {
     }
 
     private record ParsedImportRecord(String sourceType, String sourceId, JsonNode rawPayload) {
+    }
+
+    private record ImportSampleDefinition(
+            String key,
+            String label,
+            String provider,
+            String sourceType,
+            String description,
+            String visibilityPath,
+            String content
+    ) {
+        private ImportSampleResponse response() {
+            return new ImportSampleResponse(key, label, provider, sourceType, description);
+        }
     }
 
     private record MaterializedWorkItem(WorkItemResponse response, boolean created) {
