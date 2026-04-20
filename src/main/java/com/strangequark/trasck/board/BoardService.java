@@ -11,8 +11,12 @@ import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.team.ProjectTeamRepository;
 import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
+import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
+import com.strangequark.trasck.workitem.WorkItemRankRequest;
 import com.strangequark.trasck.workitem.WorkItemResponse;
+import com.strangequark.trasck.workitem.WorkItemService;
+import com.strangequark.trasck.workitem.WorkItemTransitionRequest;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +37,7 @@ public class BoardService {
     private final TeamRepository teamRepository;
     private final ProjectTeamRepository projectTeamRepository;
     private final WorkItemRepository workItemRepository;
+    private final WorkItemService workItemService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -46,6 +51,7 @@ public class BoardService {
             TeamRepository teamRepository,
             ProjectTeamRepository projectTeamRepository,
             WorkItemRepository workItemRepository,
+            WorkItemService workItemService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService
@@ -58,6 +64,7 @@ public class BoardService {
         this.teamRepository = teamRepository;
         this.projectTeamRepository = projectTeamRepository;
         this.workItemRepository = workItemRepository;
+        this.workItemService = workItemService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -204,7 +211,41 @@ public class BoardService {
                     return new BoardColumnWorkItemsResponse(column.getId(), column.getName(), statusIds, items);
                 })
                 .toList();
-        return new BoardWorkItemsResponse(board.getId(), board.getProjectId(), limit, columns);
+        List<BoardSwimlaneWorkItemsResponse> swimlanes = boardSwimlaneRepository.findByBoardIdOrderByPositionAsc(board.getId()).stream()
+                .filter(swimlane -> Boolean.TRUE.equals(swimlane.getEnabled()))
+                .map(swimlane -> new BoardSwimlaneWorkItemsResponse(
+                        swimlane.getId(),
+                        swimlane.getName(),
+                        swimlane.getSwimlaneType(),
+                        swimlaneColumns(swimlane, columns)
+                ))
+                .toList();
+        return new BoardWorkItemsResponse(board.getId(), board.getProjectId(), limit, columns, swimlanes);
+    }
+
+    @Transactional
+    public WorkItemResponse rankBoardWorkItem(UUID boardId, UUID workItemId, BoardWorkItemRankRequest request) {
+        BoardWorkItemRankRequest rankRequest = required(request, "request");
+        Board board = activeBoard(boardId);
+        requireWorkItemOnBoard(board, workItemId);
+        if (rankRequest.previousWorkItemId() != null) {
+            requireWorkItemOnBoard(board, rankRequest.previousWorkItemId());
+        }
+        if (rankRequest.nextWorkItemId() != null) {
+            requireWorkItemOnBoard(board, rankRequest.nextWorkItemId());
+        }
+        return workItemService.rank(
+                workItemId,
+                new WorkItemRankRequest(rankRequest.previousWorkItemId(), rankRequest.nextWorkItemId())
+        );
+    }
+
+    @Transactional
+    public WorkItemResponse transitionBoardWorkItem(UUID boardId, UUID workItemId, BoardWorkItemTransitionRequest request) {
+        BoardWorkItemTransitionRequest transitionRequest = required(request, "request");
+        Board board = activeBoard(boardId);
+        requireWorkItemOnBoard(board, workItemId);
+        return workItemService.transition(workItemId, new WorkItemTransitionRequest(transitionRequest.transitionKey()));
     }
 
     @Transactional
@@ -401,6 +442,85 @@ public class BoardService {
             }
         }
         return ids;
+    }
+
+    private List<BoardColumnWorkItemsResponse> swimlaneColumns(BoardSwimlane swimlane, List<BoardColumnWorkItemsResponse> columns) {
+        return columns.stream()
+                .map(column -> new BoardColumnWorkItemsResponse(
+                        column.columnId(),
+                        column.columnName(),
+                        column.statusIds(),
+                        column.workItems().stream()
+                                .filter(item -> matchesSwimlane(swimlane, item))
+                                .toList()
+                ))
+                .toList();
+    }
+
+    private boolean matchesSwimlane(BoardSwimlane swimlane, WorkItemResponse item) {
+        JsonNode query = swimlane.getQuery();
+        String swimlaneType = hasText(swimlane.getSwimlaneType()) ? swimlane.getSwimlaneType().trim().toLowerCase() : "query";
+        return switch (swimlaneType) {
+            case "team" -> matchesUuidQuery(query, item.teamId());
+            case "assignee" -> matchesUuidQuery(query, item.assigneeId());
+            case "reporter" -> matchesUuidQuery(query, item.reporterId());
+            case "type" -> matchesUuidQuery(query, item.typeId());
+            case "priority" -> matchesUuidQuery(query, item.priorityId());
+            case "query" -> matchesFieldQuery(query, item);
+            default -> matchesFieldQuery(query, item);
+        };
+    }
+
+    private boolean matchesFieldQuery(JsonNode query, WorkItemResponse item) {
+        String field = text(query, "field");
+        if (!hasText(field)) {
+            return true;
+        }
+        String normalized = field.trim();
+        return switch (normalized) {
+            case "teamId", "team" -> matchesUuidQuery(query, item.teamId());
+            case "assigneeId", "assignee" -> matchesUuidQuery(query, item.assigneeId());
+            case "reporterId", "reporter" -> matchesUuidQuery(query, item.reporterId());
+            case "typeId", "type" -> matchesUuidQuery(query, item.typeId());
+            case "priorityId", "priority" -> matchesUuidQuery(query, item.priorityId());
+            case "statusId", "status" -> matchesUuidQuery(query, item.statusId());
+            case "visibility" -> matchesTextQuery(query, item.visibility());
+            default -> true;
+        };
+    }
+
+    private boolean matchesUuidQuery(JsonNode query, UUID actual) {
+        String expected = firstText(text(query, "value"), text(query, "id"), text(query, "uuid"));
+        if (!hasText(expected)) {
+            return actual != null;
+        }
+        if ("unassigned".equalsIgnoreCase(expected) || "none".equalsIgnoreCase(expected) || "null".equalsIgnoreCase(expected)) {
+            return actual == null;
+        }
+        return actual != null && actual.toString().equalsIgnoreCase(expected.trim());
+    }
+
+    private boolean matchesTextQuery(JsonNode query, String actual) {
+        String expected = firstText(text(query, "value"), text(query, "text"));
+        return !hasText(expected) || (actual != null && actual.equalsIgnoreCase(expected.trim()));
+    }
+
+    private String text(JsonNode query, String fieldName) {
+        return query != null && query.hasNonNull(fieldName) ? query.get(fieldName).asText() : null;
+    }
+
+    private String firstText(String... values) {
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private WorkItem requireWorkItemOnBoard(Board board, UUID workItemId) {
+        return workItemRepository.findActiveInProject(workItemId, board.getProjectId())
+                .orElseThrow(() -> notFound("Work item not found on this board"));
     }
 
     private void recordBoardEvent(Board board, String eventType, UUID actorId) {

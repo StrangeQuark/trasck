@@ -15,6 +15,9 @@ public record AutomationWorkerSettingsResponse(
         Integer emailMaxAttempts,
         Boolean webhookDryRun,
         Boolean emailDryRun,
+        Boolean workerRunRetentionEnabled,
+        Integer workerRunRetentionDays,
+        Boolean workerRunExportBeforePrune,
         OffsetDateTime updatedAt
 ) {
     static AutomationWorkerSettingsResponse from(AutomationWorkerSettings settings) {
@@ -30,6 +33,9 @@ public record AutomationWorkerSettingsResponse(
                 settings.getEmailMaxAttempts(),
                 settings.getWebhookDryRun(),
                 settings.getEmailDryRun(),
+                settings.getWorkerRunRetentionEnabled(),
+                settings.getWorkerRunRetentionDays(),
+                settings.getWorkerRunExportBeforePrune(),
                 settings.getUpdatedAt()
         );
     }

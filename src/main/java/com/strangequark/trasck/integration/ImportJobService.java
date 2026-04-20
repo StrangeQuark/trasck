@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.regex.PatternSyntaxException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -770,19 +771,43 @@ public class ImportJobService {
             return value;
         }
         JsonNode functions = transformations.get(targetField);
-        if (functions.isTextual()) {
-            return applyTransform(value, functions.asText());
-        }
         String transformed = value;
+        if (functions.isTextual() || isTransformStep(functions)) {
+            return applyTransform(transformed, functions);
+        }
+        if (functions.isObject() && functions.has("pipeline")) {
+            functions = functions.get("pipeline");
+        }
         if (functions.isArray()) {
             for (JsonNode function : functions) {
-                transformed = applyTransform(transformed, function.asText());
+                transformed = applyTransform(transformed, function);
             }
         }
         return transformed;
     }
 
-    private String applyTransform(String value, String functionName) {
+    private boolean isTransformStep(JsonNode node) {
+        return node != null
+                && node.isObject()
+                && (node.hasNonNull("function") || node.hasNonNull("name") || node.hasNonNull("type"));
+    }
+
+    private String applyTransform(String value, JsonNode step) {
+        if (step == null || step.isNull()) {
+            return value;
+        }
+        if (step.isTextual()) {
+            return applyTransform(value, step.asText(), objectMapper.createObjectNode());
+        }
+        if (!step.isObject()) {
+            return value;
+        }
+        String functionName = firstText(text(step, "function"), text(step, "name"), text(step, "type"));
+        JsonNode args = step.has("args") && step.get("args").isObject() ? step.get("args") : step;
+        return applyTransform(value, functionName, args);
+    }
+
+    private String applyTransform(String value, String functionName, JsonNode args) {
         if (!hasText(functionName)) {
             return value;
         }
@@ -791,8 +816,64 @@ public class ImportJobService {
             case "lower", "lowercase" -> value.toLowerCase(Locale.ROOT);
             case "upper", "uppercase" -> value.toUpperCase(Locale.ROOT);
             case "collapse_whitespace" -> value.trim().replaceAll("\\s+", " ");
+            case "replace" -> replace(value, args);
+            case "prefix", "prepend" -> textArg(args, "value", "") + value;
+            case "suffix", "append" -> value + textArg(args, "value", "");
+            case "truncate" -> truncate(value, intArg(args, "maxLength", intArg(args, "length", value.length())));
+            case "substring" -> substring(value, intArg(args, "start", 0), intArg(args, "end", value.length()));
             default -> value;
         };
+    }
+
+    private String replace(String value, JsonNode args) {
+        String replacement = textArg(args, "replacement", "");
+        String target = firstText(text(args, "target"), text(args, "pattern"));
+        if (!hasText(target)) {
+            return value;
+        }
+        if (Boolean.TRUE.equals(booleanArg(args, "regex"))) {
+            try {
+                return value.replaceAll(target, replacement);
+            } catch (PatternSyntaxException ex) {
+                throw badRequest("replace regex pattern is invalid");
+            }
+        }
+        return value.replace(target, replacement);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (maxLength < 0) {
+            throw badRequest("truncate maxLength must be zero or greater");
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+
+    private String substring(String value, int start, int end) {
+        if (start < 0 || end < start) {
+            throw badRequest("substring start/end arguments are invalid");
+        }
+        int safeStart = Math.min(start, value.length());
+        int safeEnd = Math.min(end, value.length());
+        return value.substring(safeStart, safeEnd);
+    }
+
+    private String text(JsonNode node, String fieldName) {
+        return node != null && node.hasNonNull(fieldName) ? node.get(fieldName).asText() : null;
+    }
+
+    private String textArg(JsonNode node, String fieldName, String fallback) {
+        String value = text(node, fieldName);
+        return value == null ? fallback : value;
+    }
+
+    private int intArg(JsonNode node, String fieldName, int fallback) {
+        return node != null && node.hasNonNull(fieldName) && node.get(fieldName).canConvertToInt()
+                ? node.get(fieldName).asInt()
+                : fallback;
+    }
+
+    private Boolean booleanArg(JsonNode node, String fieldName) {
+        return node != null && node.hasNonNull(fieldName) && node.get(fieldName).asBoolean(false);
     }
 
     private String translateType(String sourceTypeKey, ImportMappingRules rules, String fallback) {

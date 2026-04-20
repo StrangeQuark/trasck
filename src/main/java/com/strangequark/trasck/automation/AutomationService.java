@@ -5,6 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.access.WorkspaceMembershipRepository;
+import com.strangequark.trasck.activity.Attachment;
+import com.strangequark.trasck.activity.AttachmentRepository;
+import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
+import com.strangequark.trasck.activity.storage.AttachmentStorageService;
+import com.strangequark.trasck.activity.storage.AttachmentUpload;
+import com.strangequark.trasck.activity.storage.StoredAttachment;
+import com.strangequark.trasck.agent.SecretCipherService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
@@ -14,6 +22,12 @@ import com.strangequark.trasck.integration.EmailDeliveryRepository;
 import com.strangequark.trasck.integration.EmailDeliveryResponse;
 import com.strangequark.trasck.integration.EmailDeliveryWorkerRequest;
 import com.strangequark.trasck.integration.EmailDeliveryWorkerResponse;
+import com.strangequark.trasck.integration.EmailProviderSettings;
+import com.strangequark.trasck.integration.EmailProviderSettingsRepository;
+import com.strangequark.trasck.integration.EmailProviderSettingsRequest;
+import com.strangequark.trasck.integration.EmailProviderSettingsResponse;
+import com.strangequark.trasck.integration.ExportJob;
+import com.strangequark.trasck.integration.ExportJobRepository;
 import com.strangequark.trasck.integration.Webhook;
 import com.strangequark.trasck.integration.WebhookDelivery;
 import com.strangequark.trasck.integration.WebhookDeliveryRepository;
@@ -36,21 +50,31 @@ import java.net.http.HttpResponse;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Properties;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AutomationService {
+
+    private static final int MAX_WORKER_RUN_RETENTION_EXPORT_ROWS = 10_000;
+    private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
 
     private final ObjectMapper objectMapper;
     private final AutomationRuleRepository automationRuleRepository;
@@ -64,6 +88,11 @@ public class AutomationService {
     private final WebhookRepository webhookRepository;
     private final WebhookDeliveryRepository webhookDeliveryRepository;
     private final EmailDeliveryRepository emailDeliveryRepository;
+    private final EmailProviderSettingsRepository emailProviderSettingsRepository;
+    private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorageService attachmentStorageService;
+    private final ExportJobRepository exportJobRepository;
     private final NotificationRepository notificationRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
@@ -72,7 +101,9 @@ public class AutomationService {
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+    private final SecretCipherService secretCipherService;
     private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final Environment environment;
     private final String emailProvider;
     private final String defaultFromEmail;
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -92,6 +123,11 @@ public class AutomationService {
             WebhookRepository webhookRepository,
             WebhookDeliveryRepository webhookDeliveryRepository,
             EmailDeliveryRepository emailDeliveryRepository,
+            EmailProviderSettingsRepository emailProviderSettingsRepository,
+            AttachmentStorageConfigRepository attachmentStorageConfigRepository,
+            AttachmentRepository attachmentRepository,
+            AttachmentStorageService attachmentStorageService,
+            ExportJobRepository exportJobRepository,
             NotificationRepository notificationRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
@@ -100,7 +136,9 @@ public class AutomationService {
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService,
+            SecretCipherService secretCipherService,
             ObjectProvider<JavaMailSender> mailSenderProvider,
+            Environment environment,
             @Value("${trasck.email.provider:maildev}") String emailProvider,
             @Value("${trasck.email.from:no-reply@trasck.local}") String defaultFromEmail
     ) {
@@ -116,6 +154,11 @@ public class AutomationService {
         this.webhookRepository = webhookRepository;
         this.webhookDeliveryRepository = webhookDeliveryRepository;
         this.emailDeliveryRepository = emailDeliveryRepository;
+        this.emailProviderSettingsRepository = emailProviderSettingsRepository;
+        this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
+        this.attachmentRepository = attachmentRepository;
+        this.attachmentStorageService = attachmentStorageService;
+        this.exportJobRepository = exportJobRepository;
         this.notificationRepository = notificationRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
@@ -124,7 +167,9 @@ public class AutomationService {
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
+        this.secretCipherService = secretCipherService;
         this.mailSenderProvider = mailSenderProvider;
+        this.environment = environment;
         this.emailProvider = emailProvider;
         this.defaultFromEmail = defaultFromEmail;
     }
@@ -352,6 +397,77 @@ public class AutomationService {
         return automationWorkerHealthRepository.findByWorkspaceIdOrderByWorkerTypeAsc(workspaceId).stream()
                 .map(AutomationWorkerHealthResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public EmailProviderSettingsResponse getEmailProviderSettings(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return EmailProviderSettingsResponse.from(emailProviderSettingsRepository.findByWorkspaceId(workspaceId)
+                .orElseGet(() -> defaultEmailProviderSettings(workspaceId)));
+    }
+
+    @Transactional
+    public EmailProviderSettingsResponse updateEmailProviderSettings(UUID workspaceId, EmailProviderSettingsRequest request) {
+        EmailProviderSettingsRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        EmailProviderSettings settings = emailProviderSettingsRepository.findByWorkspaceId(workspaceId)
+                .orElseGet(() -> defaultEmailProviderSettings(workspaceId));
+        applyEmailProviderSettings(settings, updateRequest);
+        EmailProviderSettings saved = emailProviderSettingsRepository.save(settings);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("provider", saved.getProvider())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(workspaceId, "email_provider_settings", workspaceId, "email_provider_settings.updated", payload);
+        return EmailProviderSettingsResponse.from(saved);
+    }
+
+    @Transactional
+    public AutomationWorkerRunRetentionResponse exportWorkerRuns(UUID workspaceId, Integer limit) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, normalizeRetentionExportLimit(limit));
+        StoredWorkerRunRetentionExport export = storeWorkerRunRetentionExport(workspaceId, actorId, snapshot);
+        return workerRunRetentionResponse(workspaceId, snapshot, export, 0);
+    }
+
+    @Transactional
+    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, MAX_WORKER_RUN_RETENTION_EXPORT_ROWS);
+        if (snapshot.runsEligible() > MAX_WORKER_RUN_RETENTION_EXPORT_ROWS) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Too many automation worker runs are eligible for a single retention prune export"
+            );
+        }
+        StoredWorkerRunRetentionExport export = snapshot.runsEligible() == 0
+                ? null
+                : Boolean.TRUE.equals(snapshot.settings().getWorkerRunExportBeforePrune())
+                        ? storeWorkerRunRetentionExport(workspaceId, actorId, snapshot)
+                        : null;
+        int pruned = snapshot.cutoff() == null ? 0 : automationWorkerRunRepository.deleteRetainedRuns(workspaceId, snapshot.cutoff());
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("actorUserId", actorId.toString())
+                .put("runsEligible", snapshot.runsEligible())
+                .put("runsPruned", pruned);
+        if (snapshot.cutoff() != null) {
+            payload.put("cutoff", snapshot.cutoff().toString());
+        }
+        if (export != null) {
+            payload.put("exportJobId", export.exportJobId().toString());
+            payload.put("fileAttachmentId", export.fileAttachmentId().toString());
+        }
+        domainEventService.record(workspaceId, "automation_worker_settings", workspaceId, "automation_worker_runs.pruned", payload);
+        return workerRunRetentionResponse(workspaceId, snapshot, export, pruned);
     }
 
     @Transactional
@@ -704,7 +820,7 @@ public class AutomationService {
             message.setTo(delivery.getRecipientEmail());
             message.setSubject(delivery.getSubject());
             message.setText(delivery.getBody());
-            mailSenderProvider.getObject().send(message);
+            mailSender(delivery).send(message);
             delivery.setStatus("sent");
             delivery.setSentAt(OffsetDateTime.now());
             delivery.setResponseBody("Email accepted by " + delivery.getProvider());
@@ -750,6 +866,7 @@ public class AutomationService {
 
     private void runEmailAction(AutomationRule rule, AutomationExecutionJob job, AutomationAction action, UUID actorId) {
         JsonNode config = jsonObject(action.getConfig());
+        EmailProviderSettings providerSettings = activeEmailProviderSettings(rule.getWorkspaceId());
         String recipient = firstText(
                 text(config, "toEmail", null),
                 text(config, "recipientEmail", null),
@@ -760,12 +877,16 @@ public class AutomationService {
         if (!hasText(recipient)) {
             throw badRequest("Email action config must include to, toEmail, recipientEmail, userId, or run as a known actor");
         }
+        String provider = normalizeEmailProvider(text(config, "provider", providerSettings.getProvider()));
+        if ("maildev".equals(provider) && !maildevSelectable()) {
+            throw badRequest("Maildev email provider is only selectable outside production profiles");
+        }
         EmailDelivery delivery = new EmailDelivery();
         delivery.setWorkspaceId(rule.getWorkspaceId());
         delivery.setAutomationJobId(job.getId());
         delivery.setActionId(action.getId());
-        delivery.setProvider(text(config, "provider", emailProvider));
-        delivery.setFromEmail(text(config, "fromEmail", defaultFromEmail));
+        delivery.setProvider(provider);
+        delivery.setFromEmail(text(config, "fromEmail", providerSettings.getFromEmail()));
         delivery.setRecipientEmail(recipient);
         delivery.setSubject(requiredText(text(config, "subject", null), "config.subject"));
         delivery.setBody(text(config, "body", ""));
@@ -917,6 +1038,112 @@ public class AutomationService {
         return emailDeliveryRepository.findById(deliveryId).orElseThrow(() -> notFound("Email delivery not found"));
     }
 
+    private EmailProviderSettings activeEmailProviderSettings(UUID workspaceId) {
+        return emailProviderSettingsRepository.findByWorkspaceId(workspaceId)
+                .filter(settings -> Boolean.TRUE.equals(settings.getActive()))
+                .orElseGet(() -> defaultEmailProviderSettings(workspaceId));
+    }
+
+    private EmailProviderSettings defaultEmailProviderSettings(UUID workspaceId) {
+        EmailProviderSettings settings = new EmailProviderSettings();
+        settings.setWorkspaceId(workspaceId);
+        settings.setProvider(normalizeEmailProvider(emailProvider));
+        settings.setFromEmail(firstText(defaultFromEmail, "no-reply@trasck.local"));
+        settings.setSmtpStartTlsEnabled(true);
+        settings.setSmtpAuthEnabled(true);
+        settings.setActive(true);
+        return settings;
+    }
+
+    private void applyEmailProviderSettings(EmailProviderSettings settings, EmailProviderSettingsRequest request) {
+        String provider = request.provider() == null ? settings.getProvider() : normalizeEmailProvider(request.provider());
+        if ("maildev".equals(provider) && !maildevSelectable()) {
+            throw badRequest("Maildev email provider is only selectable outside production profiles");
+        }
+        settings.setProvider(provider);
+        if (request.fromEmail() != null) {
+            settings.setFromEmail(requiredText(request.fromEmail(), "fromEmail").toLowerCase());
+        } else if (!hasText(settings.getFromEmail())) {
+            settings.setFromEmail(firstText(defaultFromEmail, "no-reply@trasck.local"));
+        }
+        if (request.smtpHost() != null) {
+            settings.setSmtpHost(hasText(request.smtpHost()) ? request.smtpHost().trim() : null);
+        }
+        if (request.smtpPort() != null) {
+            if (request.smtpPort() < 1 || request.smtpPort() > 65_535) {
+                throw badRequest("smtpPort must be between 1 and 65535");
+            }
+            settings.setSmtpPort(request.smtpPort());
+        }
+        if (request.smtpUsername() != null) {
+            settings.setSmtpUsername(hasText(request.smtpUsername()) ? request.smtpUsername().trim() : null);
+        }
+        if (Boolean.TRUE.equals(request.clearSmtpPassword())) {
+            settings.setSmtpPasswordEncrypted(null);
+        } else if (hasText(request.smtpPassword())) {
+            settings.setSmtpPasswordEncrypted(secretCipherService.encrypt(request.smtpPassword()));
+        }
+        if (request.smtpStartTlsEnabled() != null) {
+            settings.setSmtpStartTlsEnabled(request.smtpStartTlsEnabled());
+        } else if (settings.getSmtpStartTlsEnabled() == null) {
+            settings.setSmtpStartTlsEnabled(true);
+        }
+        if (request.smtpAuthEnabled() != null) {
+            settings.setSmtpAuthEnabled(request.smtpAuthEnabled());
+        } else if (settings.getSmtpAuthEnabled() == null) {
+            settings.setSmtpAuthEnabled(true);
+        }
+        if (request.active() != null) {
+            settings.setActive(request.active());
+        } else if (settings.getActive() == null) {
+            settings.setActive(true);
+        }
+        if ("smtp".equals(settings.getProvider())) {
+            if (!hasText(settings.getSmtpHost())) {
+                throw badRequest("smtpHost is required for the smtp provider");
+            }
+            if (settings.getSmtpPort() == null) {
+                throw badRequest("smtpPort is required for the smtp provider");
+            }
+        }
+    }
+
+    private JavaMailSender mailSender(EmailDelivery delivery) {
+        if (!"smtp".equals(normalizeEmailProvider(delivery.getProvider()))) {
+            return mailSenderProvider.getObject();
+        }
+        EmailProviderSettings settings = emailProviderSettingsRepository.findByWorkspaceId(delivery.getWorkspaceId())
+                .filter(candidate -> Boolean.TRUE.equals(candidate.getActive()))
+                .filter(candidate -> "smtp".equals(candidate.getProvider()))
+                .orElseThrow(() -> badRequest("Active SMTP settings are required to send this email delivery"));
+        JavaMailSenderImpl sender = new JavaMailSenderImpl();
+        sender.setHost(requiredText(settings.getSmtpHost(), "smtpHost"));
+        sender.setPort(required(settings.getSmtpPort(), "smtpPort"));
+        if (hasText(settings.getSmtpUsername())) {
+            sender.setUsername(settings.getSmtpUsername());
+        }
+        if (hasText(settings.getSmtpPasswordEncrypted())) {
+            sender.setPassword(secretCipherService.decrypt(settings.getSmtpPasswordEncrypted()));
+        }
+        Properties properties = sender.getJavaMailProperties();
+        properties.put("mail.smtp.auth", Boolean.toString(Boolean.TRUE.equals(settings.getSmtpAuthEnabled())));
+        properties.put("mail.smtp.starttls.enable", Boolean.toString(Boolean.TRUE.equals(settings.getSmtpStartTlsEnabled())));
+        return sender;
+    }
+
+    private boolean maildevSelectable() {
+        return Arrays.stream(environment.getActiveProfiles())
+                .noneMatch(profile -> "prod".equalsIgnoreCase(profile) || "production".equalsIgnoreCase(profile));
+    }
+
+    private String normalizeEmailProvider(String provider) {
+        String normalized = hasText(provider) ? provider.trim().toLowerCase() : "maildev";
+        if (!List.of("maildev", "smtp").contains(normalized)) {
+            throw badRequest("email provider must be maildev or smtp");
+        }
+        return normalized;
+    }
+
     private AutomationWorkerSettings workerSettings(UUID workspaceId) {
         return automationWorkerSettingsRepository.findById(workspaceId).orElseGet(() -> {
             AutomationWorkerSettings settings = new AutomationWorkerSettings();
@@ -931,8 +1158,130 @@ public class AutomationService {
             settings.setEmailMaxAttempts(3);
             settings.setWebhookDryRun(true);
             settings.setEmailDryRun(true);
+            settings.setWorkerRunRetentionEnabled(false);
+            settings.setWorkerRunRetentionDays(null);
+            settings.setWorkerRunExportBeforePrune(true);
             return settings;
         });
+    }
+
+    private WorkerRunRetentionSnapshot workerRunRetentionSnapshot(UUID workspaceId, int limit) {
+        AutomationWorkerSettings settings = workerSettings(workspaceId);
+        OffsetDateTime cutoff = workerRunRetentionCutoff(settings);
+        long eligible = cutoff == null ? 0 : automationWorkerRunRepository.countByWorkspaceIdAndStartedAtBefore(workspaceId, cutoff);
+        List<AutomationWorkerRunHistoryResponse> runs = cutoff == null
+                ? List.of()
+                : automationWorkerRunRepository.findByWorkspaceIdAndStartedAtBeforeOrderByStartedAtAsc(
+                        workspaceId,
+                        cutoff,
+                        PageRequest.of(0, limit)
+                ).stream().map(AutomationWorkerRunHistoryResponse::from).toList();
+        return new WorkerRunRetentionSnapshot(settings, cutoff, eligible, runs);
+    }
+
+    private OffsetDateTime workerRunRetentionCutoff(AutomationWorkerSettings settings) {
+        if (!Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled()) || settings.getWorkerRunRetentionDays() == null) {
+            return null;
+        }
+        return OffsetDateTime.now().minusDays(settings.getWorkerRunRetentionDays());
+    }
+
+    private StoredWorkerRunRetentionExport storeWorkerRunRetentionExport(
+            UUID workspaceId,
+            UUID actorId,
+            WorkerRunRetentionSnapshot snapshot
+    ) {
+        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(workspaceId)
+                .orElseThrow(() -> badRequest("Default attachment storage config not found"));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        String filename = "automation-worker-runs-"
+                + workspaceId
+                + "-"
+                + now.format(EXPORT_FILENAME_TIME)
+                + ".json";
+        byte[] content = workerRunRetentionExportContent(workspaceId, actorId, snapshot, now);
+        StoredAttachment stored = attachmentStorageService.store(
+                storageConfig,
+                new AttachmentUpload(filename, "application/json", content, null)
+        );
+        try {
+            Attachment attachment = new Attachment();
+            attachment.setWorkspaceId(workspaceId);
+            attachment.setStorageConfigId(storageConfig.getId());
+            attachment.setUploaderId(actorId);
+            attachment.setFilename(filename);
+            attachment.setContentType("application/json");
+            attachment.setStorageKey(stored.storageKey());
+            attachment.setSizeBytes(stored.sizeBytes());
+            attachment.setChecksum(stored.checksum());
+            attachment.setVisibility("restricted");
+            Attachment savedAttachment = attachmentRepository.save(attachment);
+
+            ExportJob exportJob = new ExportJob();
+            exportJob.setWorkspaceId(workspaceId);
+            exportJob.setRequestedById(actorId);
+            exportJob.setExportType("automation_worker_runs");
+            exportJob.setStatus("completed");
+            exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setStartedAt(now);
+            exportJob.setFinishedAt(now);
+            ExportJob savedExportJob = exportJobRepository.save(exportJob);
+            return new StoredWorkerRunRetentionExport(savedExportJob.getId(), savedAttachment.getId());
+        } catch (RuntimeException ex) {
+            attachmentStorageService.delete(storageConfig, stored.storageKey());
+            throw ex;
+        }
+    }
+
+    private byte[] workerRunRetentionExportContent(
+            UUID workspaceId,
+            UUID actorId,
+            WorkerRunRetentionSnapshot snapshot,
+            OffsetDateTime exportedAt
+    ) {
+        ObjectNode document = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("exportedAt", exportedAt.toString())
+                .put("retentionEnabled", Boolean.TRUE.equals(snapshot.settings().getWorkerRunRetentionEnabled()))
+                .put("exportBeforePrune", Boolean.TRUE.equals(snapshot.settings().getWorkerRunExportBeforePrune()))
+                .put("runsEligible", snapshot.runsEligible())
+                .put("runsIncluded", snapshot.runs().size());
+        if (actorId != null) {
+            document.put("actorUserId", actorId.toString());
+        }
+        if (snapshot.settings().getWorkerRunRetentionDays() != null) {
+            document.put("retentionDays", snapshot.settings().getWorkerRunRetentionDays());
+        }
+        if (snapshot.cutoff() != null) {
+            document.put("cutoff", snapshot.cutoff().toString());
+        }
+        document.set("runs", objectMapper.valueToTree(snapshot.runs()));
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(document);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Could not serialize automation worker run retention export", ex);
+        }
+    }
+
+    private AutomationWorkerRunRetentionResponse workerRunRetentionResponse(
+            UUID workspaceId,
+            WorkerRunRetentionSnapshot snapshot,
+            StoredWorkerRunRetentionExport export,
+            int pruned
+    ) {
+        return new AutomationWorkerRunRetentionResponse(
+                workspaceId,
+                Boolean.TRUE.equals(snapshot.settings().getWorkerRunRetentionEnabled()),
+                snapshot.settings().getWorkerRunRetentionDays(),
+                Boolean.TRUE.equals(snapshot.settings().getWorkerRunExportBeforePrune()),
+                snapshot.cutoff(),
+                snapshot.runsEligible(),
+                snapshot.runs().size(),
+                pruned,
+                export == null ? null : export.exportJobId(),
+                export == null ? null : export.fileAttachmentId(),
+                snapshot.runs()
+        );
     }
 
     private Workspace activeWorkspace(UUID workspaceId) {
@@ -1025,6 +1374,24 @@ public class AutomationService {
         }
         if (request.emailDryRun() != null) {
             settings.setEmailDryRun(request.emailDryRun());
+        }
+        if (request.workerRunRetentionEnabled() != null) {
+            settings.setWorkerRunRetentionEnabled(request.workerRunRetentionEnabled());
+        }
+        if (request.workerRunRetentionDays() != null) {
+            if (request.workerRunRetentionDays() < 1) {
+                throw badRequest("workerRunRetentionDays must be greater than 0");
+            }
+            settings.setWorkerRunRetentionDays(request.workerRunRetentionDays());
+        }
+        if (request.workerRunExportBeforePrune() != null) {
+            settings.setWorkerRunExportBeforePrune(request.workerRunExportBeforePrune());
+        }
+        if (Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled()) && settings.getWorkerRunRetentionDays() == null) {
+            throw badRequest("workerRunRetentionDays is required when worker run retention is enabled");
+        }
+        if (settings.getWorkerRunExportBeforePrune() == null) {
+            settings.setWorkerRunExportBeforePrune(true);
         }
     }
 
@@ -1215,6 +1582,13 @@ public class AutomationService {
         return limit;
     }
 
+    private int normalizeRetentionExportLimit(Integer limit) {
+        if (limit == null) {
+            return 500;
+        }
+        return Math.max(1, Math.min(limit, 1000));
+    }
+
     private int normalizeMaxAttempts(Integer maxAttempts) {
         if (maxAttempts == null) {
             return 3;
@@ -1256,5 +1630,19 @@ public class AutomationService {
 
     private ResponseStatusException badRequest(String message) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private record WorkerRunRetentionSnapshot(
+            AutomationWorkerSettings settings,
+            OffsetDateTime cutoff,
+            long runsEligible,
+            List<AutomationWorkerRunHistoryResponse> runs
+    ) {
+    }
+
+    private record StoredWorkerRunRetentionExport(
+            UUID exportJobId,
+            UUID fileAttachmentId
+    ) {
     }
 }
