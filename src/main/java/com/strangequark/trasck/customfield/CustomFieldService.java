@@ -513,6 +513,32 @@ public class CustomFieldService {
         return new CustomFieldSearchFilter(field.getId(), field.getKey(), field.getFieldType(), operator, values);
     }
 
+    public CustomFieldSearchFilter resolveSearchableFieldForWorkspace(
+            UUID workspaceId,
+            String customFieldReference,
+            String customFieldOperator,
+            List<String> customFieldValues
+    ) {
+        CustomField field = resolveWorkspaceCustomField(workspaceId, requiredText(customFieldReference, "customFieldKey"));
+        if (Boolean.TRUE.equals(field.getArchived()) || !Boolean.TRUE.equals(field.getSearchable())) {
+            throw badRequest("Custom field is not searchable");
+        }
+        String operator = normalizeSearchOperator(customFieldOperator);
+        List<String> values = normalizeSearchValues(field, operator, customFieldValues);
+        return new CustomFieldSearchFilter(field.getId(), field.getKey(), field.getFieldType(), operator, values);
+    }
+
+    public CustomFieldSearchFilter resolveSearchableFieldForWorkspace(
+            UUID workspaceId,
+            String customFieldReference
+    ) {
+        CustomField field = resolveWorkspaceCustomField(workspaceId, requiredText(customFieldReference, "customFieldKey"));
+        if (Boolean.TRUE.equals(field.getArchived()) || !Boolean.TRUE.equals(field.getSearchable())) {
+            throw badRequest("Custom field is not searchable");
+        }
+        return new CustomFieldSearchFilter(field.getId(), field.getKey(), field.getFieldType(), "eq", List.of());
+    }
+
     private void applyCustomFieldRequest(CustomField field, CustomFieldRequest request, boolean create) {
         if (create || hasText(request.name())) {
             field.setName(requiredText(request.name(), "name"));
@@ -647,6 +673,22 @@ public class CustomFieldService {
                     .orElseThrow(() -> badRequest("Custom field does not belong to this work item workspace"));
             return activeFieldForItem(item, field.getId());
         }
+    }
+
+    private CustomField resolveWorkspaceCustomField(UUID workspaceId, String customFieldReference) {
+        try {
+            UUID customFieldId = UUID.fromString(customFieldReference);
+            return customFieldRepository.findById(customFieldId)
+                    .filter(field -> workspaceId.equals(field.getWorkspaceId()))
+                    .orElseGet(() -> workspaceCustomFieldByKey(workspaceId, customFieldReference));
+        } catch (IllegalArgumentException ignored) {
+            return workspaceCustomFieldByKey(workspaceId, customFieldReference);
+        }
+    }
+
+    private CustomField workspaceCustomFieldByKey(UUID workspaceId, String customFieldReference) {
+        return customFieldRepository.findByWorkspaceIdAndKeyIgnoreCase(workspaceId, customFieldReference)
+                .orElseThrow(() -> badRequest("Searchable custom field not found"));
     }
 
     private CustomFieldValueResponse setValueInternal(WorkItem item, CustomField field, JsonNode value, UUID actorId) {
@@ -929,6 +971,31 @@ public class CustomFieldService {
         }
         validateSearchValue(field, operator, value);
         return List.of(value);
+    }
+
+    private List<String> normalizeSearchValues(CustomField field, String operator, List<String> customFieldValues) {
+        List<String> values = customFieldValues == null ? List.of() : customFieldValues.stream()
+                .map(value -> requiredText(value, "customFieldValue"))
+                .toList();
+        if ("between".equals(operator)) {
+            if (values.size() != 2) {
+                throw badRequest("customFieldValue and customFieldValueTo are required for the between customFieldOperator");
+            }
+            values.forEach(value -> validateSearchValue(field, operator, value));
+            return values;
+        }
+        if ("in".equals(operator)) {
+            if (values.isEmpty()) {
+                throw badRequest("customFieldValue must contain at least one value for the in customFieldOperator");
+            }
+            values.forEach(value -> validateSearchValue(field, operator, value));
+            return values;
+        }
+        if (values.size() != 1) {
+            throw badRequest("customFieldValue is required");
+        }
+        validateSearchValue(field, operator, values.get(0));
+        return values;
     }
 
     private void validateSearchValue(CustomField field, String operator, String value) {

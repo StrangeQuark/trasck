@@ -6,7 +6,7 @@ This document is the frontend-facing companion to generated OpenAPI. The backend
 
 - Base path: `/api/v1`
 - JSON content type: `application/json`
-- Auth: `Authorization: Bearer <jwt-or-api-token>` for API clients. Browser cookie auth is supported after login, but unsafe cookie-authenticated requests must send the CSRF header returned by `GET /api/v1/auth/csrf`.
+- Auth: `Authorization: Bearer <jwt-or-api-token>` for direct API clients. The browser frontend uses the HTTP-only auth cookie set by login and does not store access tokens in local storage. Unsafe cookie-authenticated requests must send the CSRF header returned by `GET /api/v1/auth/csrf`.
 - IDs are UUID strings unless an entity exposes a human key such as `workItem.key`.
 - Timestamps are ISO-8601 strings with offset.
 - Errors use Spring's standard error body for now; frontend should branch mainly on HTTP status.
@@ -354,13 +354,15 @@ export interface AgentTask {
 }
 ```
 
+Browser UI code should use `AuthSession.user` and the auth cookie. The returned `accessToken` remains part of the API response for direct API tools and non-browser clients, not as browser session storage.
+
 ## Common Flows
 
 1. First setup: `POST /api/v1/setup`, then store IDs from `workspace`, `project`, `adminUser`, and `seedData`.
-2. Login: `POST /api/v1/auth/login`, then use `accessToken` as a Bearer token for local frontend development.
+2. Login: `POST /api/v1/auth/login`; browser sessions should prefer the HTTP-only cookie plus `GET /api/v1/auth/csrf` for unsafe requests. The returned `accessToken` remains available for API tools and development overrides.
 3. Project work list: `GET /api/v1/projects/{projectId}/work-items?limit=50`, optionally add one typed custom-field filter, follow `nextCursor` for more pages, then `GET /api/v1/work-items/{workItemId}` for detail.
 4. Work item detail tabs: comments, links, watchers, work logs, labels, attachments, activity, and reporting history all hang off the selected work item ID.
-5. Dashboard builder: create a saved filter, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
+5. Dashboard builder: create a saved filter, optionally execute it with `GET /api/v1/saved-filters/{savedFilterId}/work-items`, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
 6. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
 7. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
 8. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
@@ -372,7 +374,7 @@ export interface AgentTask {
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
 - Teams/planning: team CRUD, memberships, project-team assignment, iteration CRUD, scope, commit, close, carryover.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
-- Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
+- Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists and cursor-paged work item execution, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
 
@@ -394,6 +396,34 @@ Supported operator groups:
 | `boolean` | `eq`, `ne` |
 | `multi_select` | `contains`, `not_contains`, `in` |
 | `json` | `eq`, `ne`; `customFieldValue` must be valid JSON text |
+
+## Saved Filter Execution
+
+`GET /api/v1/saved-filters/{savedFilterId}/work-items?limit=&cursor=` executes a saved work item query and returns the standard cursor-page envelope of `WorkItemResponse` items.
+
+The query JSON stored on the saved filter supports:
+
+- Scope: top-level `projectId`, `projectIds`, and optional `teamId`. Project-visible saved filters are constrained to their saved `projectId`; team-visible filters are constrained to their saved `teamId`.
+- Predicates: use `where` for a predicate/group or `filters` as an implicit `and` group. Boolean groups use `{ "op": "and" | "or", "conditions": [...] }`.
+- System fields: `{ "field": "title", "operator": "contains", "value": "api" }`.
+- Custom fields: `{ "customFieldKey": "customer", "operator": "eq", "value": "Acme" }` or `customFieldId`.
+- Sort: `workspaceSequenceNumber`, `createdAt`, `updatedAt`, `dueDate`, and `priority` for work item scopes. `rank` is available when the saved filter resolves to one project.
+
+```json
+{
+  "entityType": "work_item",
+  "projectId": "00000000-0000-0000-0000-000000000000",
+  "where": {
+    "op": "and",
+    "conditions": [
+      { "field": "typeKey", "operator": "eq", "value": "story" },
+      { "field": "title", "operator": "contains", "value": "checkout" },
+      { "customFieldKey": "customer", "operator": "eq", "value": "Acme" }
+    ]
+  },
+  "sort": [{ "field": "dueDate", "direction": "asc" }]
+}
+```
 
 ## Report Query Parameters
 

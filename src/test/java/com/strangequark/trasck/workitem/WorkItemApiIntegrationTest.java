@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.event.DomainEventOutboxDispatcher;
 import com.strangequark.trasck.event.DomainEventPublished;
@@ -132,6 +133,12 @@ class WorkItemApiIntegrationTest {
 
         JsonNode secondEpic = createWorkItem(projectId, actorId, "epic", null, "Second epic", null);
         UUID secondEpicId = uuid(secondEpic, "/id");
+        patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
+                .put("dueDate", "2026-04-20")
+                .put("priorityKey", "critical"));
+        patch("/api/v1/work-items/" + secondEpicId, objectMapper.createObjectNode()
+                .put("dueDate", "2026-05-01")
+                .put("priorityKey", "low"));
         JsonNode updatedStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
                 .put("title", "Implement story with parent change")
                 .put("parentId", secondEpicId.toString()));
@@ -510,6 +517,124 @@ class WorkItemApiIntegrationTest {
         UUID savedFilterId = uuid(savedFilter, "/id");
         assertThat(savedFilter.at("/visibility").asText()).isEqualTo("project");
         assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/saved-filters")).isNotEmpty();
+
+        ObjectNode executableFilterQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        ObjectNode executableWhere = objectMapper.createObjectNode()
+                .put("op", "and");
+        ArrayNode executableConditions = objectMapper.createArrayNode();
+        executableConditions.add(objectMapper.createObjectNode()
+                .put("field", "title")
+                .put("operator", "contains")
+                .put("value", "Implement"));
+        executableConditions.add(objectMapper.createObjectNode()
+                .put("field", "typeKey")
+                .put("operator", "eq")
+                .put("value", "story"));
+        executableConditions.add(objectMapper.createObjectNode()
+                .put("customFieldKey", "customer")
+                .put("operator", "eq")
+                .put("value", "Acme"));
+        executableConditions.add(objectMapper.createObjectNode()
+                .put("customFieldKey", "impact")
+                .put("operator", "gt")
+                .put("value", "5"));
+        executableWhere.set("conditions", executableConditions);
+        executableFilterQuery.set("where", executableWhere);
+        JsonNode executableFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Executable story search")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", executableFilterQuery));
+        UUID executableFilterId = uuid(executableFilter, "/id");
+        JsonNode executableResults = getJson("/api/v1/saved-filters/" + executableFilterId + "/work-items?limit=10");
+        assertThat(executableResults.at("/items")).hasSize(1);
+        assertThat(uuid(executableResults, "/items/0/id")).isEqualTo(storyId);
+
+        ObjectNode pagedFilterQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        pagedFilterQuery.set("sort", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("field", "workspaceSequenceNumber")
+                .put("direction", "asc")));
+        ObjectNode pagedWhere = objectMapper.createObjectNode()
+                .put("op", "or");
+        ArrayNode pagedConditions = objectMapper.createArrayNode();
+        pagedConditions.add(objectMapper.createObjectNode()
+                .put("customFieldKey", "skills")
+                .put("operator", "contains")
+                .put("value", "backend"));
+        pagedConditions.add(objectMapper.createObjectNode()
+                .put("customFieldKey", "skills")
+                .put("operator", "contains")
+                .put("value", "design"));
+        pagedWhere.set("conditions", pagedConditions);
+        pagedFilterQuery.set("where", pagedWhere);
+        JsonNode pagedFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Paged skills search")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", pagedFilterQuery));
+        UUID pagedFilterId = uuid(pagedFilter, "/id");
+        JsonNode firstSavedFilterPage = getJson("/api/v1/saved-filters/" + pagedFilterId + "/work-items?limit=1");
+        assertThat(firstSavedFilterPage.at("/items")).hasSize(1);
+        assertThat(firstSavedFilterPage.at("/hasMore").asBoolean()).isTrue();
+        assertThat(uuid(firstSavedFilterPage, "/items/0/id")).isEqualTo(storyId);
+        JsonNode secondSavedFilterPage = getJson("/api/v1/saved-filters/" + pagedFilterId + "/work-items?limit=1&cursor=" + firstSavedFilterPage.at("/nextCursor").asText());
+        assertThat(secondSavedFilterPage.at("/items")).hasSize(1);
+        assertThat(secondSavedFilterPage.at("/hasMore").asBoolean()).isFalse();
+        assertThat(uuid(secondSavedFilterPage, "/items/0/id")).isEqualTo(secondEpicId);
+
+        ObjectNode invalidExecutableQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        invalidExecutableQuery.set("filters", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("customFieldKey", "customer")
+                .put("operator", "regex")
+                .put("value", "Acme")));
+        JsonNode invalidExecutableFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Invalid executable search")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", invalidExecutableQuery));
+        UUID invalidExecutableFilterId = uuid(invalidExecutableFilter, "/id");
+        assertThat(get("/api/v1/saved-filters/" + invalidExecutableFilterId + "/work-items").statusCode()).isEqualTo(400);
+
+        ObjectNode dueDateSortQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        dueDateSortQuery.set("sort", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("field", "dueDate")
+                .put("direction", "asc")));
+        JsonNode dueDateSortFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Due date sort")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", dueDateSortQuery));
+        UUID dueDateSortFilterId = uuid(dueDateSortFilter, "/id");
+        JsonNode dueDateSortResults = getJson("/api/v1/saved-filters/" + dueDateSortFilterId + "/work-items?limit=2");
+        assertThat(uuid(dueDateSortResults, "/items/0/id")).isEqualTo(storyId);
+        assertThat(uuid(dueDateSortResults, "/items/1/id")).isEqualTo(secondEpicId);
+
+        ObjectNode prioritySortQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        prioritySortQuery.set("sort", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("field", "priority")
+                .put("direction", "desc")));
+        JsonNode prioritySortFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Priority sort")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", prioritySortQuery));
+        UUID prioritySortFilterId = uuid(prioritySortFilter, "/id");
+        JsonNode priorityFirstPage = getJson("/api/v1/saved-filters/" + prioritySortFilterId + "/work-items?limit=1");
+        assertThat(uuid(priorityFirstPage, "/items/0/id")).isEqualTo(storyId);
+        assertThat(priorityFirstPage.at("/hasMore").asBoolean()).isTrue();
+        JsonNode prioritySecondPage = getJson("/api/v1/saved-filters/" + prioritySortFilterId + "/work-items?limit=1&cursor=" + priorityFirstPage.at("/nextCursor").asText());
+        assertThat(prioritySecondPage.at("/items")).hasSize(1);
+
         JsonNode savedView = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/views", objectMapper.createObjectNode()
                 .put("name", "My project work")
                 .put("viewType", "work_items")
@@ -653,6 +778,9 @@ class WorkItemApiIntegrationTest {
         assertThat(get("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/personalization/views/" + projectSavedViewId).statusCode()).isEqualTo(200);
         assertThat(get("/api/v1/report-query-catalog/" + reportQueryId).statusCode()).isEqualTo(200);
+        JsonNode projectOnlyExecutedResults = getJson("/api/v1/saved-filters/" + executableFilterId + "/work-items");
+        assertThat(projectOnlyExecutedResults.at("/items")).hasSize(1);
+        assertThat(uuid(projectOnlyExecutedResults, "/items/0/id")).isEqualTo(storyId);
         assertThat(getJson("/api/v1/projects/" + projectId + "/dashboards")).isNotEmpty();
         assertThat(getJson("/api/v1/projects/" + projectId + "/saved-filters")).isNotEmpty();
         assertThat(getJson("/api/v1/projects/" + projectId + "/personalization/views")).isNotEmpty();
@@ -682,6 +810,11 @@ class WorkItemApiIntegrationTest {
         assertThat(delete("/api/v1/personalization/views/" + savedViewId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/personalization/views/" + projectSavedViewId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/personalization/views/" + teamSavedViewId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + invalidExecutableFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + prioritySortFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + dueDateSortFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + pagedFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + executableFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/dashboards/" + projectDashboardId).statusCode()).isEqualTo(204);
 
