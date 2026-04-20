@@ -1,0 +1,31 @@
+{
+  "results": [
+    {
+      "_refObjectUUID": "rally-story-1",
+      "FormattedID": "US101",
+      "Name": "  Imported: Rally    story  ",
+      "_type": "HierarchicalRequirement",
+      "ScheduleState": "Defined",
+      "Visibility": "Public",
+      "Description": "  Rally user story for transform and lookup testing.  "
+    },
+    {
+      "_refObjectUUID": "rally-defect-1",
+      "FormattedID": "DE102",
+      "Name": "Imported: Rally defect",
+      "_type": "Defect",
+      "ScheduleState": "In-Progress",
+      "Visibility": "Private",
+      "Description": "Rally defect for bug translation."
+    },
+    {
+      "_refObjectUUID": "rally-story-2",
+      "FormattedID": "US103",
+      "Name": "Imported: Rally accepted story",
+      "_type": "HierarchicalRequirement",
+      "ScheduleState": "Accepted",
+      "Visibility": "Public",
+      "Description": "Rally item for closed status mapping."
+    }
+  ]
+}

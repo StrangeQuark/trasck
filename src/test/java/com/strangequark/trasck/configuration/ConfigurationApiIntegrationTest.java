@@ -9,6 +9,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -509,6 +511,35 @@ class ConfigurationApiIntegrationTest {
         assertThat(resolvedSkipConflict.at("/conflictResolution").asText()).isEqualTo("skip");
         JsonNode openConflictRecords = getJson("/api/v1/import-jobs/" + importJobId + "/records?status=conflict&conflictStatus=open&sourceType=issue");
         assertThat(openConflictRecords).hasSizeGreaterThanOrEqualTo(1);
+        ObjectNode filteredResolveBody = objectMapper.createObjectNode()
+                .put("scope", "filtered")
+                .put("status", "conflict")
+                .put("conflictStatus", "open")
+                .put("sourceType", "issue")
+                .put("resolution", "update_existing");
+        JsonNode filteredResolvePreview = postJson(
+                "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve-preview",
+                filteredResolveBody);
+        assertThat(filteredResolvePreview.at("/scope").asText()).isEqualTo("filtered");
+        assertThat(filteredResolvePreview.at("/matched").asInt()).isEqualTo(openConflictRecords.size());
+        HttpResponse<String> blockedFilteredResolve = post(
+                "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve",
+                ((ObjectNode) filteredResolveBody.deepCopy())
+                        .put("confirmation", "RESOLVE FILTERED CONFLICTS")
+                        .put("expectedCount", openConflictRecords.size() + 1));
+        assertThat(blockedFilteredResolve.statusCode()).isEqualTo(400);
+        JsonNode filteredResolvedConflicts = postJson(
+                "/api/v1/import-jobs/" + importJobId + "/conflicts/resolve",
+                filteredResolveBody
+                        .put("confirmation", "RESOLVE FILTERED CONFLICTS")
+                        .put("expectedCount", openConflictRecords.size()));
+        assertThat(filteredResolvedConflicts.at("/scope").asText()).isEqualTo("filtered");
+        assertThat(filteredResolvedConflicts.at("/resolved").asInt()).isEqualTo(openConflictRecords.size());
+        JsonNode reopenedFilteredConflicts = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
+                .put("mappingTemplateId", mapping.at("/id").asText())
+                .put("limit", 10)
+                .put("updateExisting", false));
+        assertThat(reopenedFilteredConflicts.at("/conflicts").asInt()).isGreaterThanOrEqualTo(1);
         ObjectNode retargetBody = objectMapper.createObjectNode()
                 .put("name", "Jira title cleanup v1 retarget clone")
                 .put("enabled", true);
@@ -526,14 +557,27 @@ class ConfigurationApiIntegrationTest {
         JsonNode retargetedMapping = findRecordById(getJson("/api/v1/workspaces/" + workspaceId + "/import-mapping-templates"), mapping.at("/id").asText());
         assertThat(uuid(retargetedMapping, "/transformPresetId")).isEqualTo(retargetedPresetId);
         JsonNode updatedMaterializationRuns = getJson("/api/v1/import-jobs/" + importJobId + "/materialization-runs");
-        assertThat(updatedMaterializationRuns).hasSize(6);
+        assertThat(updatedMaterializationRuns).hasSize(7);
         assertThat(updatedMaterializationRuns.at("/0/recordsSkipped").asInt()).isGreaterThanOrEqualTo(1);
         assertThat(updatedMaterializationRuns.at("/0/mappingRulesSnapshot/typeTranslations")).hasSize(1);
         HttpResponse<String> blockedComplete = post("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
         assertThat(blockedComplete.statusCode()).isEqualTo(409);
-        JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode()
+        HttpResponse<String> blockedBooleanComplete = post("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode()
                 .put("acceptOpenConflicts", true));
+        assertThat(blockedBooleanComplete.statusCode()).isEqualTo(409);
+        JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode()
+                .put("acceptOpenConflicts", true)
+                .put("openConflictConfirmation", "COMPLETE WITH OPEN CONFLICTS")
+                .put("openConflictReason", "Manual import exercise accepts these staged open conflicts."));
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
+        JsonNode replayedEvents = postJson("/api/v1/workspaces/" + workspaceId + "/domain-events/replay", objectMapper.createObjectNode());
+        assertThat(replayedEvents.at("/eventsMatched").asInt()).isGreaterThan(0);
+        JsonNode activity = getJson("/api/v1/workspaces/" + workspaceId + "/activity?limit=100");
+        assertThat(eventTypes(activity.at("/items"), "eventType"))
+                .contains("import_transform_preset.clone_retargeted", "import_job.completed", "import_job_record.conflict_resolved");
+        JsonNode audit = getJson("/api/v1/workspaces/" + workspaceId + "/audit-log?limit=100");
+        assertThat(eventTypes(audit.at("/items"), "action"))
+                .contains("import_transform_preset.clone_retargeted", "import_job.completed", "import_job_record.conflict_resolved");
     }
 
     private JsonNode postSetup() throws Exception {
@@ -679,5 +723,13 @@ class ConfigurationApiIntegrationTest {
             }
         }
         throw new IllegalStateException("Record not found: " + id);
+    }
+
+    private List<String> eventTypes(JsonNode records, String field) {
+        List<String> values = new ArrayList<>();
+        for (JsonNode record : records) {
+            values.add(record.at("/" + field).asText());
+        }
+        return values;
     }
 }

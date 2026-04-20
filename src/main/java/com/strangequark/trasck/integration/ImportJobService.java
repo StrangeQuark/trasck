@@ -31,6 +31,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class ImportJobService {
 
+    private static final String COMPLETE_OPEN_CONFLICTS_CONFIRMATION = "COMPLETE WITH OPEN CONFLICTS";
+    private static final String RESOLVE_FILTERED_CONFLICTS_CONFIRMATION = "RESOLVE FILTERED CONFLICTS";
+
     private static final Set<String> SUPPORTED_TRANSFORM_FUNCTIONS = Set.of(
             "trim",
             "lower",
@@ -502,16 +505,34 @@ public class ImportJobService {
         ImportJob job = mutableImportJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
         long openConflicts = importJobRecordRepository.countByImportJobIdAndConflictStatus(job.getId(), "open");
-        if (openConflicts > 0 && !Boolean.TRUE.equals(request == null ? null : request.acceptOpenConflicts())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Import job has " + openConflicts + " open conflicts; set acceptOpenConflicts to true to complete anyway"
-            );
+        String openConflictReason = null;
+        if (openConflicts > 0) {
+            ImportJobCompleteRequest completeRequest = request == null
+                    ? new ImportJobCompleteRequest(null, null, null)
+                    : request;
+            if (!Boolean.TRUE.equals(completeRequest.acceptOpenConflicts())
+                    || !COMPLETE_OPEN_CONFLICTS_CONFIRMATION.equals(completeRequest.openConflictConfirmation())
+                    || !hasText(completeRequest.openConflictReason())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Import job has " + openConflicts
+                                + " open conflicts; set acceptOpenConflicts to true, openConflictConfirmation to "
+                                + COMPLETE_OPEN_CONFLICTS_CONFIRMATION
+                                + ", and provide openConflictReason to complete anyway"
+                );
+            }
+            openConflictReason = completeRequest.openConflictReason().trim();
         }
         job.setStatus("completed");
         job.setFinishedAt(OffsetDateTime.now());
         ImportJob saved = importJobRepository.save(job);
-        recordJobEvent(saved, "import_job.completed", actorId);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("openConflictCount", openConflicts);
+        if (openConflicts > 0) {
+            payload.put("acceptedOpenConflicts", true)
+                    .put("openConflictReason", openConflictReason);
+        }
+        recordJobEvent(saved, "import_job.completed", actorId, payload);
         return response(saved);
     }
 
@@ -707,18 +728,13 @@ public class ImportJobService {
     public ImportConflictBulkResolutionResponse resolveConflicts(UUID importJobId, ImportConflictBulkResolutionRequest request) {
         ImportConflictBulkResolutionRequest resolutionRequest = required(request, "request");
         String resolution = validatedConflictResolution(resolutionRequest.resolution());
-        List<UUID> recordIds = resolutionRequest.recordIds() == null
-                ? List.of()
-                : new ArrayList<>(new LinkedHashSet<>(resolutionRequest.recordIds()));
-        if (recordIds.isEmpty()) {
-            throw badRequest("recordIds is required");
-        }
         UUID actorId = currentUserService.requireUserId();
         ImportJob job = importJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
-        List<ImportJobRecord> records = importJobRecordRepository.findByIdInAndImportJobIdOrderBySourceTypeAscSourceIdAsc(recordIds, job.getId());
-        if (records.size() != recordIds.size()) {
-            throw badRequest("All import job records must belong to the import job");
+        String scope = conflictResolutionScope(resolutionRequest.scope());
+        List<ImportJobRecord> records = conflictResolutionRecords(job, resolutionRequest, scope, false);
+        if ("filtered".equals(scope)) {
+            validateFilteredConflictConfirmation(resolutionRequest, records.size());
         }
         List<ImportJobRecordResponse> responses = new ArrayList<>();
         for (ImportJobRecord record : records) {
@@ -728,7 +744,73 @@ public class ImportJobService {
             recordConflictResolvedEvent(job, saved, actorId);
             responses.add(ImportJobRecordResponse.from(saved));
         }
-        return new ImportConflictBulkResolutionResponse(job.getId(), resolution, recordIds.size(), responses.size(), responses);
+        return new ImportConflictBulkResolutionResponse(job.getId(), resolution, scope, records.size(), responses.size(), responses);
+    }
+
+    @Transactional(readOnly = true)
+    public ImportConflictBulkResolutionPreviewResponse previewResolveConflicts(UUID importJobId, ImportConflictBulkResolutionRequest request) {
+        ImportConflictBulkResolutionRequest resolutionRequest = required(request, "request");
+        String resolution = validatedConflictResolution(resolutionRequest.resolution());
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = importJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        String scope = conflictResolutionScope(resolutionRequest.scope());
+        List<ImportJobRecordResponse> records = conflictResolutionRecords(job, resolutionRequest, scope, true).stream()
+                .map(ImportJobRecordResponse::from)
+                .toList();
+        return new ImportConflictBulkResolutionPreviewResponse(job.getId(), resolution, scope, records.size(), records);
+    }
+
+    private String conflictResolutionScope(String value) {
+        String scope = hasText(value) ? value.trim().toLowerCase(Locale.ROOT) : "selected";
+        if (!Set.of("selected", "filtered").contains(scope)) {
+            throw badRequest("scope must be selected or filtered");
+        }
+        return scope;
+    }
+
+    private List<ImportJobRecord> conflictResolutionRecords(
+            ImportJob job,
+            ImportConflictBulkResolutionRequest request,
+            String scope,
+            boolean allowEmpty
+    ) {
+        if ("filtered".equals(scope)) {
+            if (hasText(request.conflictStatus()) && !"open".equals(normalizedFilter(request.conflictStatus()))) {
+                throw badRequest("Filtered bulk conflict resolution only supports open conflicts");
+            }
+            List<ImportJobRecord> records = importJobRecordRepository.findFiltered(
+                    job.getId(),
+                    normalizedFilter(request.status()),
+                    "open",
+                    normalizedFilter(request.sourceType())
+            );
+            if (records.isEmpty() && !allowEmpty) {
+                throw badRequest("No open conflicts match the requested filters");
+            }
+            return records;
+        }
+
+        List<UUID> recordIds = request.recordIds() == null
+                ? List.of()
+                : new ArrayList<>(new LinkedHashSet<>(request.recordIds()));
+        if (recordIds.isEmpty()) {
+            throw badRequest("recordIds is required");
+        }
+        List<ImportJobRecord> records = importJobRecordRepository.findByIdInAndImportJobIdOrderBySourceTypeAscSourceIdAsc(recordIds, job.getId());
+        if (records.size() != recordIds.size()) {
+            throw badRequest("All import job records must belong to the import job");
+        }
+        return records;
+    }
+
+    private void validateFilteredConflictConfirmation(ImportConflictBulkResolutionRequest request, int matchedCount) {
+        if (!RESOLVE_FILTERED_CONFLICTS_CONFIRMATION.equals(request.confirmation())) {
+            throw badRequest("confirmation must equal " + RESOLVE_FILTERED_CONFLICTS_CONFIRMATION);
+        }
+        if (request.expectedCount() == null || request.expectedCount() != matchedCount) {
+            throw badRequest("expectedCount must match the current filtered open conflict count");
+        }
     }
 
     @Transactional(readOnly = true)
@@ -1904,11 +1986,18 @@ public class ImportJobService {
     }
 
     private void recordJobEvent(ImportJob job, String eventType, UUID actorId) {
+        recordJobEvent(job, eventType, actorId, null);
+    }
+
+    private void recordJobEvent(ImportJob job, String eventType, UUID actorId, ObjectNode additionalPayload) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("importJobId", job.getId().toString())
                 .put("provider", job.getProvider())
                 .put("status", job.getStatus())
                 .put("actorUserId", actorId.toString());
+        if (additionalPayload != null) {
+            additionalPayload.fields().forEachRemaining(entry -> payload.set(entry.getKey(), entry.getValue()));
+        }
         domainEventService.record(job.getWorkspaceId(), "import_job", job.getId(), eventType, payload);
     }
 
