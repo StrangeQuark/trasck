@@ -16,7 +16,61 @@ public interface AutomationWorkerRunRepository extends JpaRepository<AutomationW
 
     long countByWorkspaceIdAndStartedAtBefore(UUID workspaceId, OffsetDateTime cutoff);
 
+    long countByWorkspaceIdAndWorkerTypeAndStartedAtBefore(UUID workspaceId, String workerType, OffsetDateTime cutoff);
+
     List<AutomationWorkerRun> findByWorkspaceIdAndStartedAtBeforeOrderByStartedAtAsc(UUID workspaceId, OffsetDateTime cutoff, Pageable pageable);
+
+    List<AutomationWorkerRun> findByWorkspaceIdAndWorkerTypeAndStartedAtBeforeOrderByStartedAtAsc(
+            UUID workspaceId,
+            String workerType,
+            OffsetDateTime cutoff,
+            Pageable pageable
+    );
+
+    @Query(value = """
+            select count(*)
+            from automation_worker_runs
+            where workspace_id = :workspaceId
+              and started_at < :cutoff
+              and (:workerType is null or worker_type = :workerType)
+              and (:triggerType is null or trigger_type = :triggerType)
+              and (:status is null or status = :status)
+              and (cast(:startedFrom as timestamptz) is null or started_at >= cast(:startedFrom as timestamptz))
+              and (cast(:startedTo as timestamptz) is null or started_at <= cast(:startedTo as timestamptz))
+            """, nativeQuery = true)
+    long countRetainedRunsFiltered(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("workerType") String workerType,
+            @Param("triggerType") String triggerType,
+            @Param("status") String status,
+            @Param("startedFrom") OffsetDateTime startedFrom,
+            @Param("startedTo") OffsetDateTime startedTo,
+            @Param("cutoff") OffsetDateTime cutoff
+    );
+
+    @Query(value = """
+            select *
+            from automation_worker_runs
+            where workspace_id = :workspaceId
+              and started_at < :cutoff
+              and (:workerType is null or worker_type = :workerType)
+              and (:triggerType is null or trigger_type = :triggerType)
+              and (:status is null or status = :status)
+              and (cast(:startedFrom as timestamptz) is null or started_at >= cast(:startedFrom as timestamptz))
+              and (cast(:startedTo as timestamptz) is null or started_at <= cast(:startedTo as timestamptz))
+            order by started_at asc, id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<AutomationWorkerRun> findRetainedRunsFiltered(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("workerType") String workerType,
+            @Param("triggerType") String triggerType,
+            @Param("status") String status,
+            @Param("startedFrom") OffsetDateTime startedFrom,
+            @Param("startedTo") OffsetDateTime startedTo,
+            @Param("cutoff") OffsetDateTime cutoff,
+            @Param("limit") int limit
+    );
 
     @Modifying
     @Query("""
@@ -25,4 +79,42 @@ public interface AutomationWorkerRunRepository extends JpaRepository<AutomationW
               and run.startedAt < :cutoff
             """)
     int deleteRetainedRuns(@Param("workspaceId") UUID workspaceId, @Param("cutoff") OffsetDateTime cutoff);
+
+    @Modifying
+    @Query("""
+            delete from AutomationWorkerRun run
+            where run.workspaceId = :workspaceId
+              and run.workerType = :workerType
+              and run.startedAt < :cutoff
+            """)
+    int deleteRetainedRunsByWorkerType(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("workerType") String workerType,
+            @Param("cutoff") OffsetDateTime cutoff
+    );
+
+    @Modifying
+    @Query(value = """
+            delete from automation_worker_runs
+            where id in (
+                select id
+                from automation_worker_runs
+                where workspace_id = :workspaceId
+                  and started_at < :cutoff
+                  and (:workerType is null or worker_type = :workerType)
+                  and (:triggerType is null or trigger_type = :triggerType)
+                  and (:status is null or status = :status)
+                  and (cast(:startedFrom as timestamptz) is null or started_at >= cast(:startedFrom as timestamptz))
+                  and (cast(:startedTo as timestamptz) is null or started_at <= cast(:startedTo as timestamptz))
+            )
+            """, nativeQuery = true)
+    int deleteRetainedRunsFiltered(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("workerType") String workerType,
+            @Param("triggerType") String triggerType,
+            @Param("status") String status,
+            @Param("startedFrom") OffsetDateTime startedFrom,
+            @Param("startedTo") OffsetDateTime startedTo,
+            @Param("cutoff") OffsetDateTime cutoff
+    );
 }

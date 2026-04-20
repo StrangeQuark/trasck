@@ -27,6 +27,7 @@ public record AgentTaskResponse(
         List<AgentMessageResponse> messages,
         List<AgentArtifactResponse> artifacts,
         List<AgentTaskRepositoryLinkResponse> repositories,
+        List<AgentDispatchAttemptResponse> dispatchAttempts,
         String callbackHeaderName,
         String callbackToken
 ) {
@@ -36,6 +37,7 @@ public record AgentTaskResponse(
             List<AgentMessage> messages,
             List<AgentArtifact> artifacts,
             List<AgentTaskRepositoryLink> repositories,
+            List<AgentDispatchAttempt> dispatchAttempts,
             String callbackToken
     ) {
         return new AgentTaskResponse(
@@ -60,6 +62,7 @@ public record AgentTaskResponse(
                 messages.stream().map(AgentMessageResponse::from).toList(),
                 artifacts.stream().map(AgentArtifactResponse::from).toList(),
                 repositories.stream().map(AgentTaskRepositoryLinkResponse::from).toList(),
+                dispatchAttempts.stream().map(AgentDispatchAttemptResponse::from).toList(),
                 callbackToken == null ? null : AgentCallbackJwtService.CALLBACK_HEADER,
                 callbackToken
         );

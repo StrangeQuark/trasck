@@ -91,13 +91,49 @@ class AgentIntegrationTest {
                 .put("providerType", "codex")
                 .put("displayName", "Codex")
                 .put("dispatchMode", "managed"), accessToken));
+        UUID codexProviderId = uuid(codexProvider, "/id");
         assertThat(codexProvider.at("/providerType").asText()).isEqualTo("codex");
-        JsonNode claudeProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", objectMapper.createObjectNode()
+        ObjectNode hostedCodexRuntime = objectMapper.createObjectNode();
+        ObjectNode hostedRuntime = objectMapper.createObjectNode()
+                .put("mode", "hosted_api")
+                .put("externalExecutionEnabled", true);
+        hostedRuntime.set("hostedApi", objectMapper.createObjectNode()
+                .put("baseUrl", "https://codex.example.invalid")
+                .put("dispatchPath", "/agent/tasks"));
+        hostedCodexRuntime.set("runtime", hostedRuntime);
+        ObjectNode hostedCodexProviderRequest = objectMapper.createObjectNode()
+                .put("providerKey", "codex-hosted")
+                .put("providerType", "codex")
+                .put("displayName", "Codex Hosted")
+                .put("dispatchMode", "managed");
+        hostedCodexProviderRequest.set("config", hostedCodexRuntime);
+        JsonNode hostedCodexProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", hostedCodexProviderRequest, accessToken));
+        JsonNode hostedRuntimePreview = read(post("/api/v1/agent-providers/" + uuid(hostedCodexProvider, "/id") + "/runtime-preview", objectMapper.createObjectNode()
+                .put("action", "dispatched"), accessToken));
+        assertThat(hostedRuntimePreview.at("/valid").asBoolean()).isTrue();
+        assertThat(hostedRuntimePreview.at("/runtimeMode").asText()).isEqualTo("hosted_api");
+        assertThat(hostedRuntimePreview.at("/previewPayload/hostedApi/baseUrl").asText()).isEqualTo("https://codex.example.invalid");
+        assertThat(hostedRuntimePreview.toString()).doesNotContain("privateKey").doesNotContain("BEGIN PRIVATE KEY");
+        ObjectNode claudeRuntime = objectMapper.createObjectNode();
+        ObjectNode cliRuntime = objectMapper.createObjectNode()
+                .put("mode", "cli_worker")
+                .put("externalExecutionEnabled", true);
+        cliRuntime.set("cliWorker", objectMapper.createObjectNode()
+                .put("commandProfile", "claude-code-local"));
+        claudeRuntime.set("runtime", cliRuntime);
+        ObjectNode claudeProviderRequest = objectMapper.createObjectNode()
                 .put("providerKey", "claude-main")
                 .put("providerType", "claude_code")
                 .put("displayName", "Claude Code")
-                .put("dispatchMode", "managed"), accessToken));
+                .put("dispatchMode", "managed");
+        claudeProviderRequest.set("config", claudeRuntime);
+        JsonNode claudeProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", claudeProviderRequest, accessToken));
         assertThat(claudeProvider.at("/providerType").asText()).isEqualTo("claude_code");
+        JsonNode cliRuntimePreview = read(post("/api/v1/agent-providers/" + uuid(claudeProvider, "/id") + "/runtime-preview", objectMapper.createObjectNode()
+                .put("action", "retried"), accessToken));
+        assertThat(cliRuntimePreview.at("/valid").asBoolean()).isTrue();
+        assertThat(cliRuntimePreview.at("/runtimeMode").asText()).isEqualTo("cli_worker");
+        assertThat(cliRuntimePreview.at("/previewPayload/cliWorker/commandProfile").asText()).isEqualTo("claude-code-local");
         ObjectNode workerProviderConfig = objectMapper.createObjectNode();
         workerProviderConfig.set("workerWebhook", objectMapper.createObjectNode()
                 .put("maxAttempts", 1)
@@ -177,6 +213,16 @@ class AgentIntegrationTest {
         JsonNode workerProfile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", workerProfileRequest, accessToken));
         UUID workerProfileId = uuid(workerProfile, "/id");
 
+        ObjectNode codexProfileRequest = objectMapper.createObjectNode()
+                .put("providerId", codexProviderId.toString())
+                .put("displayName", "Codex Failure Agent")
+                .put("username", "codex-failure-agent")
+                .put("roleId", memberRoleId.toString())
+                .put("maxConcurrentTasks", 1);
+        codexProfileRequest.set("projectIds", objectMapper.createArrayNode().add(projectId.toString()));
+        JsonNode codexProfile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", codexProfileRequest, accessToken));
+        UUID codexProfileId = uuid(codexProfile, "/id");
+
         ObjectNode viewerProfileRequest = objectMapper.createObjectNode()
                 .put("providerId", providerId.toString())
                 .put("displayName", "Read Only Agent")
@@ -216,6 +262,16 @@ class AgentIntegrationTest {
                 .put("title", "Read-only agent cannot comment here")
                 .put("reporterId", adminUserId.toString()), accessToken));
         UUID restrictedWorkItemId = uuid(restrictedWorkItem, "/id");
+        JsonNode failedDispatchWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Record provider dispatch failures")
+                .put("reporterId", adminUserId.toString()), accessToken));
+        UUID failedDispatchWorkItemId = uuid(failedDispatchWorkItem, "/id");
+        JsonNode failedCancelWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Record provider cancel failures")
+                .put("reporterId", adminUserId.toString()), accessToken));
+        UUID failedCancelWorkItemId = uuid(failedCancelWorkItem, "/id");
         read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
                 .put("transitionKey", "open_to_ready"), accessToken));
         read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
@@ -233,6 +289,10 @@ class AgentIntegrationTest {
         String callbackToken = task.at("/callbackToken").asText();
         assertThat(task.at("/status").asText()).isEqualTo("running");
         assertThat(callbackToken).isNotBlank();
+        assertThat(task.at("/dispatchAttempts")).hasSize(1);
+        assertThat(task.at("/dispatchAttempts/0/attemptType").asText()).isEqualTo("dispatch");
+        assertThat(task.at("/dispatchAttempts/0/status").asText()).isEqualTo("succeeded");
+        assertThat(task.at("/dispatchAttempts/0/requestPayload/idempotencyKey").asText()).contains(taskId.toString());
         assertThat(read(get("/api/v1/work-items/" + workItemId, accessToken)).at("/assigneeId").asText()).isEqualTo(agentUserId.toString());
         assertThat(read(get("/api/v1/agent-tasks/" + taskId, accessToken)).at("/events")).isNotEmpty();
         JsonNode rotatedSimProvider = read(post("/api/v1/agent-providers/" + providerId + "/callback-keys/rotate", objectMapper.createObjectNode(), accessToken));
@@ -241,10 +301,70 @@ class AgentIntegrationTest {
                 .put("status", "completed")
                 .put("message", "old key"), callbackToken);
         assertThat(expiredKeyCallback.statusCode()).isEqualTo(401);
-        read(post("/api/v1/agent-tasks/" + taskId + "/cancel", objectMapper.createObjectNode(), accessToken));
+        JsonNode canceledTask = read(post("/api/v1/agent-tasks/" + taskId + "/cancel", objectMapper.createObjectNode(), accessToken));
+        assertThat(canceledTask.at("/dispatchAttempts")).hasSize(2);
+        assertThat(canceledTask.at("/dispatchAttempts/1/attemptType").asText()).isEqualTo("cancel");
         JsonNode retriedTask = read(post("/api/v1/agent-tasks/" + taskId + "/retry", objectMapper.createObjectNode(), accessToken));
         callbackToken = retriedTask.at("/callbackToken").asText();
         assertThat(callbackToken).isNotBlank();
+        assertThat(retriedTask.at("/dispatchAttempts")).hasSize(3);
+        assertThat(retriedTask.at("/dispatchAttempts/2/attemptType").asText()).isEqualTo("retry");
+
+        jdbcTemplate.update(
+                "update agent_providers set config = cast(? as jsonb) where id = ?",
+                "{\"runtime\":{\"mode\":\"hosted_api\",\"externalExecutionEnabled\":false}}",
+                codexProviderId
+        );
+        JsonNode failedCodexTask = read(post("/api/v1/work-items/" + failedDispatchWorkItemId + "/assign-agent", objectMapper.createObjectNode()
+                .put("agentProfileId", codexProfileId.toString()), accessToken));
+        UUID failedCodexTaskId = uuid(failedCodexTask, "/id");
+        assertThat(failedCodexTask.at("/status").asText()).isEqualTo("failed");
+        assertThat(failedCodexTask.at("/callbackToken").isNull()).isTrue();
+        assertThat(failedCodexTask.at("/dispatchAttempts/0/status").asText()).isEqualTo("failed");
+        assertThat(failedCodexTask.at("/dispatchAttempts/0/errorMessage").asText()).contains("External agent execution");
+        JsonNode failedCodexRetry = read(post("/api/v1/agent-tasks/" + failedCodexTaskId + "/retry", objectMapper.createObjectNode(), accessToken));
+        assertThat(failedCodexRetry.at("/status").asText()).isEqualTo("failed");
+        assertThat(failedCodexRetry.at("/dispatchAttempts")).hasSize(2);
+        assertThat(failedCodexRetry.at("/dispatchAttempts/1/attemptType").asText()).isEqualTo("retry");
+        assertThat(failedCodexRetry.at("/dispatchAttempts/1/idempotencyKey").asText()).contains(failedCodexTaskId.toString());
+
+        jdbcTemplate.update(
+                "update agent_providers set config = cast(? as jsonb) where id = ?",
+                "{\"runtime\":{\"mode\":\"stub\"}}",
+                codexProviderId
+        );
+        JsonNode cancelFailureTask = read(post("/api/v1/work-items/" + failedCancelWorkItemId + "/assign-agent", objectMapper.createObjectNode()
+                .put("agentProfileId", codexProfileId.toString()), accessToken));
+        assertThat(cancelFailureTask.at("/status").asText()).isEqualTo("running");
+        jdbcTemplate.update(
+                "update agent_providers set config = cast(? as jsonb) where id = ?",
+                "{\"runtime\":{\"mode\":\"cli_worker\",\"externalExecutionEnabled\":false,\"cliWorker\":{\"commandProfile\":\"blocked\"}}}",
+                codexProviderId
+        );
+        JsonNode cancelFailedTask = read(post("/api/v1/agent-tasks/" + uuid(cancelFailureTask, "/id") + "/cancel", objectMapper.createObjectNode(), accessToken));
+        assertThat(cancelFailedTask.at("/status").asText()).isEqualTo("running");
+        assertThat(cancelFailedTask.at("/dispatchAttempts/1/attemptType").asText()).isEqualTo("cancel");
+        assertThat(cancelFailedTask.at("/dispatchAttempts/1/status").asText()).isEqualTo("failed");
+
+        JsonNode failedAttempts = read(get("/api/v1/workspaces/" + workspaceId + "/agent-dispatch-attempts?providerId=" + codexProviderId + "&status=failed&limit=10", accessToken));
+        assertThat(failedAttempts.at("/items")).hasSizeGreaterThanOrEqualTo(3);
+        JsonNode dispatchAttemptExport = read(post("/api/v1/workspaces/" + workspaceId + "/agent-dispatch-attempts/export", objectMapper.createObjectNode()
+                .put("providerId", codexProviderId.toString())
+                .put("limit", 10), accessToken));
+        assertThat(dispatchAttemptExport.at("/exportType").asText()).isEqualTo("agent_dispatch_attempts");
+        HttpResponse<String> downloadedDispatchAttemptExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + uuid(dispatchAttemptExport, "/id") + "/download", accessToken);
+        assertThat(downloadedDispatchAttemptExport.statusCode()).isEqualTo(200);
+        assertThat(downloadedDispatchAttemptExport.body())
+                .contains("agentTaskId", failedCodexTaskId.toString())
+                .doesNotContain("BEGIN PRIVATE KEY")
+                .doesNotContain("encryptedSecret");
+        jdbcTemplate.update("update agent_dispatch_attempts set started_at = now() - interval '40 days' where workspace_id = ? and provider_id = ?", workspaceId, codexProviderId);
+        JsonNode dispatchAttemptPrune = read(post("/api/v1/workspaces/" + workspaceId + "/agent-dispatch-attempts/prune", objectMapper.createObjectNode()
+                .put("providerId", codexProviderId.toString())
+                .put("retentionDays", 30)
+                .put("exportBeforePrune", true), accessToken));
+        assertThat(dispatchAttemptPrune.at("/attemptsPruned").asInt()).isGreaterThanOrEqualTo(4);
+        assertThat(dispatchAttemptPrune.at("/exportJobId").isMissingNode() || dispatchAttemptPrune.at("/exportJobId").isNull()).isFalse();
 
         ObjectNode workerAssignRequest = objectMapper.createObjectNode()
                 .put("agentProfileId", workerProfileId.toString());
@@ -253,6 +373,7 @@ class AgentIntegrationTest {
         JsonNode workerTask = read(post("/api/v1/work-items/" + workerWorkItemId + "/assign-agent", workerAssignRequest, accessToken));
         UUID workerTaskId = uuid(workerTask, "/id");
         assertThat(workerTask.at("/status").asText()).isEqualTo("running");
+        assertThat(workerTask.at("/dispatchAttempts/0/requestPayload/protocolVersion").asText()).isEqualTo("trasck.worker.v1");
         domainEventOutboxDispatcher.dispatchPending();
         assertThat(workerWebhook.deliveries()).hasSize(1);
         JsonNode durablePushDispatch = workerWebhook.deliveries().get(0);

@@ -47,6 +47,8 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -61,6 +63,8 @@ public class ImportJobService {
     private static final int MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE = 500;
     private static final int DEFAULT_CONFLICT_RESOLUTION_WORKER_LIMIT = 10;
     private static final int MAX_CONFLICT_RESOLUTION_WORKER_LIMIT = 50;
+    private static final int DEFAULT_IMPORT_REVIEW_EXPORT_WORKER_LIMIT = 10;
+    private static final int MAX_IMPORT_REVIEW_EXPORT_WORKER_LIMIT = 50;
     private static final String IMPORT_CONFLICT_RESOLUTION_WORKER_TYPE = "import_conflict_resolution";
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
@@ -183,6 +187,7 @@ public class ImportJobService {
     );
 
     private final ObjectMapper objectMapper;
+    private final NamedParameterJdbcTemplate namedJdbcTemplate;
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
     private final ImportJobRecordVersionRepository importJobRecordVersionRepository;
@@ -212,6 +217,7 @@ public class ImportJobService {
 
     public ImportJobService(
             ObjectMapper objectMapper,
+            NamedParameterJdbcTemplate namedJdbcTemplate,
             ImportJobRepository importJobRepository,
             ImportJobRecordRepository importJobRecordRepository,
             ImportJobRecordVersionRepository importJobRecordVersionRepository,
@@ -240,6 +246,7 @@ public class ImportJobService {
             @Value("${trasck.imports.sample-jobs.enabled:false}") boolean sampleJobsEnabled
     ) {
         this.objectMapper = objectMapper;
+        this.namedJdbcTemplate = namedJdbcTemplate;
         this.importJobRepository = importJobRepository;
         this.importJobRecordRepository = importJobRecordRepository;
         this.importJobRecordVersionRepository = importJobRecordVersionRepository;
@@ -1524,6 +1531,16 @@ public class ImportJobService {
         return limit;
     }
 
+    private int normalizeImportReviewExportWorkerLimit(Integer limit) {
+        if (limit == null) {
+            return DEFAULT_IMPORT_REVIEW_EXPORT_WORKER_LIMIT;
+        }
+        if (limit < 1 || limit > MAX_IMPORT_REVIEW_EXPORT_WORKER_LIMIT) {
+            throw badRequest("limit must be between 1 and " + MAX_IMPORT_REVIEW_EXPORT_WORKER_LIMIT);
+        }
+        return limit;
+    }
+
     private int resolveFilteredConflictsForJob(ImportJob job, ImportConflictResolutionJob resolutionJob, UUID actorId) {
         int resolved = 0;
         while (true) {
@@ -1658,6 +1675,8 @@ public class ImportJobService {
             exportJob.setExportType("import_job_version_diffs");
             exportJob.setStatus("completed");
             exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setRequestPayload(objectMapper.valueToTree(exportRequest));
+            exportJob.setCreatedAt(now);
             exportJob.setStartedAt(now);
             exportJob.setFinishedAt(now);
             ExportJob savedExportJob = exportJobRepository.save(exportJob);
@@ -1667,6 +1686,73 @@ public class ImportJobService {
             attachmentStorageService.delete(storageConfig, stored.storageKey());
             throw ex;
         }
+    }
+
+    @Transactional
+    public ExportJobResponse createImportReviewCsvExportJob(UUID workspaceId, ImportReviewCsvExportJobRequest request) {
+        ImportReviewCsvExportJobRequest exportRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        ImportReviewCsvExportJobRequest queuedRequest = normalizedReviewCsvExportRequest(workspaceId, exportRequest);
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        ExportJob exportJob = new ExportJob();
+        exportJob.setWorkspaceId(workspaceId);
+        exportJob.setRequestedById(actorId);
+        exportJob.setExportType(reviewCsvExportType(queuedRequest.tableType()));
+        exportJob.setStatus("queued");
+        exportJob.setRequestPayload(objectMapper.valueToTree(queuedRequest));
+        exportJob.setCreatedAt(now);
+        ExportJob saved = exportJobRepository.save(exportJob);
+        ExportJobResponse response = ExportJobResponse.from(saved, null);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("exportJobId", response.id().toString())
+                .put("exportType", saved.getExportType())
+                .put("tableType", queuedRequest.tableType())
+                .put("actorUserId", actorId.toString());
+        if (queuedRequest.importJobId() != null) {
+            payload.put("importJobId", queuedRequest.importJobId().toString());
+        }
+        if (queuedRequest.projectId() != null) {
+            payload.put("projectId", queuedRequest.projectId().toString());
+        }
+        domainEventService.record(workspaceId, "workspace", workspaceId, "import.review_export_queued", payload);
+        return response;
+    }
+
+    @Transactional
+    public ImportReviewCsvExportWorkerResponse processImportReviewCsvExportJobs(UUID workspaceId, Integer limit) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        int workerLimit = normalizeImportReviewExportWorkerLimit(limit);
+        List<ExportJob> queued = exportJobRepository.findQueuedImportReviewExportJobs(workspaceId, workerLimit);
+        List<ExportJobResponse> jobs = new ArrayList<>();
+        int completed = 0;
+        int failed = 0;
+        for (ExportJob job : queued) {
+            job.setStatus("running");
+            job.setStartedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            exportJobRepository.saveAndFlush(job);
+            try {
+                ImportReviewCsvExportJobRequest request = objectMapper.convertValue(job.getRequestPayload(), ImportReviewCsvExportJobRequest.class);
+                ReviewCsvExportContent content = reviewCsvExportContent(workspaceId, request);
+                ExportJobResponse completedJob = completeImportReviewCsvExport(job, actorId, content);
+                jobs.add(completedJob);
+                completed++;
+                recordImportReviewExportProcessed(workspaceId, completedJob, request, "completed", actorId, null);
+            } catch (RuntimeException ex) {
+                job.setStatus("failed");
+                job.setErrorMessage(truncate(ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage(), 2_000));
+                job.setFinishedAt(OffsetDateTime.now(ZoneOffset.UTC));
+                ExportJob failedJob = exportJobRepository.save(job);
+                jobs.add(ExportJobResponse.from(failedJob, null));
+                failed++;
+                recordImportReviewExportProcessed(workspaceId, ExportJobResponse.from(failedJob, null), null, "failed", actorId, ex.getMessage());
+            }
+        }
+        return new ImportReviewCsvExportWorkerResponse(workspaceId, workerLimit, queued.size(), completed, failed, jobs);
     }
 
     private ImportMaterializeResponse processMaterialization(
@@ -3016,6 +3102,317 @@ public class ImportJobService {
         domainEventService.record(job.getWorkspaceId(), "import_job", job.getId(), "import_job.version_diff_export_created", payload);
     }
 
+    private ImportReviewCsvExportJobRequest normalizedReviewCsvExportRequest(UUID workspaceId, ImportReviewCsvExportJobRequest request) {
+        String tableType = normalizeReviewTableType(request.tableType());
+        if (request.importJobId() != null) {
+            ImportJob job = importJob(request.importJobId());
+            if (!workspaceId.equals(job.getWorkspaceId())) {
+                throw badRequest("Import job is not in this workspace");
+            }
+        }
+        if ("project_completion".equals(tableType)) {
+            activeProjectInWorkspace(request.projectId(), workspaceId);
+        } else if (request.projectId() != null) {
+            activeProjectInWorkspace(request.projectId(), workspaceId);
+        }
+        return new ImportReviewCsvExportJobRequest(
+                tableType,
+                request.importJobId(),
+                request.projectId(),
+                normalizedFilter(request.status()),
+                hasText(request.exportType()) ? request.exportType().trim().toLowerCase(Locale.ROOT) : null,
+                normalizedFilter(request.filterColumn()),
+                request.filter()
+        );
+    }
+
+    private String reviewCsvExportType(String tableType) {
+        return switch (normalizeReviewTableType(tableType)) {
+            case "conflict_resolution_jobs" -> "import_conflict_resolution_jobs";
+            case "export_jobs" -> "import_export_jobs";
+            case "project_completion" -> "import_project_completion";
+            case "workspace_completion" -> "import_workspace_completion";
+            default -> throw badRequest("Unsupported import review export tableType");
+        };
+    }
+
+    private void recordImportReviewExportProcessed(
+            UUID workspaceId,
+            ExportJobResponse exportJob,
+            ImportReviewCsvExportJobRequest request,
+            String status,
+            UUID actorId,
+            String errorMessage
+    ) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("exportJobId", exportJob.id().toString())
+                .put("exportType", exportJob.exportType())
+                .put("status", status)
+                .put("actorUserId", actorId.toString());
+        if (request != null) {
+            payload.put("tableType", request.tableType());
+            if (request.importJobId() != null) {
+                payload.put("importJobId", request.importJobId().toString());
+            }
+            if (request.projectId() != null) {
+                payload.put("projectId", request.projectId().toString());
+            }
+        }
+        if (hasText(errorMessage)) {
+            payload.put("errorMessage", truncate(errorMessage, 2_000));
+        }
+        domainEventService.record(workspaceId, "workspace", workspaceId, "import.review_export_" + status, payload);
+    }
+
+    private ReviewCsvExportContent reviewCsvExportContent(UUID workspaceId, ImportReviewCsvExportJobRequest request) {
+        String tableType = normalizeReviewTableType(request.tableType());
+        return switch (tableType) {
+            case "conflict_resolution_jobs" -> conflictResolutionJobsCsvExport(workspaceId, request);
+            case "export_jobs" -> exportJobsCsvExport(workspaceId, request);
+            case "project_completion" -> completionMetricsCsvExport(workspaceId, request, true);
+            case "workspace_completion" -> completionMetricsCsvExport(workspaceId, request, false);
+            default -> throw badRequest("Unsupported import review export tableType");
+        };
+    }
+
+    private ReviewCsvExportContent conflictResolutionJobsCsvExport(UUID workspaceId, ImportReviewCsvExportJobRequest request) {
+        List<ImportConflictResolutionJob> jobs;
+        if (request.importJobId() != null) {
+            ImportJob importJob = importJob(request.importJobId());
+            if (!workspaceId.equals(importJob.getWorkspaceId())) {
+                throw badRequest("Import job is not in this workspace");
+            }
+            jobs = importConflictResolutionJobRepository.findByImportJobIdOrderByRequestedAtDesc(importJob.getId());
+        } else {
+            String normalizedStatus = normalizedFilter(request.status());
+            jobs = normalizedStatus == null
+                    ? importConflictResolutionJobRepository.findByWorkspaceIdOrderByRequestedAtDesc(workspaceId)
+                    : importConflictResolutionJobRepository.findByWorkspaceIdAndStatusOrderByRequestedAtDesc(workspaceId, normalizedStatus);
+        }
+        List<String> keys = List.of("status", "resolution", "scope", "filters", "counts", "requestedAtLabel", "finishedAtLabel");
+        List<String> headers = List.of("Status", "Resolution", "Scope", "Filters", "Counts", "Requested", "Finished");
+        List<List<String>> rows = jobs.stream()
+                .map(job -> List.of(
+                        text(job.getStatus()),
+                        text(job.getResolution()),
+                        text(job.getScope()),
+                        conflictResolutionJobFilters(job),
+                        (job.getResolvedCount() == null ? 0 : job.getResolvedCount()) + "/" + (job.getMatchedCount() == null ? job.getExpectedCount() : job.getMatchedCount())
+                                + " resolved, " + (job.getFailedCount() == null ? 0 : job.getFailedCount()) + " failed",
+                        dateText(job.getRequestedAt()),
+                        dateText(job.getFinishedAt())
+                ))
+                .toList();
+        return new ReviewCsvExportContent(
+                "import_conflict_resolution_jobs",
+                "import-conflict-resolution-jobs",
+                reviewCsvBytes(headers, keys, rows, request.filterColumn(), request.filter())
+        );
+    }
+
+    private ReviewCsvExportContent exportJobsCsvExport(UUID workspaceId, ImportReviewCsvExportJobRequest request) {
+        String exportType = hasText(request.exportType()) ? request.exportType().trim().toLowerCase(Locale.ROOT) : "import_job_version_diffs";
+        List<ExportJob> jobs = exportJobRepository.findFirstCursorPageByExportType(workspaceId, exportType, 200);
+        List<String> keys = List.of("status", "filename", "sizeLabel", "finishedAtLabel", "checksum");
+        List<String> headers = List.of("Status", "Filename", "Size", "Finished", "Checksum");
+        List<List<String>> rows = jobs.stream()
+                .map(job -> {
+                    Attachment attachment = job.getFileAttachmentId() == null
+                            ? null
+                            : attachmentRepository.findById(job.getFileAttachmentId()).orElse(null);
+                    return List.of(
+                            text(job.getStatus()),
+                            attachment == null ? "" : text(attachment.getFilename()),
+                            attachment == null || attachment.getSizeBytes() == null ? "0" : String.valueOf(attachment.getSizeBytes()),
+                            dateText(job.getFinishedAt()),
+                            attachment == null ? "" : text(attachment.getChecksum())
+                    );
+                })
+                .toList();
+        return new ReviewCsvExportContent(
+                "import_export_jobs",
+                "import-export-jobs",
+                reviewCsvBytes(headers, keys, rows, request.filterColumn(), request.filter())
+        );
+    }
+
+    private ReviewCsvExportContent completionMetricsCsvExport(UUID workspaceId, ImportReviewCsvExportJobRequest request, boolean projectScoped) {
+        if (projectScoped && request.projectId() == null) {
+            throw badRequest("projectId is required for project_completion exports");
+        }
+        String scope = projectScoped ? "Project" : "Workspace";
+        ImportCompletionCsvRow metrics = projectScoped
+                ? projectCompletionMetrics(workspaceId, request.projectId())
+                : workspaceCompletionMetrics(workspaceId);
+        List<String> keys = List.of("scope", "completedJobs", "completedWithOpenConflicts", "acceptedOpenConflictCount", "lastOpenConflictCompletedAt");
+        List<String> headers = List.of("Scope", "Completed", "Completed With Open Conflicts", "Accepted Open Conflicts", "Last Accepted");
+        List<List<String>> rows = List.of(List.of(
+                scope,
+                String.valueOf(metrics.completedJobs()),
+                String.valueOf(metrics.completedWithOpenConflicts()),
+                String.valueOf(metrics.acceptedOpenConflictCount()),
+                dateText(metrics.lastOpenConflictCompletedAt())
+        ));
+        return new ReviewCsvExportContent(
+                projectScoped ? "import_project_completion" : "import_workspace_completion",
+                projectScoped ? "project-import-completion" : "workspace-import-completion",
+                reviewCsvBytes(headers, keys, rows, request.filterColumn(), request.filter())
+        );
+    }
+
+    private ImportCompletionCsvRow projectCompletionMetrics(UUID workspaceId, UUID projectId) {
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(projectId)
+                .orElseThrow(() -> badRequest("Project not found in this workspace"));
+        if (!workspaceId.equals(project.getWorkspaceId())) {
+            throw badRequest("Project is not in this workspace");
+        }
+        return namedJdbcTemplate.queryForObject("""
+                with scoped_import_jobs as (
+                    select distinct ij.*
+                    from import_jobs ij
+                    join import_job_records ir on ir.import_job_id = ij.id
+                    join work_items wi on wi.id = ir.target_id
+                    where ij.workspace_id = :workspaceId
+                      and wi.project_id = :projectId
+                      and ij.status = 'completed'
+                )
+                select count(*) as completed_jobs,
+                       count(*) filter (where open_conflict_completion_accepted = true) as completed_with_open_conflicts,
+                       coalesce(sum(open_conflict_completion_count) filter (where open_conflict_completion_accepted = true), 0) as accepted_open_conflict_count,
+                       max(open_conflict_completed_at) as last_open_conflict_completed_at
+                from scoped_import_jobs
+                """, new MapSqlParameterSource()
+                        .addValue("workspaceId", workspaceId)
+                        .addValue("projectId", projectId), this::importCompletionCsvRow);
+    }
+
+    private ImportCompletionCsvRow workspaceCompletionMetrics(UUID workspaceId) {
+        return namedJdbcTemplate.queryForObject("""
+                select count(*) as completed_jobs,
+                       count(*) filter (where open_conflict_completion_accepted = true) as completed_with_open_conflicts,
+                       coalesce(sum(open_conflict_completion_count) filter (where open_conflict_completion_accepted = true), 0) as accepted_open_conflict_count,
+                       max(open_conflict_completed_at) as last_open_conflict_completed_at
+                from import_jobs
+                where workspace_id = :workspaceId
+                  and status = 'completed'
+                """, new MapSqlParameterSource("workspaceId", workspaceId), this::importCompletionCsvRow);
+    }
+
+    private ImportCompletionCsvRow importCompletionCsvRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        return new ImportCompletionCsvRow(
+                rs.getLong("completed_jobs"),
+                rs.getLong("completed_with_open_conflicts"),
+                rs.getLong("accepted_open_conflict_count"),
+                rs.getObject("last_open_conflict_completed_at", OffsetDateTime.class)
+        );
+    }
+
+    private ExportJobResponse completeImportReviewCsvExport(
+            ExportJob exportJob,
+            UUID actorId,
+            ReviewCsvExportContent content
+    ) {
+        UUID workspaceId = exportJob.getWorkspaceId();
+        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(workspaceId)
+                .orElseThrow(() -> badRequest("Default attachment storage config not found"));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        String filename = content.filenamePrefix()
+                + "-"
+                + workspaceId
+                + "-"
+                + now.format(EXPORT_FILENAME_TIME)
+                + ".csv";
+        StoredAttachment stored = attachmentStorageService.store(
+                storageConfig,
+                new AttachmentUpload(filename, "text/csv", content.bytes(), null)
+        );
+        try {
+            Attachment attachment = new Attachment();
+            attachment.setWorkspaceId(workspaceId);
+            attachment.setStorageConfigId(storageConfig.getId());
+            attachment.setUploaderId(actorId);
+            attachment.setFilename(filename);
+            attachment.setContentType("text/csv");
+            attachment.setStorageKey(stored.storageKey());
+            attachment.setSizeBytes(stored.sizeBytes());
+            attachment.setChecksum(stored.checksum());
+            attachment.setVisibility("restricted");
+            Attachment savedAttachment = attachmentRepository.save(attachment);
+
+            exportJob.setExportType(content.exportType());
+            exportJob.setStatus("completed");
+            exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setErrorMessage(null);
+            if (exportJob.getCreatedAt() == null) {
+                exportJob.setCreatedAt(now);
+            }
+            if (exportJob.getStartedAt() == null) {
+                exportJob.setStartedAt(now);
+            }
+            exportJob.setFinishedAt(now);
+            ExportJob savedExportJob = exportJobRepository.save(exportJob);
+            return ExportJobResponse.from(savedExportJob, savedAttachment);
+        } catch (RuntimeException ex) {
+            attachmentStorageService.delete(storageConfig, stored.storageKey());
+            throw ex;
+        }
+    }
+
+    private byte[] reviewCsvBytes(List<String> headers, List<String> keys, List<List<String>> rows, String filterColumn, String filter) {
+        StringBuilder csv = new StringBuilder();
+        csv.append(headers.stream().map(this::csvCell).collect(java.util.stream.Collectors.joining(","))).append('\n');
+        for (List<String> row : rows) {
+            if (matchesReviewFilter(row, keys, filterColumn, filter)) {
+                csv.append(row.stream().map(this::csvCell).collect(java.util.stream.Collectors.joining(","))).append('\n');
+            }
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private boolean matchesReviewFilter(List<String> row, List<String> keys, String filterColumn, String filter) {
+        if (!hasText(filter)) {
+            return true;
+        }
+        String normalizedFilter = filter.trim().toLowerCase(Locale.ROOT);
+        String normalizedColumn = normalizeFilterColumn(filterColumn);
+        if (!"all".equals(normalizedColumn)) {
+            int index = keys.indexOf(normalizedColumn);
+            return index >= 0 && index < row.size() && containsFilter(row.get(index), normalizedFilter);
+        }
+        return row.stream().anyMatch(value -> containsFilter(value, normalizedFilter));
+    }
+
+    private String normalizeReviewTableType(String tableType) {
+        String normalized = requiredText(tableType, "tableType").toLowerCase(Locale.ROOT).replace('-', '_');
+        if (!List.of("conflict_resolution_jobs", "export_jobs", "project_completion", "workspace_completion").contains(normalized)) {
+            throw badRequest("tableType must be conflict_resolution_jobs, export_jobs, project_completion, or workspace_completion");
+        }
+        return normalized;
+    }
+
+    private String conflictResolutionJobFilters(ImportConflictResolutionJob job) {
+        List<String> filters = new ArrayList<>();
+        if (hasText(job.getStatusFilter())) {
+            filters.add("status=" + job.getStatusFilter());
+        }
+        if (hasText(job.getConflictStatusFilter())) {
+            filters.add("conflict=" + job.getConflictStatusFilter());
+        }
+        if (hasText(job.getSourceTypeFilter())) {
+            filters.add("source=" + job.getSourceTypeFilter());
+        }
+        return String.join(", ", filters);
+    }
+
+    private String dateText(OffsetDateTime value) {
+        return value == null ? "" : value.toString();
+    }
+
+    private String text(String value) {
+        return value == null ? "" : value;
+    }
+
     private void recordImportJobRecordVersion(ImportJobRecord record, String changeType, UUID actorId) {
         ImportJobRecordVersion version = new ImportJobRecordVersion();
         version.setImportJobRecordId(record.getId());
@@ -3388,6 +3785,21 @@ public class ImportJobService {
             String field,
             String previous,
             String current
+    ) {
+    }
+
+    private record ReviewCsvExportContent(
+            String exportType,
+            String filenamePrefix,
+            byte[] bytes
+    ) {
+    }
+
+    private record ImportCompletionCsvRow(
+            long completedJobs,
+            long completedWithOpenConflicts,
+            long acceptedOpenConflictCount,
+            OffsetDateTime lastOpenConflictCompletedAt
     ) {
     }
 

@@ -10,6 +10,7 @@ import com.strangequark.trasck.integration.WebhookDeliveryWorkerRequest;
 import com.strangequark.trasck.integration.WebhookDeliveryWorkerResponse;
 import com.strangequark.trasck.integration.WebhookRequest;
 import com.strangequark.trasck.integration.WebhookResponse;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -168,14 +169,26 @@ public class AutomationController {
     @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/export")
     public AutomationWorkerRunRetentionResponse exportWorkerRuns(
             @PathVariable UUID workspaceId,
-            @RequestParam(required = false) Integer limit
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String workerType,
+            @RequestParam(required = false) String triggerType,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) OffsetDateTime startedFrom,
+            @RequestParam(required = false) OffsetDateTime startedTo
     ) {
-        return automationService.exportWorkerRuns(workspaceId, limit);
+        return automationService.exportWorkerRuns(workspaceId, limit, workerType, triggerType, status, startedFrom, startedTo);
     }
 
     @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/prune")
-    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(@PathVariable UUID workspaceId) {
-        return automationService.pruneWorkerRuns(workspaceId);
+    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String workerType,
+            @RequestParam(required = false) String triggerType,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) OffsetDateTime startedFrom,
+            @RequestParam(required = false) OffsetDateTime startedTo
+    ) {
+        return automationService.pruneWorkerRuns(workspaceId, workerType, triggerType, status, startedFrom, startedTo);
     }
 
     @GetMapping("/workspaces/{workspaceId}/email-provider-settings")
