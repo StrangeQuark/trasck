@@ -59,6 +59,8 @@ public class AutomationService {
     private final AutomationExecutionJobRepository automationExecutionJobRepository;
     private final AutomationExecutionLogRepository automationExecutionLogRepository;
     private final AutomationWorkerSettingsRepository automationWorkerSettingsRepository;
+    private final AutomationWorkerRunRepository automationWorkerRunRepository;
+    private final AutomationWorkerHealthRepository automationWorkerHealthRepository;
     private final WebhookRepository webhookRepository;
     private final WebhookDeliveryRepository webhookDeliveryRepository;
     private final EmailDeliveryRepository emailDeliveryRepository;
@@ -85,6 +87,8 @@ public class AutomationService {
             AutomationExecutionJobRepository automationExecutionJobRepository,
             AutomationExecutionLogRepository automationExecutionLogRepository,
             AutomationWorkerSettingsRepository automationWorkerSettingsRepository,
+            AutomationWorkerRunRepository automationWorkerRunRepository,
+            AutomationWorkerHealthRepository automationWorkerHealthRepository,
             WebhookRepository webhookRepository,
             WebhookDeliveryRepository webhookDeliveryRepository,
             EmailDeliveryRepository emailDeliveryRepository,
@@ -107,6 +111,8 @@ public class AutomationService {
         this.automationExecutionJobRepository = automationExecutionJobRepository;
         this.automationExecutionLogRepository = automationExecutionLogRepository;
         this.automationWorkerSettingsRepository = automationWorkerSettingsRepository;
+        this.automationWorkerRunRepository = automationWorkerRunRepository;
+        this.automationWorkerHealthRepository = automationWorkerHealthRepository;
         this.webhookRepository = webhookRepository;
         this.webhookDeliveryRepository = webhookDeliveryRepository;
         this.emailDeliveryRepository = emailDeliveryRepository;
@@ -328,8 +334,29 @@ public class AutomationService {
         return AutomationWorkerSettingsResponse.from(saved);
     }
 
+    @Transactional(readOnly = true)
+    public List<AutomationWorkerRunHistoryResponse> listWorkerRuns(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return automationWorkerRunRepository.findTop50ByWorkspaceIdOrderByStartedAtDesc(workspaceId).stream()
+                .map(AutomationWorkerRunHistoryResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AutomationWorkerHealthResponse> listWorkerHealth(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return automationWorkerHealthRepository.findByWorkspaceIdOrderByWorkerTypeAsc(workspaceId).stream()
+                .map(AutomationWorkerHealthResponse::from)
+                .toList();
+    }
+
     @Transactional
     public AutomationWorkerRunResponse runQueuedJobsInternal(UUID workspaceId, Integer limit, UUID actorId) {
+        AutomationWorkerRun run = startWorkerRun(workspaceId, "automation", actorId, null, normalizeWorkerLimit(limit), null);
         int pageLimit = normalizeWorkerLimit(limit);
         List<AutomationExecutionJob> jobs = automationExecutionJobRepository.findProcessableJobs(workspaceId, OffsetDateTime.now(), pageLimit);
         List<AutomationExecutionJobResponse> responses = new ArrayList<>();
@@ -345,6 +372,7 @@ public class AutomationService {
             }
             responses.add(jobResponse(job));
         }
+        finishWorkerRun(run, responses.size(), succeeded, failed, 0, null);
         return new AutomationWorkerRunResponse(workspaceId, responses.size(), succeeded, failed, responses);
     }
 
@@ -427,7 +455,7 @@ public class AutomationService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
-        return processWebhookDeliveriesInternal(workspaceId, request);
+        return processWebhookDeliveriesInternal(workspaceId, request, actorId);
     }
 
     @Transactional(readOnly = true)
@@ -474,10 +502,11 @@ public class AutomationService {
     }
 
     @Transactional
-    public WebhookDeliveryWorkerResponse processWebhookDeliveriesInternal(UUID workspaceId, WebhookDeliveryWorkerRequest request) {
+    public WebhookDeliveryWorkerResponse processWebhookDeliveriesInternal(UUID workspaceId, WebhookDeliveryWorkerRequest request, UUID actorId) {
         int limit = normalizeWorkerLimit(request == null ? null : request.limit());
         int maxAttempts = normalizeMaxAttempts(request == null ? null : request.maxAttempts());
         boolean dryRun = request == null || !Boolean.FALSE.equals(request.dryRun());
+        AutomationWorkerRun run = startWorkerRun(workspaceId, "webhook", actorId, dryRun, limit, maxAttempts);
         List<WebhookDelivery> deliveries = webhookDeliveryRepository.findProcessableDeliveries(workspaceId, OffsetDateTime.now(), limit);
         List<WebhookDeliveryResponse> responses = new ArrayList<>();
         int delivered = 0;
@@ -494,6 +523,7 @@ public class AutomationService {
             }
             responses.add(WebhookDeliveryResponse.from(delivery));
         }
+        finishWorkerRun(run, responses.size(), delivered, failed, deadLettered, null);
         return new WebhookDeliveryWorkerResponse(workspaceId, responses.size(), delivered, failed, deadLettered, responses);
     }
 
@@ -559,6 +589,7 @@ public class AutomationService {
         int limit = normalizeWorkerLimit(request == null ? null : request.limit());
         int maxAttempts = normalizeMaxAttempts(request == null ? null : request.maxAttempts());
         boolean dryRun = request == null || !Boolean.FALSE.equals(request.dryRun());
+        AutomationWorkerRun run = startWorkerRun(workspaceId, "email", actorId, dryRun, limit, maxAttempts);
         List<EmailDelivery> deliveries = emailDeliveryRepository.findProcessableDeliveries(workspaceId, OffsetDateTime.now(), limit);
         List<EmailDeliveryResponse> responses = new ArrayList<>();
         int sent = 0;
@@ -578,6 +609,7 @@ public class AutomationService {
             }
             responses.add(EmailDeliveryResponse.from(delivery));
         }
+        finishWorkerRun(run, responses.size(), sent, failed, deadLettered, null);
         return new EmailDeliveryWorkerResponse(workspaceId, responses.size(), sent, failed, deadLettered, responses);
     }
 
@@ -994,6 +1026,79 @@ public class AutomationService {
         if (request.emailDryRun() != null) {
             settings.setEmailDryRun(request.emailDryRun());
         }
+    }
+
+    private AutomationWorkerRun startWorkerRun(
+            UUID workspaceId,
+            String workerType,
+            UUID actorId,
+            Boolean dryRun,
+            Integer limit,
+            Integer maxAttempts
+    ) {
+        AutomationWorkerRun run = new AutomationWorkerRun();
+        run.setWorkspaceId(workspaceId);
+        run.setWorkerType(workerType);
+        run.setTriggerType(actorId == null ? "scheduled" : "manual");
+        run.setStatus("running");
+        run.setDryRun(dryRun);
+        run.setRequestedLimit(limit);
+        run.setMaxAttempts(maxAttempts);
+        run.setProcessedCount(0);
+        run.setSuccessCount(0);
+        run.setFailureCount(0);
+        run.setDeadLetterCount(0);
+        ObjectNode metadata = objectMapper.createObjectNode();
+        if (actorId != null) {
+            metadata.put("actorUserId", actorId.toString());
+        }
+        run.setMetadata(metadata);
+        run.setStartedAt(OffsetDateTime.now());
+        AutomationWorkerRun saved = automationWorkerRunRepository.save(run);
+        updateWorkerHealth(saved);
+        return saved;
+    }
+
+    private void finishWorkerRun(
+            AutomationWorkerRun run,
+            int processed,
+            int succeeded,
+            int failed,
+            int deadLettered,
+            String errorMessage
+    ) {
+        run.setProcessedCount(processed);
+        run.setSuccessCount(succeeded);
+        run.setFailureCount(failed);
+        run.setDeadLetterCount(deadLettered);
+        run.setErrorMessage(truncate(errorMessage, 4000));
+        run.setStatus(hasText(errorMessage) || failed > 0 || deadLettered > 0 ? "failed" : "succeeded");
+        run.setFinishedAt(OffsetDateTime.now());
+        AutomationWorkerRun saved = automationWorkerRunRepository.save(run);
+        updateWorkerHealth(saved);
+    }
+
+    private void updateWorkerHealth(AutomationWorkerRun run) {
+        AutomationWorkerHealth health = automationWorkerHealthRepository
+                .findById(new AutomationWorkerHealthId(run.getWorkspaceId(), run.getWorkerType()))
+                .orElseGet(() -> {
+                    AutomationWorkerHealth created = new AutomationWorkerHealth();
+                    created.setWorkspaceId(run.getWorkspaceId());
+                    created.setWorkerType(run.getWorkerType());
+                    created.setConsecutiveFailures(0);
+                    return created;
+                });
+        health.setLastRunId(run.getId());
+        health.setLastStatus(run.getStatus());
+        health.setLastStartedAt(run.getStartedAt());
+        health.setLastFinishedAt(run.getFinishedAt());
+        health.setLastError(run.getErrorMessage());
+        if ("failed".equals(run.getStatus())) {
+            health.setConsecutiveFailures((health.getConsecutiveFailures() == null ? 0 : health.getConsecutiveFailures()) + 1);
+        } else if ("succeeded".equals(run.getStatus())) {
+            health.setConsecutiveFailures(0);
+        }
+        automationWorkerHealthRepository.save(health);
     }
 
     private JsonNode toJsonNullable(Object value) {

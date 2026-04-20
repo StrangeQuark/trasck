@@ -16,6 +16,7 @@ public record ImportMappingTemplateResponse(
         String statusKey,
         Object fieldMapping,
         Object defaults,
+        Object transformationConfig,
         Boolean enabled,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
@@ -33,6 +34,7 @@ public record ImportMappingTemplateResponse(
                 template.getStatusKey(),
                 JsonValues.toJavaValue(template.getFieldMapping()),
                 JsonValues.toJavaValue(template.getDefaults()),
+                JsonValues.toJavaValue(template.getTransformationConfig()),
                 template.getEnabled(),
                 template.getCreatedAt(),
                 template.getUpdatedAt()

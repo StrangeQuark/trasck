@@ -18,6 +18,7 @@ import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,9 @@ public class ImportJobService {
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
     private final ImportMappingTemplateRepository importMappingTemplateRepository;
+    private final ImportMappingValueLookupRepository importMappingValueLookupRepository;
+    private final ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository;
+    private final ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final WorkItemService workItemService;
@@ -43,6 +47,9 @@ public class ImportJobService {
             ImportJobRepository importJobRepository,
             ImportJobRecordRepository importJobRecordRepository,
             ImportMappingTemplateRepository importMappingTemplateRepository,
+            ImportMappingValueLookupRepository importMappingValueLookupRepository,
+            ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository,
+            ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             WorkItemService workItemService,
@@ -54,6 +61,9 @@ public class ImportJobService {
         this.importJobRepository = importJobRepository;
         this.importJobRecordRepository = importJobRecordRepository;
         this.importMappingTemplateRepository = importMappingTemplateRepository;
+        this.importMappingValueLookupRepository = importMappingValueLookupRepository;
+        this.importMappingTypeTranslationRepository = importMappingTypeTranslationRepository;
+        this.importMappingStatusTranslationRepository = importMappingStatusTranslationRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.workItemService = workItemService;
@@ -141,6 +151,153 @@ public class ImportJobService {
         template.setEnabled(false);
         importMappingTemplateRepository.save(template);
         recordMappingTemplateEvent(template, "import_mapping_template.disabled", actorId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportMappingValueLookupResponse> listValueLookups(UUID mappingTemplateId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        return importMappingValueLookupRepository.findByMappingTemplateIdOrderBySortOrderAscSourceFieldAsc(template.getId()).stream()
+                .map(ImportMappingValueLookupResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public ImportMappingValueLookupResponse createValueLookup(UUID mappingTemplateId, ImportMappingValueLookupRequest request) {
+        ImportMappingValueLookupRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingValueLookup lookup = new ImportMappingValueLookup();
+        lookup.setMappingTemplateId(template.getId());
+        applyValueLookupRequest(lookup, createRequest, true);
+        ImportMappingValueLookup saved = importMappingValueLookupRepository.save(lookup);
+        recordMappingTemplateEvent(template, "import_mapping_lookup.created", actorId);
+        return ImportMappingValueLookupResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportMappingValueLookupResponse updateValueLookup(UUID mappingTemplateId, UUID lookupId, ImportMappingValueLookupRequest request) {
+        ImportMappingValueLookupRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingValueLookup lookup = importMappingValueLookupRepository.findByIdAndMappingTemplateId(lookupId, template.getId())
+                .orElseThrow(() -> notFound("Import mapping value lookup not found"));
+        applyValueLookupRequest(lookup, updateRequest, false);
+        ImportMappingValueLookup saved = importMappingValueLookupRepository.save(lookup);
+        recordMappingTemplateEvent(template, "import_mapping_lookup.updated", actorId);
+        return ImportMappingValueLookupResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteValueLookup(UUID mappingTemplateId, UUID lookupId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingValueLookup lookup = importMappingValueLookupRepository.findByIdAndMappingTemplateId(lookupId, template.getId())
+                .orElseThrow(() -> notFound("Import mapping value lookup not found"));
+        importMappingValueLookupRepository.delete(lookup);
+        recordMappingTemplateEvent(template, "import_mapping_lookup.deleted", actorId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportMappingTypeTranslationResponse> listTypeTranslations(UUID mappingTemplateId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        return importMappingTypeTranslationRepository.findByMappingTemplateIdOrderBySourceTypeKeyAsc(template.getId()).stream()
+                .map(ImportMappingTypeTranslationResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public ImportMappingTypeTranslationResponse createTypeTranslation(UUID mappingTemplateId, ImportMappingTypeTranslationRequest request) {
+        ImportMappingTypeTranslationRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingTypeTranslation translation = new ImportMappingTypeTranslation();
+        translation.setMappingTemplateId(template.getId());
+        applyTypeTranslationRequest(translation, createRequest, true);
+        ImportMappingTypeTranslation saved = importMappingTypeTranslationRepository.save(translation);
+        recordMappingTemplateEvent(template, "import_mapping_type_translation.created", actorId);
+        return ImportMappingTypeTranslationResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportMappingTypeTranslationResponse updateTypeTranslation(UUID mappingTemplateId, UUID translationId, ImportMappingTypeTranslationRequest request) {
+        ImportMappingTypeTranslationRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingTypeTranslation translation = importMappingTypeTranslationRepository.findByIdAndMappingTemplateId(translationId, template.getId())
+                .orElseThrow(() -> notFound("Import mapping type translation not found"));
+        applyTypeTranslationRequest(translation, updateRequest, false);
+        ImportMappingTypeTranslation saved = importMappingTypeTranslationRepository.save(translation);
+        recordMappingTemplateEvent(template, "import_mapping_type_translation.updated", actorId);
+        return ImportMappingTypeTranslationResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteTypeTranslation(UUID mappingTemplateId, UUID translationId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingTypeTranslation translation = importMappingTypeTranslationRepository.findByIdAndMappingTemplateId(translationId, template.getId())
+                .orElseThrow(() -> notFound("Import mapping type translation not found"));
+        importMappingTypeTranslationRepository.delete(translation);
+        recordMappingTemplateEvent(template, "import_mapping_type_translation.deleted", actorId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportMappingStatusTranslationResponse> listStatusTranslations(UUID mappingTemplateId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        return importMappingStatusTranslationRepository.findByMappingTemplateIdOrderBySourceStatusKeyAsc(template.getId()).stream()
+                .map(ImportMappingStatusTranslationResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public ImportMappingStatusTranslationResponse createStatusTranslation(UUID mappingTemplateId, ImportMappingStatusTranslationRequest request) {
+        ImportMappingStatusTranslationRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingStatusTranslation translation = new ImportMappingStatusTranslation();
+        translation.setMappingTemplateId(template.getId());
+        applyStatusTranslationRequest(translation, createRequest, true);
+        ImportMappingStatusTranslation saved = importMappingStatusTranslationRepository.save(translation);
+        recordMappingTemplateEvent(template, "import_mapping_status_translation.created", actorId);
+        return ImportMappingStatusTranslationResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportMappingStatusTranslationResponse updateStatusTranslation(UUID mappingTemplateId, UUID translationId, ImportMappingStatusTranslationRequest request) {
+        ImportMappingStatusTranslationRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingStatusTranslation translation = importMappingStatusTranslationRepository.findByIdAndMappingTemplateId(translationId, template.getId())
+                .orElseThrow(() -> notFound("Import mapping status translation not found"));
+        applyStatusTranslationRequest(translation, updateRequest, false);
+        ImportMappingStatusTranslation saved = importMappingStatusTranslationRepository.save(translation);
+        recordMappingTemplateEvent(template, "import_mapping_status_translation.updated", actorId);
+        return ImportMappingStatusTranslationResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteStatusTranslation(UUID mappingTemplateId, UUID translationId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportMappingTemplate template = mappingTemplate(mappingTemplateId);
+        permissionService.requireWorkspacePermission(actorId, template.getWorkspaceId(), "workspace.admin");
+        ImportMappingStatusTranslation translation = importMappingStatusTranslationRepository.findByIdAndMappingTemplateId(translationId, template.getId())
+                .orElseThrow(() -> notFound("Import mapping status translation not found"));
+        importMappingStatusTranslationRepository.delete(translation);
+        recordMappingTemplateEvent(template, "import_mapping_status_translation.deleted", actorId);
     }
 
     @Transactional
@@ -254,6 +411,7 @@ public class ImportJobService {
         }
         UUID projectId = materializeRequest.projectId() == null ? template.getProjectId() : materializeRequest.projectId();
         Project project = activeProjectInWorkspace(projectId, job.getWorkspaceId());
+        ImportMappingRules rules = mappingRules(template.getId());
         int limit = normalizeMaterializeLimit(materializeRequest.limit());
         boolean updateExisting = Boolean.TRUE.equals(materializeRequest.updateExisting());
         List<ImportJobRecord> candidates = importJobRecordRepository
@@ -278,7 +436,7 @@ public class ImportJobService {
                 continue;
             }
             try {
-                MaterializedWorkItem workItem = materializeRecord(job, template, project, record, updateExisting);
+                MaterializedWorkItem workItem = materializeRecord(job, template, rules, project, record, updateExisting);
                 if (workItem.created()) {
                     created++;
                 } else {
@@ -370,6 +528,9 @@ public class ImportJobService {
         if (create || request.defaults() != null) {
             template.setDefaults(toJsonObject(request.defaults()));
         }
+        if (create || request.transformationConfig() != null) {
+            template.setTransformationConfig(toJsonObject(request.transformationConfig()));
+        }
         if (request.enabled() != null) {
             template.setEnabled(request.enabled());
         } else if (create) {
@@ -377,9 +538,63 @@ public class ImportJobService {
         }
     }
 
+    private void applyValueLookupRequest(ImportMappingValueLookup lookup, ImportMappingValueLookupRequest request, boolean create) {
+        if (create || hasText(request.sourceField())) {
+            lookup.setSourceField(requiredText(request.sourceField(), "sourceField"));
+        }
+        if (create || request.sourceValue() != null) {
+            lookup.setSourceValue(requiredText(request.sourceValue(), "sourceValue"));
+        }
+        if (create || hasText(request.targetField())) {
+            lookup.setTargetField(requiredText(request.targetField(), "targetField"));
+        }
+        if (create || request.targetValue() != null) {
+            lookup.setTargetValue(objectMapper.valueToTree(required(request.targetValue(), "targetValue")));
+        }
+        if (request.sortOrder() != null) {
+            lookup.setSortOrder(request.sortOrder());
+        } else if (create) {
+            lookup.setSortOrder(0);
+        }
+        if (request.enabled() != null) {
+            lookup.setEnabled(request.enabled());
+        } else if (create) {
+            lookup.setEnabled(true);
+        }
+    }
+
+    private void applyTypeTranslationRequest(ImportMappingTypeTranslation translation, ImportMappingTypeTranslationRequest request, boolean create) {
+        if (create || hasText(request.sourceTypeKey())) {
+            translation.setSourceTypeKey(requiredText(request.sourceTypeKey(), "sourceTypeKey"));
+        }
+        if (create || hasText(request.targetTypeKey())) {
+            translation.setTargetTypeKey(requiredText(request.targetTypeKey(), "targetTypeKey"));
+        }
+        if (request.enabled() != null) {
+            translation.setEnabled(request.enabled());
+        } else if (create) {
+            translation.setEnabled(true);
+        }
+    }
+
+    private void applyStatusTranslationRequest(ImportMappingStatusTranslation translation, ImportMappingStatusTranslationRequest request, boolean create) {
+        if (create || hasText(request.sourceStatusKey())) {
+            translation.setSourceStatusKey(requiredText(request.sourceStatusKey(), "sourceStatusKey"));
+        }
+        if (create || hasText(request.targetStatusKey())) {
+            translation.setTargetStatusKey(requiredText(request.targetStatusKey(), "targetStatusKey"));
+        }
+        if (request.enabled() != null) {
+            translation.setEnabled(request.enabled());
+        } else if (create) {
+            translation.setEnabled(true);
+        }
+    }
+
     private MaterializedWorkItem materializeRecord(
             ImportJob job,
             ImportMappingTemplate template,
+            ImportMappingRules rules,
             Project project,
             ImportJobRecord record,
             boolean updateExisting
@@ -387,20 +602,21 @@ public class ImportJobService {
         JsonNode rawPayload = record.getRawPayload() == null ? objectMapper.createObjectNode() : record.getRawPayload();
         JsonNode mapping = template.getFieldMapping() == null ? objectMapper.createObjectNode() : template.getFieldMapping();
         JsonNode defaults = template.getDefaults() == null ? objectMapper.createObjectNode() : template.getDefaults();
+        JsonNode transformations = template.getTransformationConfig() == null ? objectMapper.createObjectNode() : template.getTransformationConfig();
         if (record.getTargetId() != null && updateExisting) {
             WorkItemUpdateRequest updateRequest = new WorkItemUpdateRequest(
                     null,
-                    textValue(rawPayload, mapping, defaults, "typeKey", null),
+                    translateType(textValue(rawPayload, mapping, defaults, transformations, rules, "typeKey", null), rules, null),
                     null,
                     null,
                     null,
-                    textValue(rawPayload, mapping, defaults, "priorityKey", null),
+                    textValue(rawPayload, mapping, defaults, transformations, rules, "priorityKey", null),
                     null,
                     null,
-                    textValue(rawPayload, mapping, defaults, "title", null),
-                    textValue(rawPayload, mapping, defaults, "descriptionMarkdown", null),
+                    textValue(rawPayload, mapping, defaults, transformations, rules, "title", null),
+                    textValue(rawPayload, mapping, defaults, transformations, rules, "descriptionMarkdown", null),
                     null,
-                    textValue(rawPayload, mapping, defaults, "visibility", null),
+                    textValue(rawPayload, mapping, defaults, transformations, rules, "visibility", null),
                     null,
                     null,
                     null,
@@ -410,16 +626,16 @@ public class ImportJobService {
             );
             return new MaterializedWorkItem(workItemService.update(record.getTargetId(), updateRequest), false);
         }
-        String typeKey = firstText(
-                textValue(rawPayload, mapping, defaults, "typeKey", null),
+        String typeKey = translateType(firstText(
+                textValue(rawPayload, mapping, defaults, transformations, rules, "typeKey", null),
                 template.getWorkItemTypeKey(),
                 defaultText(defaults, "typeKey")
-        );
-        String statusKey = firstText(
-                textValue(rawPayload, mapping, defaults, "statusKey", null),
+        ), rules, template.getWorkItemTypeKey());
+        String statusKey = translateStatus(firstText(
+                textValue(rawPayload, mapping, defaults, transformations, rules, "statusKey", null),
                 template.getStatusKey(),
                 defaultText(defaults, "statusKey")
-        );
+        ), rules, template.getStatusKey());
         WorkItemCreateRequest createRequest = new WorkItemCreateRequest(
                 null,
                 typeKey,
@@ -427,14 +643,14 @@ public class ImportJobService {
                 null,
                 statusKey,
                 null,
-                textValue(rawPayload, mapping, defaults, "priorityKey", null),
+                textValue(rawPayload, mapping, defaults, transformations, rules, "priorityKey", null),
                 null,
                 null,
                 null,
-                requiredText(textValue(rawPayload, mapping, defaults, "title", null), "mapped title"),
-                textValue(rawPayload, mapping, defaults, "descriptionMarkdown", "Imported from " + job.getProvider() + " " + record.getSourceId()),
+                requiredText(textValue(rawPayload, mapping, defaults, transformations, rules, "title", null), "mapped title"),
+                textValue(rawPayload, mapping, defaults, transformations, rules, "descriptionMarkdown", "Imported from " + job.getProvider() + " " + record.getSourceId()),
                 null,
-                textValue(rawPayload, mapping, defaults, "visibility", null),
+                textValue(rawPayload, mapping, defaults, transformations, rules, "visibility", null),
                 null,
                 null,
                 null,
@@ -445,13 +661,25 @@ public class ImportJobService {
         return new MaterializedWorkItem(workItemService.create(project.getId(), createRequest), true);
     }
 
-    private String textValue(JsonNode rawPayload, JsonNode mapping, JsonNode defaults, String targetField, String fallback) {
+    private String textValue(
+            JsonNode rawPayload,
+            JsonNode mapping,
+            JsonNode defaults,
+            JsonNode transformations,
+            ImportMappingRules rules,
+            String targetField,
+            String fallback
+    ) {
+        JsonNode lookupValue = lookupValue(rawPayload, rules.lookups(), targetField);
+        if (hasTextNode(lookupValue)) {
+            return transformText(lookupValue.isValueNode() ? lookupValue.asText().trim() : lookupValue.toString(), transformations, targetField);
+        }
         JsonNode mapped = mappedNode(rawPayload, mapping, targetField);
         if (hasTextNode(mapped)) {
-            return mapped.isValueNode() ? mapped.asText().trim() : mapped.toString();
+            return transformText(mapped.isValueNode() ? mapped.asText().trim() : mapped.toString(), transformations, targetField);
         }
         String defaultValue = defaultText(defaults, targetField);
-        return hasText(defaultValue) ? defaultValue : fallback;
+        return transformText(hasText(defaultValue) ? defaultValue : fallback, transformations, targetField);
     }
 
     private Object objectValue(JsonNode rawPayload, JsonNode mapping, JsonNode defaults, String targetField) {
@@ -518,6 +746,85 @@ public class ImportJobService {
 
     private String defaultText(JsonNode defaults, String fieldName) {
         return defaults != null && defaults.hasNonNull(fieldName) ? defaults.get(fieldName).asText() : null;
+    }
+
+    private JsonNode lookupValue(JsonNode rawPayload, List<ImportMappingValueLookup> lookups, String targetField) {
+        for (ImportMappingValueLookup lookup : lookups) {
+            if (!targetField.equals(lookup.getTargetField())) {
+                continue;
+            }
+            JsonNode source = nodeAtPath(rawPayload, lookup.getSourceField());
+            if (!hasTextNode(source)) {
+                continue;
+            }
+            String sourceText = source.isValueNode() ? source.asText().trim() : source.toString();
+            if (sourceText.equalsIgnoreCase(lookup.getSourceValue().trim())) {
+                return lookup.getTargetValue();
+            }
+        }
+        return null;
+    }
+
+    private String transformText(String value, JsonNode transformations, String targetField) {
+        if (!hasText(value) || transformations == null || !transformations.has(targetField)) {
+            return value;
+        }
+        JsonNode functions = transformations.get(targetField);
+        if (functions.isTextual()) {
+            return applyTransform(value, functions.asText());
+        }
+        String transformed = value;
+        if (functions.isArray()) {
+            for (JsonNode function : functions) {
+                transformed = applyTransform(transformed, function.asText());
+            }
+        }
+        return transformed;
+    }
+
+    private String applyTransform(String value, String functionName) {
+        if (!hasText(functionName)) {
+            return value;
+        }
+        return switch (functionName.trim().toLowerCase(Locale.ROOT)) {
+            case "trim" -> value.trim();
+            case "lower", "lowercase" -> value.toLowerCase(Locale.ROOT);
+            case "upper", "uppercase" -> value.toUpperCase(Locale.ROOT);
+            case "collapse_whitespace" -> value.trim().replaceAll("\\s+", " ");
+            default -> value;
+        };
+    }
+
+    private String translateType(String sourceTypeKey, ImportMappingRules rules, String fallback) {
+        if (!hasText(sourceTypeKey)) {
+            return fallback;
+        }
+        for (ImportMappingTypeTranslation translation : rules.typeTranslations()) {
+            if (sourceTypeKey.trim().equalsIgnoreCase(translation.getSourceTypeKey())) {
+                return translation.getTargetTypeKey();
+            }
+        }
+        return sourceTypeKey;
+    }
+
+    private String translateStatus(String sourceStatusKey, ImportMappingRules rules, String fallback) {
+        if (!hasText(sourceStatusKey)) {
+            return fallback;
+        }
+        for (ImportMappingStatusTranslation translation : rules.statusTranslations()) {
+            if (sourceStatusKey.trim().equalsIgnoreCase(translation.getSourceStatusKey())) {
+                return translation.getTargetStatusKey();
+            }
+        }
+        return sourceStatusKey;
+    }
+
+    private ImportMappingRules mappingRules(UUID mappingTemplateId) {
+        return new ImportMappingRules(
+                importMappingValueLookupRepository.findByMappingTemplateIdAndEnabledTrueOrderBySortOrderAscSourceFieldAsc(mappingTemplateId),
+                importMappingTypeTranslationRepository.findByMappingTemplateIdAndEnabledTrueOrderBySourceTypeKeyAsc(mappingTemplateId),
+                importMappingStatusTranslationRepository.findByMappingTemplateIdAndEnabledTrueOrderBySourceStatusKeyAsc(mappingTemplateId)
+        );
     }
 
     private boolean hasTextNode(JsonNode node) {
@@ -763,5 +1070,12 @@ public class ImportJobService {
     }
 
     private record MaterializedWorkItem(WorkItemResponse response, boolean created) {
+    }
+
+    private record ImportMappingRules(
+            List<ImportMappingValueLookup> lookups,
+            List<ImportMappingTypeTranslation> typeTranslations,
+            List<ImportMappingStatusTranslation> statusTranslations
+    ) {
     }
 }
