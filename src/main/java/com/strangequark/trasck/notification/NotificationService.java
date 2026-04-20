@@ -78,18 +78,57 @@ public class NotificationService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<NotificationPreferenceResponse> listDefaultPreferences(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return notificationPreferenceRepository.findByWorkspaceIdAndUserIdIsNullOrderByChannelAscEventTypeAsc(workspaceId).stream()
+                .map(NotificationPreferenceResponse::from)
+                .toList();
+    }
+
     @Transactional
     public NotificationPreferenceResponse upsertPreference(UUID workspaceId, NotificationPreferenceRequest request) {
         NotificationPreferenceRequest update = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.read");
-        NotificationPreference preference = new NotificationPreference();
-        preference.setWorkspaceId(workspaceId);
-        preference.setUserId(actorId);
-        applyPreference(preference, update, true);
+        String channel = requiredText(update.channel(), "channel").toLowerCase();
+        String eventType = requiredText(update.eventType(), "eventType");
+        NotificationPreference preference = notificationPreferenceRepository
+                .findByWorkspaceIdAndUserIdAndChannelAndEventType(workspaceId, actorId, channel, eventType)
+                .orElseGet(NotificationPreference::new);
+        boolean create = preference.getId() == null;
+        if (create) {
+            preference.setWorkspaceId(workspaceId);
+            preference.setUserId(actorId);
+        }
+        applyPreference(preference, update, create);
         NotificationPreference saved = notificationPreferenceRepository.save(preference);
         recordPreferenceEvent(saved, "notification.preference_saved", actorId);
+        return NotificationPreferenceResponse.from(saved);
+    }
+
+    @Transactional
+    public NotificationPreferenceResponse createDefaultPreference(UUID workspaceId, NotificationPreferenceRequest request) {
+        NotificationPreferenceRequest update = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        String channel = requiredText(update.channel(), "channel").toLowerCase();
+        String eventType = requiredText(update.eventType(), "eventType");
+        NotificationPreference preference = notificationPreferenceRepository
+                .findByWorkspaceIdAndUserIdIsNullAndChannelAndEventType(workspaceId, channel, eventType)
+                .orElseGet(NotificationPreference::new);
+        boolean create = preference.getId() == null;
+        if (create) {
+            preference.setWorkspaceId(workspaceId);
+            preference.setUserId(null);
+        }
+        applyPreference(preference, update, create);
+        NotificationPreference saved = notificationPreferenceRepository.save(preference);
+        recordPreferenceEvent(saved, "notification.default_preference_saved", actorId);
         return NotificationPreferenceResponse.from(saved);
     }
 
@@ -107,6 +146,19 @@ public class NotificationService {
     }
 
     @Transactional
+    public NotificationPreferenceResponse updateDefaultPreference(UUID preferenceId, NotificationPreferenceRequest request) {
+        NotificationPreferenceRequest update = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        NotificationPreference preference = notificationPreferenceRepository.findByIdAndUserIdIsNull(preferenceId)
+                .orElseThrow(() -> notFound("Notification default preference not found"));
+        permissionService.requireWorkspacePermission(actorId, preference.getWorkspaceId(), "workspace.admin");
+        applyPreference(preference, update, false);
+        NotificationPreference saved = notificationPreferenceRepository.save(preference);
+        recordPreferenceEvent(saved, "notification.default_preference_updated", actorId);
+        return NotificationPreferenceResponse.from(saved);
+    }
+
+    @Transactional
     public void deletePreference(UUID preferenceId) {
         UUID actorId = currentUserService.requireUserId();
         NotificationPreference preference = notificationPreferenceRepository.findByIdAndUserId(preferenceId, actorId)
@@ -114,6 +166,16 @@ public class NotificationService {
         permissionService.requireWorkspacePermission(actorId, preference.getWorkspaceId(), "workspace.read");
         notificationPreferenceRepository.delete(preference);
         recordPreferenceEvent(preference, "notification.preference_deleted", actorId);
+    }
+
+    @Transactional
+    public void deleteDefaultPreference(UUID preferenceId) {
+        UUID actorId = currentUserService.requireUserId();
+        NotificationPreference preference = notificationPreferenceRepository.findByIdAndUserIdIsNull(preferenceId)
+                .orElseThrow(() -> notFound("Notification default preference not found"));
+        permissionService.requireWorkspacePermission(actorId, preference.getWorkspaceId(), "workspace.admin");
+        notificationPreferenceRepository.delete(preference);
+        recordPreferenceEvent(preference, "notification.default_preference_deleted", actorId);
     }
 
     private void applyPreference(NotificationPreference preference, NotificationPreferenceRequest request, boolean create) {
@@ -165,9 +227,13 @@ public class NotificationService {
     private void recordPreferenceEvent(NotificationPreference preference, String eventType, UUID actorId) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("preferenceId", preference.getId().toString())
+                .put("scope", preference.getUserId() == null ? "workspace_default" : "user")
                 .put("channel", preference.getChannel())
                 .put("eventType", preference.getEventType())
                 .put("actorUserId", actorId.toString());
+        if (preference.getUserId() != null) {
+            payload.put("userId", preference.getUserId().toString());
+        }
         domainEventService.record(preference.getWorkspaceId(), "notification_preference", preference.getId(), eventType, payload);
     }
 

@@ -38,12 +38,25 @@ public class NotificationController {
         return notificationService.listPreferences(workspaceId);
     }
 
+    @GetMapping("/workspaces/{workspaceId}/notification-defaults")
+    public List<NotificationPreferenceResponse> listDefaultPreferences(@PathVariable UUID workspaceId) {
+        return notificationService.listDefaultPreferences(workspaceId);
+    }
+
     @PostMapping("/workspaces/{workspaceId}/notification-preferences")
     public ResponseEntity<NotificationPreferenceResponse> upsertPreference(
             @PathVariable UUID workspaceId,
             @RequestBody NotificationPreferenceRequest request
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(notificationService.upsertPreference(workspaceId, request));
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/notification-defaults")
+    public ResponseEntity<NotificationPreferenceResponse> createDefaultPreference(
+            @PathVariable UUID workspaceId,
+            @RequestBody NotificationPreferenceRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(notificationService.createDefaultPreference(workspaceId, request));
     }
 
     @PatchMapping("/notification-preferences/{preferenceId}")
@@ -54,9 +67,23 @@ public class NotificationController {
         return notificationService.updatePreference(preferenceId, request);
     }
 
+    @PatchMapping("/notification-defaults/{preferenceId}")
+    public NotificationPreferenceResponse updateDefaultPreference(
+            @PathVariable UUID preferenceId,
+            @RequestBody NotificationPreferenceRequest request
+    ) {
+        return notificationService.updateDefaultPreference(preferenceId, request);
+    }
+
     @DeleteMapping("/notification-preferences/{preferenceId}")
     public ResponseEntity<Void> deletePreference(@PathVariable UUID preferenceId) {
         notificationService.deletePreference(preferenceId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/notification-defaults/{preferenceId}")
+    public ResponseEntity<Void> deleteDefaultPreference(@PathVariable UUID preferenceId) {
+        notificationService.deleteDefaultPreference(preferenceId);
         return ResponseEntity.noContent().build();
     }
 }

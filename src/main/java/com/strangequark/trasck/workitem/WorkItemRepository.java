@@ -102,4 +102,7 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
               and wi.deletedAt is null
             """)
     Optional<WorkItem> findActiveInProject(@Param("id") UUID id, @Param("projectId") UUID projectId);
+
+    @EntityGraph(attributePaths = {"project", "type", "status", "priority"})
+    List<WorkItem> findByProjectIdAndStatusIdInAndDeletedAtIsNullOrderByRankAsc(UUID projectId, List<UUID> statusIds);
 }

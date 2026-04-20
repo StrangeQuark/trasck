@@ -107,6 +107,8 @@ class ConfigurationApiIntegrationTest {
         JsonNode swimlane = postJson("/api/v1/boards/" + boardId + "/swimlanes", swimlaneBody);
         assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("assignee");
         assertThat(getJson("/api/v1/projects/" + projectId + "/boards")).hasSizeGreaterThanOrEqualTo(2);
+        JsonNode boardWork = getJson("/api/v1/boards/" + boardId + "/work-items");
+        assertThat(boardWork.at("/columns")).hasSize(1);
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
                 .put("name", "Release 1")
@@ -141,6 +143,18 @@ class ConfigurationApiIntegrationTest {
                 .put("eventType", "automation.rule_executed")
                 .put("enabled", true));
         assertThat(preference.at("/enabled").asBoolean()).isTrue();
+        JsonNode defaultPreference = postJson("/api/v1/workspaces/" + workspaceId + "/notification-defaults", objectMapper.createObjectNode()
+                .put("channel", "email")
+                .put("eventType", "automation.failure")
+                .put("enabled", false));
+        assertThat(defaultPreference.at("/userId").isMissingNode() || defaultPreference.at("/userId").isNull()).isTrue();
+        JsonNode updatedDefaultPreference = postJson("/api/v1/workspaces/" + workspaceId + "/notification-defaults", objectMapper.createObjectNode()
+                .put("channel", "email")
+                .put("eventType", "automation.failure")
+                .put("enabled", true));
+        assertThat(uuid(updatedDefaultPreference, "/id")).isEqualTo(uuid(defaultPreference, "/id"));
+        assertThat(updatedDefaultPreference.at("/enabled").asBoolean()).isTrue();
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/notification-defaults")).hasSize(1);
 
         ObjectNode webhookBody = objectMapper.createObjectNode()
                 .put("name", "Automation Webhook")
@@ -185,10 +199,18 @@ class ConfigurationApiIntegrationTest {
                 .put("sourceEntityId", storyId.toString());
         executionBody.set("payload", objectMapper.createObjectNode().put("workItemId", storyId.toString()));
         JsonNode execution = postJson("/api/v1/automation-rules/" + ruleId + "/execute", executionBody);
-        assertThat(execution.at("/status").asText()).isEqualTo("succeeded");
-        assertThat(execution.at("/logs")).hasSize(2);
+        assertThat(execution.at("/status").asText()).isEqualTo("queued");
+        JsonNode workerRun = postJson("/api/v1/workspaces/" + workspaceId + "/automation-jobs/run-queued", objectMapper.createObjectNode()
+                .put("limit", 5));
+        assertThat(workerRun.at("/processed").asInt()).isEqualTo(1);
+        assertThat(workerRun.at("/succeeded").asInt()).isEqualTo(1);
+        assertThat(workerRun.at("/jobs/0/logs")).hasSize(2);
         assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/notifications")).hasSize(1);
         assertThat(getJson("/api/v1/webhooks/" + webhookId + "/deliveries")).hasSize(1);
+        JsonNode webhookWorkerRun = postJson("/api/v1/workspaces/" + workspaceId + "/webhook-deliveries/process", objectMapper.createObjectNode()
+                .put("dryRun", true)
+                .put("maxAttempts", 2));
+        assertThat(webhookWorkerRun.at("/delivered").asInt()).isEqualTo(1);
 
         JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
                 .put("provider", "jira"));
@@ -200,6 +222,13 @@ class ConfigurationApiIntegrationTest {
                 .put("targetId", storyId.toString())
                 .put("status", "imported"));
         assertThat(importRecord.at("/sourceId").asText()).isEqualTo("JIRA-1");
+        ObjectNode parseBody = objectMapper.createObjectNode()
+                .put("content", """
+                        {"issues":[{"key":"JIRA-2","fields":{"summary":"Parsed story"}}]}
+                        """);
+        JsonNode parsedImport = postJson("/api/v1/import-jobs/" + importJobId + "/parse", parseBody);
+        assertThat(parsedImport.at("/recordsParsed").asInt()).isEqualTo(1);
+        assertThat(parsedImport.at("/records/0/sourceId").asText()).isEqualTo("JIRA-2");
         postJson("/api/v1/import-jobs/" + importJobId + "/start", objectMapper.createObjectNode());
         JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");

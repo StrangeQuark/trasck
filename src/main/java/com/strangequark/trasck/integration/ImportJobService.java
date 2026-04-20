@@ -2,6 +2,7 @@ package com.strangequark.trasck.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
@@ -9,6 +10,7 @@ import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -142,6 +144,38 @@ public class ImportJobService {
         return ImportJobRecordResponse.from(saved);
     }
 
+    @Transactional
+    public ImportParseResponse parse(UUID importJobId, ImportParseRequest request) {
+        ImportParseRequest parseRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = mutableImportJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        String content = requiredText(parseRequest.content(), "content");
+        List<ParsedImportRecord> parsed = parseRecords(job.getProvider(), parseRequest.sourceType(), content);
+        List<ImportJobRecordResponse> responses = new ArrayList<>();
+        for (ParsedImportRecord parsedRecord : parsed) {
+            ImportJobRecord record = importJobRecordRepository
+                    .findByImportJobIdAndSourceTypeAndSourceId(job.getId(), parsedRecord.sourceType(), parsedRecord.sourceId())
+                    .orElseGet(ImportJobRecord::new);
+            if (record.getId() == null) {
+                record.setImportJobId(job.getId());
+                record.setSourceType(parsedRecord.sourceType());
+                record.setSourceId(parsedRecord.sourceId());
+            }
+            record.setStatus("pending");
+            record.setRawPayload(parsedRecord.rawPayload());
+            ImportJobRecord saved = importJobRecordRepository.save(record);
+            responses.add(ImportJobRecordResponse.from(saved));
+        }
+        if ("queued".equals(job.getStatus())) {
+            job.setStatus("running");
+            job.setStartedAt(OffsetDateTime.now());
+            importJobRepository.save(job);
+        }
+        recordJobEvent(job, "import_job.parsed", actorId);
+        return new ImportParseResponse(job.getId(), job.getProvider(), responses.size(), responses);
+    }
+
     @Transactional(readOnly = true)
     public List<ImportJobRecordResponse> listRecords(UUID importJobId) {
         UUID actorId = currentUserService.requireUserId();
@@ -178,6 +212,118 @@ public class ImportJobService {
 
     private ImportJobResponse response(ImportJob job) {
         return ImportJobResponse.from(job, importJobRecordRepository.findByImportJobIdOrderBySourceTypeAscSourceIdAsc(job.getId()));
+    }
+
+    private List<ParsedImportRecord> parseRecords(String provider, String sourceType, String content) {
+        return switch (provider) {
+            case "csv" -> parseCsv(sourceType, content);
+            case "jira" -> parseJsonImport(content, sourceType == null || sourceType.isBlank() ? "issue" : sourceType, List.of("key", "id"));
+            case "rally" -> parseJsonImport(content, sourceType == null || sourceType.isBlank() ? "artifact" : sourceType, List.of("FormattedID", "ObjectID", "_refObjectUUID", "id"));
+            default -> throw badRequest("Unsupported import parser provider: " + provider);
+        };
+    }
+
+    private List<ParsedImportRecord> parseCsv(String sourceType, String content) {
+        List<String> lines = content.lines()
+                .filter(line -> !line.isBlank())
+                .toList();
+        if (lines.size() < 2) {
+            throw badRequest("CSV content must include a header row and at least one data row");
+        }
+        List<String> headers = splitCsvLine(lines.get(0));
+        if (headers.isEmpty()) {
+            throw badRequest("CSV header row is empty");
+        }
+        List<ParsedImportRecord> records = new ArrayList<>();
+        String normalizedSourceType = hasText(sourceType) ? sourceType.trim() : "row";
+        for (int i = 1; i < lines.size(); i++) {
+            List<String> values = splitCsvLine(lines.get(i));
+            ObjectNode payload = objectMapper.createObjectNode();
+            for (int column = 0; column < headers.size(); column++) {
+                String value = column < values.size() ? values.get(column) : "";
+                payload.put(headers.get(column), value);
+            }
+            String sourceId = firstText(payload, List.of("key", "id", "issue_key", "formatted_id", "FormattedID"));
+            if (!hasText(sourceId)) {
+                sourceId = Integer.toString(i);
+            }
+            records.add(new ParsedImportRecord(normalizedSourceType, sourceId, payload));
+        }
+        return records;
+    }
+
+    private List<ParsedImportRecord> parseJsonImport(String content, String sourceType, List<String> idFields) {
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(content);
+        } catch (Exception ex) {
+            throw badRequest("JSON import content is invalid");
+        }
+        JsonNode recordsNode = unwrapJsonRecords(root);
+        if (!recordsNode.isArray()) {
+            throw badRequest("JSON import content must be an array or contain issues/results/records");
+        }
+        List<ParsedImportRecord> records = new ArrayList<>();
+        for (JsonNode item : recordsNode) {
+            if (!item.isObject()) {
+                throw badRequest("JSON import records must be objects");
+            }
+            String sourceId = firstText(item, idFields);
+            if (!hasText(sourceId)) {
+                throw badRequest("JSON import records must include one of " + idFields);
+            }
+            records.add(new ParsedImportRecord(sourceType, sourceId, item));
+        }
+        return records;
+    }
+
+    private JsonNode unwrapJsonRecords(JsonNode root) {
+        if (root.isArray()) {
+            return root;
+        }
+        for (String field : List.of("issues", "results", "records", "items")) {
+            if (root.has(field) && root.get(field).isArray()) {
+                return root.get(field);
+            }
+        }
+        ArrayNode single = objectMapper.createArrayNode();
+        if (root.isObject()) {
+            single.add(root);
+        }
+        return single;
+    }
+
+    private List<String> splitCsvLine(String line) {
+        List<String> values = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            char character = line.charAt(i);
+            if (character == '"') {
+                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                    current.append('"');
+                    i++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (character == ',' && !quoted) {
+                values.add(current.toString().trim());
+                current.setLength(0);
+            } else {
+                current.append(character);
+            }
+        }
+        values.add(current.toString().trim());
+        return values;
+    }
+
+    private String firstText(JsonNode node, List<String> fields) {
+        for (String field : fields) {
+            if (node.hasNonNull(field) && !node.get(field).asText().isBlank()) {
+                return node.get(field).asText();
+            }
+        }
+        return null;
     }
 
     private ImportJob importJob(UUID importJobId) {
@@ -254,5 +400,8 @@ public class ImportJobService {
 
     private ResponseStatusException badRequest(String message) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private record ParsedImportRecord(String sourceType, String sourceId, JsonNode rawPayload) {
     }
 }

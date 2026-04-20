@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -52,6 +53,14 @@ public class BoardController {
     @GetMapping("/boards/{boardId}/columns")
     public List<BoardColumnResponse> listColumns(@PathVariable UUID boardId) {
         return boardService.listColumns(boardId);
+    }
+
+    @GetMapping("/boards/{boardId}/work-items")
+    public BoardWorkItemsResponse listBoardWorkItems(
+            @PathVariable UUID boardId,
+            @RequestParam(required = false) Integer limitPerColumn
+    ) {
+        return boardService.listBoardWorkItems(boardId, limitPerColumn);
     }
 
     @PostMapping("/boards/{boardId}/columns")
