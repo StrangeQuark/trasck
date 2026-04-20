@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 public record ImportMaterializeResponse(
+        UUID materializationRunId,
         UUID importJobId,
         UUID mappingTemplateId,
         UUID projectId,

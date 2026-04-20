@@ -1,5 +1,6 @@
 package com.strangequark.trasck.automation;
 
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -19,6 +20,11 @@ public record AutomationWorkerSettingsResponse(
         Integer workerRunRetentionDays,
         Boolean workerRunExportBeforePrune,
         Boolean workerRunPruningAutomaticEnabled,
+        Integer workerRunPruningIntervalMinutes,
+        LocalTime workerRunPruningWindowStart,
+        LocalTime workerRunPruningWindowEnd,
+        OffsetDateTime workerRunPruningLastStartedAt,
+        OffsetDateTime workerRunPruningLastFinishedAt,
         OffsetDateTime updatedAt
 ) {
     static AutomationWorkerSettingsResponse from(AutomationWorkerSettings settings) {
@@ -38,6 +44,11 @@ public record AutomationWorkerSettingsResponse(
                 settings.getWorkerRunRetentionDays(),
                 settings.getWorkerRunExportBeforePrune(),
                 settings.getWorkerRunPruningAutomaticEnabled(),
+                settings.getWorkerRunPruningIntervalMinutes(),
+                settings.getWorkerRunPruningWindowStart(),
+                settings.getWorkerRunPruningWindowEnd(),
+                settings.getWorkerRunPruningLastStartedAt(),
+                settings.getWorkerRunPruningLastFinishedAt(),
                 settings.getUpdatedAt()
         );
     }

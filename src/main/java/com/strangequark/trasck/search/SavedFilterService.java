@@ -175,7 +175,7 @@ public class SavedFilterService {
         recordEvent(savedFilter, "saved_filter.deleted", actorId);
     }
 
-    SavedFilter requireReadableEntity(UUID savedFilterId, UUID actorId) {
+    public SavedFilter requireReadableEntity(UUID savedFilterId, UUID actorId) {
         SavedFilter savedFilter = savedFilter(savedFilterId);
         activeWorkspace(savedFilter.getWorkspaceId());
         requireReadable(actorId, savedFilter);

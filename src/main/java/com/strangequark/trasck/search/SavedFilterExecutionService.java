@@ -3,6 +3,7 @@ package com.strangequark.trasck.search;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.api.CursorPageResponse;
 import com.strangequark.trasck.api.PageCursorCodec;
@@ -114,6 +115,35 @@ public class SavedFilterExecutionService {
         SortSpec sort = sortSpec(executableQuery, scope);
         SqlPredicate predicate = filterPredicate(executableQuery, workspaceId);
         return executeQuery(workspaceId, scope, predicate, sort, null, normalizePageLimit(limit)).stream()
+                .map(WorkItem::getId)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<UUID> executeSavedFilterWorkItemIds(UUID savedFilterId, UUID projectId, Integer limit) {
+        UUID actorId = currentUserService.requireUserId();
+        SavedFilter savedFilter = savedFilterService.requireReadableEntity(savedFilterId, actorId);
+        JsonNode query = savedFilter.getQuery();
+        ObjectNode executableQuery = query != null && query.isObject()
+                ? query.deepCopy()
+                : objectMapper.createObjectNode();
+        executableQuery.put("entityType", "work_item");
+        if (projectId == null) {
+            throw badRequest("projectId is required");
+        }
+        executableQuery.put("projectId", projectId.toString());
+        executableQuery.remove("projectIds");
+        if (!executableQuery.has("sort")) {
+            executableQuery.set("sort", objectMapper.createObjectNode()
+                    .put("field", "rank")
+                    .put("direction", "asc"));
+        }
+        validateEntityType(executableQuery);
+        ExecutionScope scope = executionScope(savedFilter, executableQuery);
+        requireWorkItemRead(actorId, savedFilter.getWorkspaceId(), scope);
+        SortSpec sort = sortSpec(executableQuery, scope);
+        SqlPredicate predicate = filterPredicate(executableQuery, savedFilter.getWorkspaceId());
+        return executeQuery(savedFilter.getWorkspaceId(), scope, predicate, sort, null, normalizePageLimit(limit)).stream()
                 .map(WorkItem::getId)
                 .toList();
     }

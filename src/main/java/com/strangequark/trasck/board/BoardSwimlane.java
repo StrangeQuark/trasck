@@ -33,6 +33,9 @@ public class BoardSwimlane {
     @Column(name = "swimlane_type")
     private String swimlaneType;
 
+    @Column(name = "saved_filter_id")
+    private UUID savedFilterId;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "query")
     private JsonNode query;
@@ -74,6 +77,14 @@ public class BoardSwimlane {
 
     public void setSwimlaneType(String swimlaneType) {
         this.swimlaneType = swimlaneType;
+    }
+
+    public UUID getSavedFilterId() {
+        return savedFilterId;
+    }
+
+    public void setSavedFilterId(UUID savedFilterId) {
+        this.savedFilterId = savedFilterId;
     }
 
     public JsonNode getQuery() {

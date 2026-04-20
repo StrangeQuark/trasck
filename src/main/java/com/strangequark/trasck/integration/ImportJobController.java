@@ -234,6 +234,11 @@ public class ImportJobController {
         return importJobService.listRecords(importJobId);
     }
 
+    @GetMapping("/import-jobs/{importJobId}/materialization-runs")
+    public List<ImportMaterializationRunResponse> listMaterializationRuns(@PathVariable UUID importJobId) {
+        return importJobService.listMaterializationRuns(importJobId);
+    }
+
     @PostMapping("/import-jobs/{importJobId}/records")
     public ResponseEntity<ImportJobRecordResponse> createRecord(
             @PathVariable UUID importJobId,

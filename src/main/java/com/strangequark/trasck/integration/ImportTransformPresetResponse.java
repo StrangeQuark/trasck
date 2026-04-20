@@ -11,6 +11,7 @@ public record ImportTransformPresetResponse(
         String description,
         Object transformationConfig,
         Boolean enabled,
+        Integer version,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {
@@ -22,6 +23,7 @@ public record ImportTransformPresetResponse(
                 preset.getDescription(),
                 JsonValues.toJavaValue(preset.getTransformationConfig()),
                 preset.getEnabled(),
+                preset.getVersion(),
                 preset.getCreatedAt(),
                 preset.getUpdatedAt()
         );

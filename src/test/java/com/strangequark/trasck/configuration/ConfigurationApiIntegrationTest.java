@@ -112,28 +112,34 @@ class ConfigurationApiIntegrationTest {
         columnBody.set("statusIds", objectMapper.createArrayNode().add(statusId(setup, "done").toString()));
         JsonNode column = postJson("/api/v1/boards/" + boardId + "/columns", columnBody);
         assertThat(column.at("/doneColumn").asBoolean()).isTrue();
+        ObjectNode savedFilterQuery = objectMapper.createObjectNode();
+        savedFilterQuery.set("where", objectMapper.createObjectNode()
+                .put("field", "reporterId")
+                .put("operator", "eq")
+                .put("value", actorId.toString()));
+        JsonNode savedFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Reporter board lane")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", savedFilterQuery));
         ObjectNode swimlaneBody = objectMapper.createObjectNode()
                 .put("name", "Reporter query")
                 .put("swimlaneType", "query")
+                .put("savedFilterId", savedFilter.at("/id").asText())
                 .put("position", 0)
                 .put("enabled", true);
-        swimlaneBody.set("query", objectMapper.createObjectNode()
-                .set("where", objectMapper.createObjectNode()
-                        .put("field", "reporterId")
-                        .put("operator", "eq")
-                        .put("value", actorId.toString())));
         JsonNode swimlane = postJson("/api/v1/boards/" + boardId + "/swimlanes", swimlaneBody);
         assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("query");
+        assertThat(uuid(swimlane, "/savedFilterId")).isEqualTo(uuid(savedFilter, "/id"));
         assertThat(getJson("/api/v1/projects/" + projectId + "/boards")).hasSizeGreaterThanOrEqualTo(2);
         JsonNode boardWork = getJson("/api/v1/boards/" + boardId + "/work-items");
         assertThat(boardWork.at("/columns")).hasSize(3);
         assertThat(boardWork.at("/swimlanes/0/columns/0/workItems")).hasSize(2);
-        JsonNode boardRankedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/rank", objectMapper.createObjectNode()
+        JsonNode boardRankedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/move", objectMapper.createObjectNode()
+                .put("targetColumnId", readyColumn.at("/id").asText())
                 .put("previousWorkItemId", boardPeerStoryId.toString()));
         assertThat(boardRankedStory.at("/rank").asText()).isGreaterThan(boardPeerStory.at("/rank").asText());
-        JsonNode boardTransitionedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
-                .put("targetColumnId", readyColumn.at("/id").asText()));
-        assertThat(uuid(boardTransitionedStory, "/statusId")).isEqualTo(statusId(setup, "ready"));
+        assertThat(uuid(boardRankedStory, "/statusId")).isEqualTo(statusId(setup, "ready"));
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
                 .put("name", "Release 1")
@@ -289,10 +295,14 @@ class ConfigurationApiIntegrationTest {
                 .put("workerRunRetentionEnabled", true)
                 .put("workerRunRetentionDays", 1)
                 .put("workerRunExportBeforePrune", true)
-                .put("workerRunPruningAutomaticEnabled", true));
+                .put("workerRunPruningAutomaticEnabled", true)
+                .put("workerRunPruningIntervalMinutes", 720)
+                .put("workerRunPruningWindowStart", "01:00:00")
+                .put("workerRunPruningWindowEnd", "04:00:00"));
         assertThat(workerSettings.at("/automationJobsEnabled").asBoolean()).isTrue();
         assertThat(workerSettings.at("/workerRunRetentionEnabled").asBoolean()).isTrue();
         assertThat(workerSettings.at("/workerRunPruningAutomaticEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/workerRunPruningIntervalMinutes").asInt()).isEqualTo(720);
         JsonNode workerRunExport = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/export?limit=5", objectMapper.createObjectNode());
         assertThat(workerRunExport.at("/retentionEnabled").asBoolean()).isTrue();
         assertThat(workerRunExport.at("/exportJobId").isMissingNode() || workerRunExport.at("/exportJobId").isNull()).isFalse();
@@ -370,6 +380,10 @@ class ConfigurationApiIntegrationTest {
                 .put("limit", 10)
                 .put("updateExisting", false));
         assertThat(materialized.at("/created").asInt()).isEqualTo(1);
+        assertThat(materialized.at("/materializationRunId").isMissingNode()).isFalse();
+        JsonNode materializationRuns = getJson("/api/v1/import-jobs/" + importJobId + "/materialization-runs");
+        assertThat(materializationRuns).hasSize(1);
+        assertThat(materializationRuns.at("/0/transformPresetVersion").asInt()).isEqualTo(1);
         UUID importedWorkItemId = uuid(materialized, "/records/0/targetId");
         JsonNode importedWorkItem = getJson("/api/v1/work-items/" + importedWorkItemId);
         assertThat(importedWorkItem.at("/title").asText()).isEqualTo("Parsed story");
