@@ -37,6 +37,10 @@ import org.springframework.web.server.ResponseStatusException;
 public class SavedFilterExecutionService {
 
     private static final List<String> BOOLEAN_GROUP_OPERATORS = List.of("and", "or");
+    private static final LocalDate NULL_DUE_DATE_ASC_SORT_VALUE = LocalDate.of(9999, 12, 31);
+    private static final LocalDate NULL_DUE_DATE_DESC_SORT_VALUE = LocalDate.of(1, 1, 1);
+    private static final long NULL_PRIORITY_ASC_SORT_VALUE = 2_147_483_647L;
+    private static final long NULL_PRIORITY_DESC_SORT_VALUE = -2_147_483_648L;
 
     private final ObjectMapper objectMapper;
     private final SavedFilterService savedFilterService;
@@ -556,6 +560,20 @@ public class SavedFilterExecutionService {
                 yield new SortSpec("rank", "wi.rank", direction, CursorKind.RANK);
             }
             case "workspacesequencenumber" -> new SortSpec("workspaceSequenceNumber", "wi.workspace_sequence_number", direction, CursorKind.LONG);
+            case "createdat" -> new SortSpec("createdAt", "wi.created_at", direction, CursorKind.TIMESTAMP);
+            case "updatedat" -> new SortSpec("updatedAt", "wi.updated_at", direction, CursorKind.TIMESTAMP);
+            case "duedate" -> new SortSpec(
+                    "dueDate",
+                    "asc".equals(direction) ? "coalesce(wi.due_date, date '9999-12-31')" : "coalesce(wi.due_date, date '0001-01-01')",
+                    direction,
+                    CursorKind.DATE
+            );
+            case "priority", "prioritysortorder" -> new SortSpec(
+                    "priority",
+                    "asc".equals(direction) ? "coalesce(pr.sort_order, 2147483647)::bigint" : "coalesce(pr.sort_order, -2147483648)::bigint",
+                    direction,
+                    CursorKind.LONG
+            );
             default -> throw badRequest("Unsupported saved filter sort field: " + field);
         };
     }
@@ -569,6 +587,20 @@ public class SavedFilterExecutionService {
                     List.of(decoded.rank(), decoded.rank(), decoded.id())
             );
         }
+        if (sort.kind() == CursorKind.TIMESTAMP) {
+            PageCursorCodec.TimestampCursor decoded = PageCursorCodec.decodeTimestamp(cursor);
+            return new CursorPredicate(
+                    "(" + sort.expression() + " " + operator + " ? or (" + sort.expression() + " = ? and wi.id::text > ?))",
+                    List.of(decoded.createdAt(), decoded.createdAt(), decoded.id())
+            );
+        }
+        if (sort.kind() == CursorKind.DATE) {
+            PageCursorCodec.DateCursor decoded = PageCursorCodec.decodeDate(cursor);
+            return new CursorPredicate(
+                    "(" + sort.expression() + " " + operator + " ? or (" + sort.expression() + " = ? and wi.id::text > ?))",
+                    List.of(decoded.date(), decoded.date(), decoded.id())
+            );
+        }
         PageCursorCodec.LongCursor decoded = PageCursorCodec.decodeLong(cursor);
         return new CursorPredicate(
                 "(" + sort.expression() + " " + operator + " ? or (" + sort.expression() + " = ? and wi.id::text > ?))",
@@ -579,6 +611,22 @@ public class SavedFilterExecutionService {
     private String encodeCursor(SortSpec sort, WorkItem item) {
         if (sort.kind() == CursorKind.RANK) {
             return PageCursorCodec.encodeRank(item.getRank(), item.getId().toString());
+        }
+        if (sort.kind() == CursorKind.TIMESTAMP) {
+            OffsetDateTime value = "updatedAt".equals(sort.field()) ? item.getUpdatedAt() : item.getCreatedAt();
+            return PageCursorCodec.encodeTimestamp(value, item.getId().toString());
+        }
+        if (sort.kind() == CursorKind.DATE) {
+            LocalDate value = item.getDueDate() == null
+                    ? ("asc".equals(sort.direction()) ? NULL_DUE_DATE_ASC_SORT_VALUE : NULL_DUE_DATE_DESC_SORT_VALUE)
+                    : item.getDueDate();
+            return PageCursorCodec.encodeDate(value, item.getId().toString());
+        }
+        if ("priority".equals(sort.field())) {
+            long value = item.getPriority() == null || item.getPriority().getSortOrder() == null
+                    ? ("asc".equals(sort.direction()) ? NULL_PRIORITY_ASC_SORT_VALUE : NULL_PRIORITY_DESC_SORT_VALUE)
+                    : item.getPriority().getSortOrder();
+            return PageCursorCodec.encodeLong(value, item.getId().toString());
         }
         return PageCursorCodec.encodeLong(item.getWorkspaceSequenceNumber(), item.getId().toString());
     }
@@ -792,6 +840,8 @@ public class SavedFilterExecutionService {
 
     private enum CursorKind {
         RANK,
+        TIMESTAMP,
+        DATE,
         LONG
     }
 

@@ -6,7 +6,7 @@ This document is the frontend-facing companion to generated OpenAPI. The backend
 
 - Base path: `/api/v1`
 - JSON content type: `application/json`
-- Auth: `Authorization: Bearer <jwt-or-api-token>` for API clients. Browser cookie auth is supported after login, but unsafe cookie-authenticated requests must send the CSRF header returned by `GET /api/v1/auth/csrf`.
+- Auth: `Authorization: Bearer <jwt-or-api-token>` for direct API clients. The browser frontend uses the HTTP-only auth cookie set by login and does not store access tokens in local storage. Unsafe cookie-authenticated requests must send the CSRF header returned by `GET /api/v1/auth/csrf`.
 - IDs are UUID strings unless an entity exposes a human key such as `workItem.key`.
 - Timestamps are ISO-8601 strings with offset.
 - Errors use Spring's standard error body for now; frontend should branch mainly on HTTP status.
@@ -354,6 +354,8 @@ export interface AgentTask {
 }
 ```
 
+Browser UI code should use `AuthSession.user` and the auth cookie. The returned `accessToken` remains part of the API response for direct API tools and non-browser clients, not as browser session storage.
+
 ## Common Flows
 
 1. First setup: `POST /api/v1/setup`, then store IDs from `workspace`, `project`, `adminUser`, and `seedData`.
@@ -405,7 +407,7 @@ The query JSON stored on the saved filter supports:
 - Predicates: use `where` for a predicate/group or `filters` as an implicit `and` group. Boolean groups use `{ "op": "and" | "or", "conditions": [...] }`.
 - System fields: `{ "field": "title", "operator": "contains", "value": "api" }`.
 - Custom fields: `{ "customFieldKey": "customer", "operator": "eq", "value": "Acme" }` or `customFieldId`.
-- Sort: `workspaceSequenceNumber` for any scope, or `rank` for one-project scopes.
+- Sort: `workspaceSequenceNumber`, `createdAt`, `updatedAt`, `dueDate`, and `priority` for work item scopes. `rank` is available when the saved filter resolves to one project.
 
 ```json
 {
@@ -419,7 +421,7 @@ The query JSON stored on the saved filter supports:
       { "customFieldKey": "customer", "operator": "eq", "value": "Acme" }
     ]
   },
-  "sort": [{ "field": "workspaceSequenceNumber", "direction": "asc" }]
+  "sort": [{ "field": "dueDate", "direction": "asc" }]
 }
 ```
 

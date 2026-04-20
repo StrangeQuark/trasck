@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should the frontend cookie/CSRF auth pass remove access-token local storage entirely for browser sessions, or keep a clearly labeled development override for manual API-token testing?
-    - Answer: Remove access-token local storage entirely for the browser sessions and build better admin/API-token tooling now
-2. Should the frontend domain expansion introduce full route-based navigation immediately, or keep a single console shell with tabs until the screens stabilize?
-    - Answer: Build full route-based navigation immediately
-3. Should the saved-filter builder UI expose only structured predicate controls first, or include an expert JSON editor for the backend query shape from the beginning?
-    - Answer: Include an expert JSON editor
-4. Should saved-filter execution add more sort fields such as `createdAt`, `updatedAt`, `dueDate`, and `priority` before the frontend query builder, or is `workspaceSequenceNumber`/single-project `rank` enough for the first UI?
-    - Answer: Add more sort fields
+1. Should field configuration CRUD start with workspace-level field configuration schemes only, or include project/type override assignment APIs in the first pass?
+    - Answer: Include project/type override in the first pass
+2. Should the next backend configuration pass implement board APIs before release/roadmap APIs, or build board, release, and roadmap APIs together because they share planning screens?
+    - Answer: Build them all together
+3. Should notification and automation APIs start as disabled configuration surfaces, or include a first executable email/webhook/automation runner in the same pass?
+    - Answer: Include the first executable email/webhook/automation runner in the same pass
+4. Should the route-based frontend get Vitest/Testing Library smoke coverage now, or wait until the next data-loading polish pass replaces more raw ID inputs with selectors?
+    - Answer: Start adding tests to the frontend now
 
 ## Current State
 
@@ -35,28 +35,11 @@ Activity and audit foundations are implemented. Static and configured durable co
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client including saved-filter execution, feature-specific API service wrappers, local API-base configuration, and first setup/login/current-user/project work item/dashboard render/agent task flows.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client including saved-filter execution, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, and first setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/agent provider/profile/repository/task flows.
 
 ## Primary Next Steps
 
-### 1. Frontend Auth, Toasts, And Domain Expansion
-
-Goal: move the browser frontend to the chosen cookie/CSRF session shape, add normalized user-facing error handling, and expand the console into the selected product workflows.
-
-Planned work:
-
-- Switch normal browser auth to HTTP-only cookie sessions plus `GET /api/v1/auth/csrf` for unsafe methods.
-- Add normalized API error mapping and global toast/error presentation instead of only panel-local errors.
-- Add navigation/routing or a tabbed shell based on the question above.
-- Build frontend flows for team/planning configuration, saved filter/view/dashboard builder screens, and agent provider/profile setup.
-- Keep feature-specific frontend API services as the boundary around the generated `TrasckApiClient`.
-- Keep both generated `openapi.json` and `trasckApi.ts` committed when the backend contract changes.
-
-Done when:
-
-- The selected frontend workflows can be exercised end to end from the Vite React app with cookie/CSRF auth and consistent user-facing errors.
-
-### 2. Remaining Backend Configuration Hardening
+### 1. Remaining Backend Configuration Hardening
 
 Goal: close the remaining backend configuration gaps that are better finished after the first frontend/API contract pass exposes real usage.
 
@@ -70,7 +53,7 @@ Done when:
 
 - The remaining backend configuration APIs have service-layer permission checks, targeted integration coverage, and a clear contract for frontend screens.
 
-### 3. Backend Reliability And Permission Hardening
+### 2. Backend Reliability And Permission Hardening
 
 Goal: keep the growing backend safe enough for manual product testing.
 
@@ -84,6 +67,21 @@ Planned work:
 Done when:
 
 - A full backend test run gives useful confidence that core product, reporting, admin, and agent flows still align with the spec.
+
+### 3. Frontend Usability And Test Hardening
+
+Goal: turn the route-based console from broad API coverage into a smoother manual-test surface.
+
+Planned work:
+
+- Add frontend smoke tests for route rendering, cookie/CSRF request behavior, and global toast/error mapping.
+- Replace high-friction raw ID inputs with selectors fed by existing list endpoints where backend coverage already exists.
+- Add loading and empty states per route that distinguish unauthorized, missing ID, and empty-result conditions.
+- Add lightweight route guards that steer signed-out users to auth/setup routes without blocking public future routes.
+
+Done when:
+
+- A user can move through setup, auth, project work, planning, filters, dashboards, tokens, and agents with fewer manual ID lookups and frontend build/test coverage.
 
 ## Remaining Dashboard/Report APIs
 
@@ -122,8 +120,8 @@ The following work should be completed before the application is ready for a mea
 
 ### Frontend Readiness
 
-- Move normal browser auth to cookie plus CSRF and keep Bearer access tokens only for API-tool/development use if that remains useful.
-- Add normalized frontend toast/error handling before broader manual testing.
+- Keep normal browser auth on cookie plus CSRF with no browser access-token local storage.
+- Use the route-based frontend shell and global toast/error handling as the manual-test surface.
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
-- Build frontend flows for team/planning configuration, dashboard construction, saved filters/views, and agent provider/profile setup.
+- Add frontend route smoke tests and replace raw ID inputs with selectors as the corresponding list endpoints stabilize.

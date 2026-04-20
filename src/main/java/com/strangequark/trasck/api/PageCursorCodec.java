@@ -1,6 +1,7 @@
 package com.strangequark.trasck.api;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.List;
@@ -35,6 +36,22 @@ public final class PageCursorCodec {
         }
         try {
             return new TimestampCursor(OffsetDateTime.parse(parts.get(0)), parts.get(1));
+        } catch (Exception ex) {
+            throw badCursor();
+        }
+    }
+
+    public static String encodeDate(LocalDate date, String id) {
+        return encode(List.of(required(date, "date").toString(), required(id, "id")));
+    }
+
+    public static DateCursor decodeDate(String cursor) {
+        List<String> parts = decode(cursor);
+        if (parts.size() != 2 || parts.get(0).isBlank() || parts.get(1).isBlank()) {
+            throw badCursor();
+        }
+        try {
+            return new DateCursor(LocalDate.parse(parts.get(0)), parts.get(1));
         } catch (Exception ex) {
             throw badCursor();
         }
@@ -88,6 +105,9 @@ public final class PageCursorCodec {
     }
 
     public record TimestampCursor(OffsetDateTime createdAt, String id) {
+    }
+
+    public record DateCursor(LocalDate date, String id) {
     }
 
     public record LongCursor(long value, String id) {

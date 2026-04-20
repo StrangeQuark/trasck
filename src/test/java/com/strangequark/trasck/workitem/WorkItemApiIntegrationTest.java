@@ -133,6 +133,12 @@ class WorkItemApiIntegrationTest {
 
         JsonNode secondEpic = createWorkItem(projectId, actorId, "epic", null, "Second epic", null);
         UUID secondEpicId = uuid(secondEpic, "/id");
+        patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
+                .put("dueDate", "2026-04-20")
+                .put("priorityKey", "critical"));
+        patch("/api/v1/work-items/" + secondEpicId, objectMapper.createObjectNode()
+                .put("dueDate", "2026-05-01")
+                .put("priorityKey", "low"));
         JsonNode updatedStory = patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
                 .put("title", "Implement story with parent change")
                 .put("parentId", secondEpicId.toString()));
@@ -595,6 +601,40 @@ class WorkItemApiIntegrationTest {
         UUID invalidExecutableFilterId = uuid(invalidExecutableFilter, "/id");
         assertThat(get("/api/v1/saved-filters/" + invalidExecutableFilterId + "/work-items").statusCode()).isEqualTo(400);
 
+        ObjectNode dueDateSortQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        dueDateSortQuery.set("sort", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("field", "dueDate")
+                .put("direction", "asc")));
+        JsonNode dueDateSortFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Due date sort")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", dueDateSortQuery));
+        UUID dueDateSortFilterId = uuid(dueDateSortFilter, "/id");
+        JsonNode dueDateSortResults = getJson("/api/v1/saved-filters/" + dueDateSortFilterId + "/work-items?limit=2");
+        assertThat(uuid(dueDateSortResults, "/items/0/id")).isEqualTo(storyId);
+        assertThat(uuid(dueDateSortResults, "/items/1/id")).isEqualTo(secondEpicId);
+
+        ObjectNode prioritySortQuery = objectMapper.createObjectNode()
+                .put("entityType", "work_item")
+                .put("projectId", projectId.toString());
+        prioritySortQuery.set("sort", objectMapper.createArrayNode().add(objectMapper.createObjectNode()
+                .put("field", "priority")
+                .put("direction", "desc")));
+        JsonNode prioritySortFilter = postJson("/api/v1/workspaces/" + workspaceId + "/saved-filters", objectMapper.createObjectNode()
+                .put("name", "Priority sort")
+                .put("visibility", "project")
+                .put("projectId", projectId.toString())
+                .set("query", prioritySortQuery));
+        UUID prioritySortFilterId = uuid(prioritySortFilter, "/id");
+        JsonNode priorityFirstPage = getJson("/api/v1/saved-filters/" + prioritySortFilterId + "/work-items?limit=1");
+        assertThat(uuid(priorityFirstPage, "/items/0/id")).isEqualTo(storyId);
+        assertThat(priorityFirstPage.at("/hasMore").asBoolean()).isTrue();
+        JsonNode prioritySecondPage = getJson("/api/v1/saved-filters/" + prioritySortFilterId + "/work-items?limit=1&cursor=" + priorityFirstPage.at("/nextCursor").asText());
+        assertThat(prioritySecondPage.at("/items")).hasSize(1);
+
         JsonNode savedView = postJson("/api/v1/workspaces/" + workspaceId + "/personalization/views", objectMapper.createObjectNode()
                 .put("name", "My project work")
                 .put("viewType", "work_items")
@@ -771,6 +811,8 @@ class WorkItemApiIntegrationTest {
         assertThat(delete("/api/v1/personalization/views/" + projectSavedViewId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/personalization/views/" + teamSavedViewId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + invalidExecutableFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + prioritySortFilterId).statusCode()).isEqualTo(204);
+        assertThat(delete("/api/v1/saved-filters/" + dueDateSortFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + pagedFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + executableFilterId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/saved-filters/" + savedFilterId).statusCode()).isEqualTo(204);
