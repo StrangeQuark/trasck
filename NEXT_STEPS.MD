@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should automation webhook/email actions keep executing inline for now, or move to queued delivery workers before UI screens expose automation execution?
-    - Answer: Move to queued delivery workers
-2. Should the next planning UI pass prioritize board/release/roadmap selectors and CRUD screens, or add richer board work-item query endpoints first so boards can render real cards?
+1. Should parsed CSV/Jira/Rally import records stay review-only until mapping templates exist, or should the next pass create work items directly from a minimal default mapping?
+    - Answer: The next pass is going to implement mapping templates, so create work items as well during that time
+2. Should automation and webhook delivery workers stay manually triggered through admin endpoints for now, or should backend scheduled workers be enabled behind workspace-level settings?
     - Answer: Implement both
-3. Should import jobs remain manual lifecycle shells for now, or should the next pass implement a CSV/Jira/Rally parser behind the generic import job model?
-    - Answer: Implement a CSV/Jira/Rally parser
-4. Should notification preferences stay user-self-service only, or should workspace admins get default notification policy endpoints and screens?
-    - Answer: Implement both
+3. Should email automation actions use a development log/outbox provider first, or should SMTP configuration be added before email actions leave queued execution logs?
+    - Answer: Sure, use maildev for a development provider now, but make sure you add a note somewhere in NEXT_STEPS so we don't forget to implement the SMTP config and remove maildev later
+4. Should the next board frontend pass prioritize real draggable card/swimlane rendering, or finish update/archive forms for every configuration, planning, automation, and import entity first?
+    - Answer: Do both, first finish the forms for the entities and then implement real draggable card/swimlane rendering
 
 ## Current State
 
@@ -23,7 +23,7 @@ Authentication and authorization foundations are implemented. Username/password 
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, keep a single role value per project-team assignment, and manage workspace roadmaps. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/archive boards, board columns, swimlanes, releases, release scope, project roadmaps, roadmap items, iterations, iteration scope, commitments, closes, and incomplete-work carryover.
+Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, keep a single role value per project-team assignment, and manage workspace roadmaps. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/archive boards, board columns, swimlanes, releases, release scope, project roadmaps, roadmap items, iterations, iteration scope, commitments, closes, and incomplete-work carryover. Boards now expose per-column work item card data from configured status mappings for early browser board rendering.
 
 Reporting foundations include status, assignment, team, and estimate history writes plus dedicated read APIs for work item status history, assignment history, team history, estimate history, and work-log summaries. Project, workspace/project-set, and program dashboard summaries are implemented. Persisted snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`, with manual run/backfill/reconcile controls, raw snapshot read APIs, report-shaped time-series DTOs, and live/snapshot iteration report APIs. Configurable snapshot retention policies, dedicated cycle-time/iteration/velocity/cumulative-flow rollup tables, a generic experimental rollup table, manual rollup/backfill controls, archive-run metadata, and additive `rollupSeries` project snapshot output are implemented.
 
@@ -33,55 +33,57 @@ Product configuration APIs are implemented for the first backend pass. Workspace
 
 Activity and audit foundations are implemented. Static and configured durable consumers project domain events into cursor-page work-item/project/workspace activity streams, cursor-page workspace audit logs, and configured delivery rows. Tests cover durable outbox failure, retry, dead-letter, disabled consumers, unknown replay consumers, and multi-consumer delivery. Audit retention policy metadata is configurable per workspace; exports write JSON artifacts through configured attachment/object storage and create `export_jobs`, manual/scheduled pruning writes a stored export before deleting eligible rows, and workspace admins can list export jobs, inspect export metadata, and download stored export files.
 
+Automation and integration execution have moved beyond shells. Automation rule execution now creates queued jobs; admin worker endpoints process queued/failed jobs and expose succeeded/failed counts. Webhook actions create durable delivery rows, and an admin worker endpoint processes queued/failed webhook deliveries with bounded retry and `dead_letter` status. Email actions are still logged as queued work until an email delivery provider is selected. Notification preferences support both user self-service rows and workspace-admin default policy rows. Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records before materializing work items.
+
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client including saved-filter execution, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, first setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/agent provider/profile/repository/task flows, and a Vitest/Testing Library route smoke test.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent provider/profile/repository/task flows, selector-fed common IDs, and a Vitest/Testing Library route smoke test.
 
 ## Primary Next Steps
 
-### 1. Frontend Configuration Surfaces And Selectors
+### 1. Import Materialization And Delivery Administration
 
-Goal: expose the newly implemented backend configuration/planning/automation/import APIs in the route-based frontend without forcing users to copy IDs between screens.
+Goal: turn parsed/imported records and queued delivery rows into reviewable, operable product workflows.
 
 Planned work:
 
-- Add frontend services and screens for field configurations, boards, board columns, swimlanes, releases, roadmap items, notifications, notification preferences, automation rules/actions/conditions, webhooks, automation jobs, and import jobs.
-- Replace raw workspace/project/team/work-item/custom-field ID inputs with selectors fed by existing list endpoints.
-- Expand frontend route/service tests around configuration, planning, automation, import, cookie/CSRF behavior, and global error mapping.
+- Add import mapping templates and a materialization endpoint that can create or update work items from parsed CSV/Jira/Rally records.
+- Add webhook delivery retry/dead-letter administration endpoints and frontend controls for retrying, cancelling, and inspecting failed deliveries.
+- Add the first email delivery provider shape, starting with either development outbox rows or SMTP settings after the question above is answered.
+- Decide whether worker execution remains manual-only or gets scheduled behind workspace settings.
 
 Done when:
 
-- A user can configure fields/screens/boards/releases/roadmaps/notifications/automation/import jobs from the browser without manual ID lookup for common flows.
+- A user can parse imports, review records, materialize them into project work, and inspect/retry failed automation deliveries without database access.
 
-### 2. Backend Reliability And Permission Hardening
+### 2. Frontend Product Surface Depth
 
-Goal: keep the growing backend safe enough for manual product testing.
+Goal: make the browser console useful for manual product testing instead of only first-create flows.
+
+Planned work:
+
+- Add edit/archive/delete flows for custom fields, contexts, field configurations, screens, board columns, swimlanes, releases, roadmaps, automation rules/actions/conditions, webhooks, notification defaults, and import jobs.
+- Render board work item cards by column, then add swimlane grouping or drag/rank behavior after the question above is answered.
+- Expand route tests to exercise the new configuration, planning, automation, import, selector, cookie/CSRF, and global-error surfaces.
+
+Done when:
+
+- A user can operate the configuration/planning/automation/import surfaces from the browser without falling back to JSON-only previews for common edits.
+
+### 3. Backend Reliability And Permission Hardening
+
+Goal: keep the growing backend safe enough for a full manual product test.
 
 Planned work:
 
 - Add migration tests for every new schema change.
-- Expand permission tests for hierarchy, workflow, collaboration, user-management, team/planning, public read, dashboard/search/personalization, and attachment byte APIs.
-- Extend activity/audit projection coverage for request-changes, waiting-for-input, retry failures, cancellation failures, and external callback failures as those flows are added.
+- Expand permission tests for hierarchy, workflow, collaboration, user-management, team/planning, public read, dashboard/search/personalization, notification defaults, automation workers, import parsing/materialization, and attachment byte APIs.
+- Extend activity/audit projection coverage for request-changes, waiting-for-input, retry failures, cancellation failures, import materialization, notification default changes, and external callback/delivery failures.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 
 Done when:
 
-- A full backend test run gives useful confidence that core product, reporting, admin, and agent flows still align with the spec.
-
-### 3. Real Delivery, Import, And Export Execution
-
-Goal: move the remaining shell-like integration flows toward production behavior while preserving the provider-neutral model.
-
-Planned work:
-
-- Add queued webhook delivery workers, email delivery plumbing, retry/dead-letter administration, and delivery observability before exposing real external automation broadly.
-- Add the first import parser behind import jobs, starting with CSV or one vendor format after the import mapping shape is chosen.
-- Add generic export create/cancel/retry once a second export type exists.
-- Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral agent contract after the generic-worker protocol is exercised manually.
-
-Done when:
-
-- External-facing execution paths have durable retries, useful dead-letter states, and enough tests to support a full manual product test.
+- A full backend test run gives useful confidence that core product, reporting, admin, integration, and agent flows still align with the spec.
 
 ## Remaining Dashboard/Report APIs
 
@@ -95,10 +97,10 @@ The following work should be completed before the application is ready for a mea
 ### Backend Readiness
 
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
-- Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, and the latest personalization/custom-field paths as more APIs are exposed.
+- Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, and import parsing as more APIs are exposed.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
-- Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, and external callback failures as those flows are added.
-- Add queued delivery coverage for automation webhooks and email once delivery workers replace the current inline/logged first runner.
+- Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, import materialization, notification defaults, and external callback/delivery failures as those flows are added.
+- Add real email delivery plumbing and scheduled worker controls before exposing external automation broadly.
 
 ### Product Configuration Readiness
 
@@ -110,9 +112,10 @@ The following work should be completed before the application is ready for a mea
 
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for high-use list screens and detail pages.
-- Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, and attachment byte APIs.
+- Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, import materialization, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
-- Expand automation tests for queued delivery retries, dead-letter handling, and email/webhook delivery workers once they exist.
+- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, and email delivery once an email provider exists.
+- Expand import tests from parser coverage into mapping/materialization conflict and idempotency coverage.
 - Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, comments, activity events, audit entries, or API responses.
@@ -124,4 +127,4 @@ The following work should be completed before the application is ready for a mea
 - Use the route-based frontend shell and global toast/error handling as the manual-test surface.
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
-- Expand frontend route smoke tests and replace raw ID inputs with selectors as the corresponding list endpoints stabilize.
+- Expand frontend route smoke tests and replace remaining raw ID inputs only after corresponding list endpoints exist.

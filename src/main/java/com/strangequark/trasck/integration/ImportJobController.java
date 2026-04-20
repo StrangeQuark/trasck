@@ -59,6 +59,14 @@ public class ImportJobController {
         return importJobService.cancelImportJob(importJobId);
     }
 
+    @PostMapping("/import-jobs/{importJobId}/parse")
+    public ImportParseResponse parseImportJob(
+            @PathVariable UUID importJobId,
+            @RequestBody ImportParseRequest request
+    ) {
+        return importJobService.parse(importJobId, request);
+    }
+
     @GetMapping("/import-jobs/{importJobId}/records")
     public List<ImportJobRecordResponse> listRecords(@PathVariable UUID importJobId) {
         return importJobService.listRecords(importJobId);

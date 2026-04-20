@@ -11,7 +11,10 @@ import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.team.ProjectTeamRepository;
 import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
+import com.strangequark.trasck.workitem.WorkItemRepository;
+import com.strangequark.trasck.workitem.WorkItemResponse;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -29,6 +32,7 @@ public class BoardService {
     private final ProjectRepository projectRepository;
     private final TeamRepository teamRepository;
     private final ProjectTeamRepository projectTeamRepository;
+    private final WorkItemRepository workItemRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -41,6 +45,7 @@ public class BoardService {
             ProjectRepository projectRepository,
             TeamRepository teamRepository,
             ProjectTeamRepository projectTeamRepository,
+            WorkItemRepository workItemRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService
@@ -52,6 +57,7 @@ public class BoardService {
         this.projectRepository = projectRepository;
         this.teamRepository = teamRepository;
         this.projectTeamRepository = projectTeamRepository;
+        this.workItemRepository = workItemRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -177,6 +183,28 @@ public class BoardService {
         return boardSwimlaneRepository.findByBoardIdOrderByPositionAsc(board.getId()).stream()
                 .map(BoardSwimlaneResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public BoardWorkItemsResponse listBoardWorkItems(UUID boardId, Integer limitPerColumn) {
+        UUID actorId = currentUserService.requireUserId();
+        Board board = activeBoard(boardId);
+        permissionService.requireProjectPermission(actorId, board.getProjectId(), "work_item.read");
+        int limit = normalizeLimitPerColumn(limitPerColumn);
+        List<BoardColumnWorkItemsResponse> columns = boardColumnRepository.findByBoardIdOrderByPositionAsc(board.getId()).stream()
+                .map(column -> {
+                    List<UUID> statusIds = statusIds(column.getStatusIds());
+                    List<WorkItemResponse> items = statusIds.isEmpty()
+                            ? List.of()
+                            : workItemRepository.findByProjectIdAndStatusIdInAndDeletedAtIsNullOrderByRankAsc(board.getProjectId(), statusIds)
+                                    .stream()
+                                    .limit(limit)
+                                    .map(WorkItemResponse::from)
+                                    .toList();
+                    return new BoardColumnWorkItemsResponse(column.getId(), column.getName(), statusIds, items);
+                })
+                .toList();
+        return new BoardWorkItemsResponse(board.getId(), board.getProjectId(), limit, columns);
     }
 
     @Transactional
@@ -358,6 +386,23 @@ public class BoardService {
         return json;
     }
 
+    private List<UUID> statusIds(JsonNode value) {
+        if (value == null || !value.isArray()) {
+            return List.of();
+        }
+        List<UUID> ids = new ArrayList<>();
+        for (JsonNode item : value) {
+            if (item != null && item.isTextual() && hasText(item.asText())) {
+                try {
+                    ids.add(UUID.fromString(item.asText()));
+                } catch (IllegalArgumentException ignored) {
+                    // Invalid status IDs are ignored in board rendering so one bad config does not hide the whole board.
+                }
+            }
+        }
+        return ids;
+    }
+
     private void recordBoardEvent(Board board, String eventType, UUID actorId) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("boardId", board.getId().toString())
@@ -375,6 +420,16 @@ public class BoardService {
             throw badRequest(fieldName + " must be zero or greater");
         }
         return value;
+    }
+
+    private int normalizeLimitPerColumn(Integer limitPerColumn) {
+        if (limitPerColumn == null) {
+            return 50;
+        }
+        if (limitPerColumn < 1 || limitPerColumn > 200) {
+            throw badRequest("limitPerColumn must be between 1 and 200");
+        }
+        return limitPerColumn;
     }
 
     private <T> T required(T value, String fieldName) {

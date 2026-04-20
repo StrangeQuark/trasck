@@ -11,6 +11,8 @@ import com.strangequark.trasck.integration.Webhook;
 import com.strangequark.trasck.integration.WebhookDelivery;
 import com.strangequark.trasck.integration.WebhookDeliveryRepository;
 import com.strangequark.trasck.integration.WebhookDeliveryResponse;
+import com.strangequark.trasck.integration.WebhookDeliveryWorkerRequest;
+import com.strangequark.trasck.integration.WebhookDeliveryWorkerResponse;
 import com.strangequark.trasck.integration.WebhookRepository;
 import com.strangequark.trasck.integration.WebhookRequest;
 import com.strangequark.trasck.integration.WebhookResponse;
@@ -21,8 +23,13 @@ import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
@@ -49,6 +56,9 @@ public class AutomationService {
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build();
 
     public AutomationService(
             ObjectMapper objectMapper,
@@ -240,9 +250,44 @@ public class AutomationService {
         job.setAttempts(0);
         job.setCreatedAt(OffsetDateTime.now());
         AutomationExecutionJob saved = automationExecutionJobRepository.save(job);
-        runJob(rule, saved, actorId);
-        recordRuleEvent(rule, "automation.rule_executed", actorId);
+        recordRuleEvent(rule, "automation.rule_queued", actorId);
         return jobResponse(saved);
+    }
+
+    @Transactional
+    public AutomationExecutionJobResponse runJob(UUID jobId) {
+        UUID actorId = currentUserService.requireUserId();
+        AutomationExecutionJob job = automationExecutionJobRepository.findById(jobId).orElseThrow(() -> notFound("Automation execution job not found"));
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "automation.admin");
+        if (!List.of("queued", "failed").contains(job.getStatus())) {
+            throw badRequest("Only queued or failed automation jobs can be run");
+        }
+        AutomationRule rule = rule(job.getRuleId());
+        processJob(rule, job, actorId);
+        return jobResponse(job);
+    }
+
+    @Transactional
+    public AutomationWorkerRunResponse runQueuedJobs(UUID workspaceId, Integer limit) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        int pageLimit = normalizeWorkerLimit(limit);
+        List<AutomationExecutionJob> jobs = automationExecutionJobRepository.findProcessableJobs(workspaceId, OffsetDateTime.now(), pageLimit);
+        List<AutomationExecutionJobResponse> responses = new ArrayList<>();
+        int succeeded = 0;
+        int failed = 0;
+        for (AutomationExecutionJob job : jobs) {
+            AutomationRule rule = rule(job.getRuleId());
+            processJob(rule, job, actorId);
+            if ("succeeded".equals(job.getStatus())) {
+                succeeded++;
+            } else if ("failed".equals(job.getStatus())) {
+                failed++;
+            }
+            responses.add(jobResponse(job));
+        }
+        return new AutomationWorkerRunResponse(workspaceId, responses.size(), succeeded, failed, responses);
     }
 
     @Transactional(readOnly = true)
@@ -319,7 +364,34 @@ public class AutomationService {
                 .toList();
     }
 
-    private void runJob(AutomationRule rule, AutomationExecutionJob job, UUID actorId) {
+    @Transactional
+    public WebhookDeliveryWorkerResponse processWebhookDeliveries(UUID workspaceId, WebhookDeliveryWorkerRequest request) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        int limit = normalizeWorkerLimit(request == null ? null : request.limit());
+        int maxAttempts = normalizeMaxAttempts(request == null ? null : request.maxAttempts());
+        boolean dryRun = request == null || !Boolean.FALSE.equals(request.dryRun());
+        List<WebhookDelivery> deliveries = webhookDeliveryRepository.findProcessableDeliveries(workspaceId, OffsetDateTime.now(), limit);
+        List<WebhookDeliveryResponse> responses = new ArrayList<>();
+        int delivered = 0;
+        int failed = 0;
+        int deadLettered = 0;
+        for (WebhookDelivery delivery : deliveries) {
+            processWebhookDelivery(delivery, maxAttempts, dryRun);
+            if ("delivered".equals(delivery.getStatus())) {
+                delivered++;
+            } else if ("dead_letter".equals(delivery.getStatus())) {
+                deadLettered++;
+            } else {
+                failed++;
+            }
+            responses.add(WebhookDeliveryResponse.from(delivery));
+        }
+        return new WebhookDeliveryWorkerResponse(workspaceId, responses.size(), delivered, failed, deadLettered, responses);
+    }
+
+    private void processJob(AutomationRule rule, AutomationExecutionJob job, UUID actorId) {
         job.setStatus("running");
         job.setAttempts(job.getAttempts() == null ? 1 : job.getAttempts() + 1);
         job.setStartedAt(OffsetDateTime.now());
@@ -331,16 +403,21 @@ public class AutomationService {
             }
             job.setStatus("succeeded");
             job.setCompletedAt(OffsetDateTime.now());
+            job.setFailedAt(null);
+            job.setLastError(null);
+            job.setNextAttemptAt(null);
             automationExecutionJobRepository.save(job);
         } catch (ResponseStatusException ex) {
             job.setStatus("failed");
             job.setFailedAt(OffsetDateTime.now());
             job.setLastError(ex.getReason());
+            job.setNextAttemptAt(OffsetDateTime.now().plusMinutes(5));
             automationExecutionJobRepository.save(job);
         } catch (RuntimeException ex) {
             job.setStatus("failed");
             job.setFailedAt(OffsetDateTime.now());
             job.setLastError(ex.getMessage());
+            job.setNextAttemptAt(OffsetDateTime.now().plusMinutes(5));
             automationExecutionJobRepository.save(job);
         }
     }
@@ -348,10 +425,50 @@ public class AutomationService {
     private void runAction(AutomationRule rule, AutomationExecutionJob job, AutomationAction action, UUID actorId) {
         switch (action.getActionType()) {
             case "create_notification", "notification" -> runNotificationAction(rule, job, action, actorId);
-            case "email" -> log(job, action, "succeeded", "Email action queued for delivery", action.getConfig());
+            case "email" -> log(job, action, "queued", "Email delivery queued for worker dispatch", action.getConfig());
             case "webhook" -> runWebhookAction(rule, job, action);
             default -> log(job, action, "skipped", "No executable runner is registered for action type " + action.getActionType(), action.getConfig());
         }
+    }
+
+    private void processWebhookDelivery(WebhookDelivery delivery, int maxAttempts, boolean dryRun) {
+        Webhook webhook = webhook(delivery.getWebhookId());
+        int attempt = delivery.getAttemptCount() == null ? 1 : delivery.getAttemptCount() + 1;
+        delivery.setAttemptCount(attempt);
+        if (dryRun) {
+            delivery.setStatus("delivered");
+            delivery.setResponseCode(202);
+            delivery.setResponseBody("Dry-run delivery accepted by Trasck worker");
+            delivery.setNextRetryAt(null);
+            webhookDeliveryRepository.save(delivery);
+            return;
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(webhook.getUrl()))
+                    .timeout(Duration.ofSeconds(5))
+                    .header("Content-Type", "application/json")
+                    .header("X-Trasck-Event-Type", delivery.getEventType())
+                    .POST(HttpRequest.BodyPublishers.ofString(delivery.getPayload() == null ? "{}" : delivery.getPayload().toString()))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            delivery.setResponseCode(response.statusCode());
+            delivery.setResponseBody(truncate(response.body(), 4000));
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                delivery.setStatus("delivered");
+                delivery.setNextRetryAt(null);
+            } else {
+                markWebhookDeliveryFailed(delivery, attempt, maxAttempts, "HTTP " + response.statusCode());
+            }
+        } catch (Exception ex) {
+            markWebhookDeliveryFailed(delivery, attempt, maxAttempts, ex.getMessage());
+        }
+        webhookDeliveryRepository.save(delivery);
+    }
+
+    private void markWebhookDeliveryFailed(WebhookDelivery delivery, int attempt, int maxAttempts, String message) {
+        delivery.setStatus(attempt >= maxAttempts ? "dead_letter" : "failed");
+        delivery.setResponseBody(truncate(message, 4000));
+        delivery.setNextRetryAt(attempt >= maxAttempts ? null : OffsetDateTime.now().plusMinutes(Math.min(60, attempt * 5L)));
     }
 
     private void runNotificationAction(AutomationRule rule, AutomationExecutionJob job, AutomationAction action, UUID actorId) {
@@ -626,6 +743,33 @@ public class AutomationService {
             throw badRequest(fieldName + " must be zero or greater");
         }
         return value;
+    }
+
+    private int normalizeWorkerLimit(Integer limit) {
+        if (limit == null) {
+            return 25;
+        }
+        if (limit < 1 || limit > 100) {
+            throw badRequest("limit must be between 1 and 100");
+        }
+        return limit;
+    }
+
+    private int normalizeMaxAttempts(Integer maxAttempts) {
+        if (maxAttempts == null) {
+            return 3;
+        }
+        if (maxAttempts < 1 || maxAttempts > 20) {
+            throw badRequest("maxAttempts must be between 1 and 20");
+        }
+        return maxAttempts;
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private <T> T required(T value, String fieldName) {

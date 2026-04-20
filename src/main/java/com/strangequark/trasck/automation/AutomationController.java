@@ -1,6 +1,8 @@
 package com.strangequark.trasck.automation;
 
 import com.strangequark.trasck.integration.WebhookDeliveryResponse;
+import com.strangequark.trasck.integration.WebhookDeliveryWorkerRequest;
+import com.strangequark.trasck.integration.WebhookDeliveryWorkerResponse;
 import com.strangequark.trasck.integration.WebhookRequest;
 import com.strangequark.trasck.integration.WebhookResponse;
 import java.util.List;
@@ -114,6 +116,19 @@ public class AutomationController {
         return automationService.listJobs(ruleId);
     }
 
+    @PostMapping("/automation-jobs/{jobId}/run")
+    public AutomationExecutionJobResponse runJob(@PathVariable UUID jobId) {
+        return automationService.runJob(jobId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/automation-jobs/run-queued")
+    public AutomationWorkerRunResponse runQueuedJobs(
+            @PathVariable UUID workspaceId,
+            @RequestBody(required = false) AutomationWorkerRunRequest request
+    ) {
+        return automationService.runQueuedJobs(workspaceId, request == null ? null : request.limit());
+    }
+
     @GetMapping("/automation-jobs/{jobId}")
     public AutomationExecutionJobResponse getJob(@PathVariable UUID jobId) {
         return automationService.getJob(jobId);
@@ -143,5 +158,13 @@ public class AutomationController {
     @GetMapping("/webhooks/{webhookId}/deliveries")
     public List<WebhookDeliveryResponse> listWebhookDeliveries(@PathVariable UUID webhookId) {
         return automationService.listWebhookDeliveries(webhookId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/webhook-deliveries/process")
+    public WebhookDeliveryWorkerResponse processWebhookDeliveries(
+            @PathVariable UUID workspaceId,
+            @RequestBody(required = false) WebhookDeliveryWorkerRequest request
+    ) {
+        return automationService.processWebhookDeliveries(workspaceId, request);
     }
 }
