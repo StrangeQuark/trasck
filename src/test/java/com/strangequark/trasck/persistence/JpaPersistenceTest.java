@@ -237,6 +237,8 @@ class JpaPersistenceTest {
         assertThat(columnExists("import_job_record_versions", "snapshot")).isTrue();
         assertThat(columnExists("import_workspace_settings", "sample_jobs_enabled")).isTrue();
         assertThat(columnExists("agent_dispatch_attempts", "idempotency_key")).isTrue();
+        assertThat(columnExists("export_jobs", "request_payload")).isTrue();
+        assertThat(columnExists("export_jobs", "created_at")).isTrue();
     }
 
     @Test

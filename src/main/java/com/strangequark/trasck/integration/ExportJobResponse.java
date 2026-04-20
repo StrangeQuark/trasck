@@ -1,5 +1,6 @@
 package com.strangequark.trasck.integration;
 
+import com.strangequark.trasck.JsonValues;
 import com.strangequark.trasck.activity.Attachment;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -15,6 +16,9 @@ public record ExportJobResponse(
         String contentType,
         Long sizeBytes,
         String checksum,
+        Object requestPayload,
+        String errorMessage,
+        OffsetDateTime createdAt,
         OffsetDateTime startedAt,
         OffsetDateTime finishedAt
 ) {
@@ -30,6 +34,9 @@ public record ExportJobResponse(
                 attachment == null ? null : attachment.getContentType(),
                 attachment == null ? null : attachment.getSizeBytes(),
                 attachment == null ? null : attachment.getChecksum(),
+                JsonValues.toJavaValue(job.getRequestPayload()),
+                job.getErrorMessage(),
+                job.getCreatedAt(),
                 job.getStartedAt(),
                 job.getFinishedAt()
         );

@@ -2,20 +2,34 @@ package com.strangequark.trasck.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.strangequark.trasck.JsonValues;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.access.Role;
 import com.strangequark.trasck.access.RoleRepository;
 import com.strangequark.trasck.access.WorkspaceMembership;
 import com.strangequark.trasck.access.WorkspaceMembershipRepository;
+import com.strangequark.trasck.activity.Attachment;
 import com.strangequark.trasck.activity.Comment;
 import com.strangequark.trasck.activity.CommentRepository;
+import com.strangequark.trasck.activity.AttachmentRepository;
+import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
+import com.strangequark.trasck.activity.storage.AttachmentStorageService;
+import com.strangequark.trasck.activity.storage.AttachmentUpload;
+import com.strangequark.trasck.activity.storage.StoredAttachment;
+import com.strangequark.trasck.api.CursorPageResponse;
+import com.strangequark.trasck.api.PageCursorCodec;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.event.EventConsumerConfig;
 import com.strangequark.trasck.event.EventConsumerConfigRepository;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
+import com.strangequark.trasck.integration.ExportJob;
+import com.strangequark.trasck.integration.ExportJobRepository;
+import com.strangequark.trasck.integration.ExportJobResponse;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistory;
@@ -34,7 +48,10 @@ import com.strangequark.trasck.workflow.WorkflowTransition;
 import com.strangequark.trasck.workflow.WorkflowTransitionAction;
 import com.strangequark.trasck.workflow.WorkflowTransitionActionRepository;
 import com.strangequark.trasck.workflow.WorkflowTransitionRepository;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -52,6 +69,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class AgentService {
 
     private static final List<String> ACTIVE_TASK_STATUSES = List.of("queued", "running", "waiting_for_input");
+    private static final int DEFAULT_DISPATCH_ATTEMPT_EXPORT_LIMIT = 1_000;
+    private static final int MAX_DISPATCH_ATTEMPT_EXPORT_LIMIT = 10_000;
+    private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
 
     private final ObjectMapper objectMapper;
     private final AgentProviderRepository agentProviderRepository;
@@ -65,6 +85,10 @@ public class AgentService {
     private final AgentArtifactRepository agentArtifactRepository;
     private final AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
     private final AgentDispatchAttemptRepository agentDispatchAttemptRepository;
+    private final ExportJobRepository exportJobRepository;
+    private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorageService attachmentStorageService;
     private final EventConsumerConfigRepository eventConsumerConfigRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
@@ -99,6 +123,10 @@ public class AgentService {
             AgentArtifactRepository agentArtifactRepository,
             AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository,
             AgentDispatchAttemptRepository agentDispatchAttemptRepository,
+            ExportJobRepository exportJobRepository,
+            AttachmentStorageConfigRepository attachmentStorageConfigRepository,
+            AttachmentRepository attachmentRepository,
+            AttachmentStorageService attachmentStorageService,
             EventConsumerConfigRepository eventConsumerConfigRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
@@ -132,6 +160,10 @@ public class AgentService {
         this.agentArtifactRepository = agentArtifactRepository;
         this.agentTaskRepositoryLinkRepository = agentTaskRepositoryLinkRepository;
         this.agentDispatchAttemptRepository = agentDispatchAttemptRepository;
+        this.exportJobRepository = exportJobRepository;
+        this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
+        this.attachmentRepository = attachmentRepository;
+        this.attachmentStorageService = attachmentStorageService;
         this.eventConsumerConfigRepository = eventConsumerConfigRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
@@ -162,6 +194,190 @@ public class AgentService {
         return agentProviderRepository.findByWorkspaceIdOrderByCreatedAtAsc(workspaceId).stream()
                 .map(AgentProviderResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public CursorPageResponse<AgentDispatchAttemptResponse> listDispatchAttempts(
+            UUID workspaceId,
+            UUID agentTaskId,
+            UUID providerId,
+            UUID agentProfileId,
+            UUID workItemId,
+            String attemptType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo,
+            Integer limit,
+            String cursor
+    ) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        AgentDispatchAttemptFilter filter = dispatchAttemptFilter(agentTaskId, providerId, agentProfileId, workItemId, attemptType, status, startedFrom, startedTo);
+        int pageLimit = normalizeListLimit(limit, 50, 200);
+        PageCursorCodec.TimestampCursor decoded = cursor == null || cursor.isBlank() ? null : PageCursorCodec.decodeTimestamp(cursor);
+        List<AgentDispatchAttempt> page = agentDispatchAttemptRepository.findFilteredPage(
+                workspaceId,
+                filter.agentTaskId(),
+                filter.providerId(),
+                filter.agentProfileId(),
+                filter.workItemId(),
+                filter.attemptType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
+                null,
+                decoded == null ? null : decoded.createdAt(),
+                decoded == null ? null : decoded.id(),
+                pageLimit + 1
+        );
+        boolean hasMore = page.size() > pageLimit;
+        List<AgentDispatchAttempt> items = hasMore ? page.subList(0, pageLimit) : page;
+        String nextCursor = hasMore
+                ? PageCursorCodec.encodeTimestamp(items.get(items.size() - 1).getStartedAt(), items.get(items.size() - 1).getId().toString())
+                : null;
+        return new CursorPageResponse<>(
+                items.stream().map(AgentDispatchAttemptResponse::from).toList(),
+                nextCursor,
+                hasMore,
+                pageLimit
+        );
+    }
+
+    @Transactional
+    public ExportJobResponse exportDispatchAttempts(UUID workspaceId, AgentDispatchAttemptExportRequest request) {
+        AgentDispatchAttemptExportRequest exportRequest = request == null
+                ? new AgentDispatchAttemptExportRequest(null, null, null, null, null, null, null, null, null)
+                : request;
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        AgentDispatchAttemptFilter filter = dispatchAttemptFilter(
+                exportRequest.agentTaskId(),
+                exportRequest.providerId(),
+                exportRequest.agentProfileId(),
+                exportRequest.workItemId(),
+                exportRequest.attemptType(),
+                exportRequest.status(),
+                exportRequest.startedFrom(),
+                exportRequest.startedTo()
+        );
+        int exportLimit = normalizeListLimit(exportRequest.limit(), DEFAULT_DISPATCH_ATTEMPT_EXPORT_LIMIT, MAX_DISPATCH_ATTEMPT_EXPORT_LIMIT);
+        List<AgentDispatchAttempt> attempts = agentDispatchAttemptRepository.findFilteredPage(
+                workspaceId,
+                filter.agentTaskId(),
+                filter.providerId(),
+                filter.agentProfileId(),
+                filter.workItemId(),
+                filter.attemptType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
+                null,
+                null,
+                null,
+                exportLimit
+        );
+        return storeDispatchAttemptExport(workspaceId, actorId, filter, null, attempts);
+    }
+
+    @Transactional
+    public AgentDispatchAttemptRetentionResponse pruneDispatchAttempts(UUID workspaceId, AgentDispatchAttemptRetentionRequest request) {
+        AgentDispatchAttemptRetentionRequest retentionRequest = request == null
+                ? new AgentDispatchAttemptRetentionRequest(null, null, null, null, null, null, null, null, null, null)
+                : request;
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        AgentDispatchAttemptFilter filter = dispatchAttemptFilter(
+                retentionRequest.agentTaskId(),
+                retentionRequest.providerId(),
+                retentionRequest.agentProfileId(),
+                retentionRequest.workItemId(),
+                retentionRequest.attemptType(),
+                retentionRequest.status(),
+                retentionRequest.startedFrom(),
+                retentionRequest.startedTo()
+        );
+        int retentionDays = retentionRequest.retentionDays() == null ? 30 : retentionRequest.retentionDays();
+        if (retentionDays < 1 || retentionDays > 3650) {
+            throw badRequest("retentionDays must be between 1 and 3650");
+        }
+        OffsetDateTime cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(retentionDays);
+        long eligible = agentDispatchAttemptRepository.countFiltered(
+                workspaceId,
+                filter.agentTaskId(),
+                filter.providerId(),
+                filter.agentProfileId(),
+                filter.workItemId(),
+                filter.attemptType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
+                cutoff
+        );
+        if (eligible > MAX_DISPATCH_ATTEMPT_EXPORT_LIMIT) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Too many dispatch attempts are eligible for a single retention prune export");
+        }
+        List<AgentDispatchAttempt> attempts = agentDispatchAttemptRepository.findFilteredPage(
+                workspaceId,
+                filter.agentTaskId(),
+                filter.providerId(),
+                filter.agentProfileId(),
+                filter.workItemId(),
+                filter.attemptType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
+                cutoff,
+                null,
+                null,
+                MAX_DISPATCH_ATTEMPT_EXPORT_LIMIT
+        );
+        ExportJobResponse export = eligible > 0 && !Boolean.FALSE.equals(retentionRequest.exportBeforePrune())
+                ? storeDispatchAttemptExport(workspaceId, actorId, filter, cutoff, attempts)
+                : null;
+        int pruned = agentDispatchAttemptRepository.deleteFilteredBefore(
+                workspaceId,
+                filter.agentTaskId(),
+                filter.providerId(),
+                filter.agentProfileId(),
+                filter.workItemId(),
+                filter.attemptType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
+                cutoff
+        );
+        ObjectNode payload = dispatchAttemptFilterPayload(filter)
+                .put("workspaceId", workspaceId.toString())
+                .put("cutoff", cutoff.toString())
+                .put("attemptsEligible", eligible)
+                .put("attemptsPruned", pruned)
+                .put("actorUserId", actorId.toString());
+        if (export != null) {
+            payload.put("exportJobId", export.id().toString());
+            payload.put("fileAttachmentId", export.fileAttachmentId().toString());
+        }
+        domainEventService.record(workspaceId, "agent_dispatch_attempt", workspaceId, "agent.dispatch_attempts.pruned", payload);
+        return new AgentDispatchAttemptRetentionResponse(
+                workspaceId,
+                filter.agentTaskId(),
+                filter.providerId(),
+                filter.agentProfileId(),
+                filter.workItemId(),
+                filter.attemptType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
+                cutoff,
+                eligible,
+                attempts.size(),
+                pruned,
+                export == null ? null : export.id(),
+                export == null ? null : export.fileAttachmentId(),
+                attempts.stream().map(AgentDispatchAttemptResponse::from).toList()
+        );
     }
 
     @Transactional
@@ -225,6 +441,83 @@ public class AgentService {
         syncWorkerWebhookConsumer(saved);
         recordWorkspaceEvent(saved.getWorkspaceId(), "agent_provider", saved.getId(), "agent.provider.updated", actorId, payloadForProvider(saved, actorId));
         return AgentProviderResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public AgentRuntimePreviewResponse previewRuntime(UUID providerId, AgentRuntimePreviewRequest request) {
+        AgentRuntimePreviewRequest previewRequest = request == null ? new AgentRuntimePreviewRequest(null, null, null) : request;
+        AgentProvider provider = agentProviderRepository.findById(providerId).orElseThrow(() -> notFound("Agent provider not found"));
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, provider.getWorkspaceId(), "agent.provider.manage");
+        String action = normalizeRuntimePreviewAction(previewRequest.action());
+        UUID taskId = UUID.randomUUID();
+        UUID profileId = previewRequest.agentProfileId() == null ? new UUID(0L, 0L) : previewRequest.agentProfileId();
+        if (previewRequest.agentProfileId() != null) {
+            AgentProfile profile = agentProfileRepository.findByIdAndWorkspaceId(previewRequest.agentProfileId(), provider.getWorkspaceId())
+                    .orElseThrow(() -> badRequest("Agent profile not found in provider workspace"));
+            if (!provider.getId().equals(profile.getProviderId())) {
+                throw badRequest("Agent profile does not use this provider");
+            }
+        }
+        try {
+            adapter(provider.getProviderType()).validateProvider(provider);
+            ObjectNode payload;
+            String runtimeMode;
+            String transport;
+            Boolean externalExecutionEnabled;
+            if (List.of("codex", "claude_code").contains(provider.getProviderType())) {
+                ExternalAgentRuntimeConfig runtime = ExternalAgentRuntimeConfig.from(objectMapper, provider.getProviderType(), provider);
+                runtime.validate();
+                runtimeMode = runtime.mode();
+                transport = runtime.transport();
+                externalExecutionEnabled = runtime.externalExecutionEnabled();
+                payload = runtime.previewPayload(taskId, profileId, provider, action);
+            } else {
+                runtimeMode = "provider_native";
+                transport = provider.getDispatchMode();
+                externalExecutionEnabled = false;
+                payload = objectMapper.createObjectNode()
+                        .put("adapter", provider.getProviderType())
+                        .put("protocolVersion", "trasck.agent-runtime-preview.v1")
+                        .put("action", action)
+                        .put("providerRuntime", runtimeMode)
+                        .put("transport", firstText(provider.getDispatchMode(), "managed"))
+                        .put("externalDispatch", false)
+                        .put("externalExecutionEnabled", false)
+                        .put("agentTaskId", taskId.toString())
+                        .put("providerId", provider.getId().toString())
+                        .put("providerKey", provider.getProviderKey())
+                        .put("agentProfileId", profileId.toString());
+            }
+            if (previewRequest.workItemId() != null) {
+                payload.put("workItemId", previewRequest.workItemId().toString());
+            }
+            return new AgentRuntimePreviewResponse(
+                    provider.getId(),
+                    provider.getProviderKey(),
+                    provider.getProviderType(),
+                    provider.getDispatchMode(),
+                    runtimeMode,
+                    transport,
+                    externalExecutionEnabled,
+                    true,
+                    List.of(),
+                    JsonValues.toJavaValue(payload)
+            );
+        } catch (RuntimeException ex) {
+            return new AgentRuntimePreviewResponse(
+                    provider.getId(),
+                    provider.getProviderKey(),
+                    provider.getProviderType(),
+                    provider.getDispatchMode(),
+                    null,
+                    null,
+                    null,
+                    false,
+                    List.of(firstText(ex.getMessage(), ex.getClass().getSimpleName())),
+                    Map.of()
+            );
+        }
     }
 
     private void syncWorkerWebhookConsumer(AgentProvider provider) {
@@ -595,7 +888,12 @@ public class AgentService {
         }
         AgentProfile profile = activeProfile(task.getWorkspaceId(), task.getAgentProfileId());
         AgentProvider provider = activeProvider(task.getWorkspaceId(), task.getProviderId());
-        recordCancelAttempt(task, provider, profile, actorId);
+        boolean cancelDispatched = recordCancelAttempt(task, provider, profile, actorId);
+        if (!cancelDispatched) {
+            WorkItem item = activeWorkItem(task.getWorkItemId());
+            recordAgentTaskEvent(task, item, provider, profile, "agent.task.cancel_failed", actorId, null);
+            return response(task, null);
+        }
         task.setStatus("canceled");
         task.setCanceledAt(OffsetDateTime.now());
         AgentTask saved = agentTaskRepository.save(task);
@@ -859,8 +1157,15 @@ public class AgentService {
                     ? adapter(provider.getProviderType()).retry(task, provider, profile)
                     : adapter(provider.getProviderType()).dispatch(task, provider, profile);
         } catch (RuntimeException ex) {
-            persistDispatchAttempt(task, provider, profile, actorId, attemptType, "failed", null, null, ex.getMessage(), startedAt);
-            throw ex;
+            task.setStatus("failed");
+            task.setFailedAt(OffsetDateTime.now());
+            AgentTask failed = agentTaskRepository.save(task);
+            String message = firstText(ex.getMessage(), ex.getClass().getSimpleName());
+            persistDispatchAttempt(failed, provider, profile, actorId, attemptType, "failed", null, null, message, startedAt);
+            appendTaskEvent(failed, attemptType + "_failed", "error", "Agent task " + attemptType + " failed at provider boundary.", objectMapper.createObjectNode()
+                    .put("errorMessage", truncate(message, 2_000)));
+            recordAgentTaskEvent(failed, item, provider, profile, retry ? "agent.task.retry_failed" : "agent.task.dispatch_failed", actorId, message);
+            return null;
         }
         task.setExternalTaskId(result.externalTaskId());
         task.setStatus("running");
@@ -876,7 +1181,7 @@ public class AgentService {
         return callbackToken;
     }
 
-    private void recordCancelAttempt(AgentTask task, AgentProvider provider, AgentProfile profile, UUID actorId) {
+    private boolean recordCancelAttempt(AgentTask task, AgentProvider provider, AgentProfile profile, UUID actorId) {
         OffsetDateTime startedAt = OffsetDateTime.now();
         try {
             adapter(provider.getProviderType()).cancel(task, provider, profile);
@@ -887,9 +1192,13 @@ public class AgentService {
                     .put("providerId", provider.getId().toString())
                     .put("transport", firstText(task.getDispatchMode(), provider.getDispatchMode()))
                     .put("idempotencyKey", provider.getProviderType() + ":" + task.getId() + ":cancel"), null, startedAt);
+            return true;
         } catch (RuntimeException ex) {
-            persistDispatchAttempt(task, provider, profile, actorId, "cancel", "failed", task.getExternalTaskId(), null, ex.getMessage(), startedAt);
-            throw ex;
+            String message = firstText(ex.getMessage(), ex.getClass().getSimpleName());
+            persistDispatchAttempt(task, provider, profile, actorId, "cancel", "failed", task.getExternalTaskId(), null, message, startedAt);
+            appendTaskEvent(task, "cancel_failed", "error", "Agent task cancellation failed at provider boundary.", objectMapper.createObjectNode()
+                    .put("errorMessage", truncate(message, 2_000)));
+            return false;
         }
     }
 
@@ -905,7 +1214,16 @@ public class AgentService {
             String errorMessage,
             OffsetDateTime startedAt
     ) {
-        JsonNode requestPayload = payload == null ? objectMapper.createObjectNode() : payload;
+        JsonNode requestPayload = payload == null
+                ? objectMapper.createObjectNode()
+                        .put("adapter", provider.getProviderType())
+                        .put("action", attemptType)
+                        .put("agentTaskId", task.getId().toString())
+                        .put("providerId", provider.getId().toString())
+                        .put("agentProfileId", profile.getId().toString())
+                        .put("transport", firstText(task.getDispatchMode(), provider.getDispatchMode()))
+                        .put("idempotencyKey", provider.getProviderType() + ":" + task.getId() + ":" + attemptType)
+                : payload;
         ObjectNode responsePayload = objectMapper.createObjectNode()
                 .put("status", status);
         if (hasText(externalTaskId)) {
@@ -935,6 +1253,105 @@ public class AgentService {
         attempt.setStartedAt(startedAt);
         attempt.setFinishedAt(OffsetDateTime.now());
         agentDispatchAttemptRepository.save(attempt);
+    }
+
+    private ExportJobResponse storeDispatchAttemptExport(
+            UUID workspaceId,
+            UUID actorId,
+            AgentDispatchAttemptFilter filter,
+            OffsetDateTime retentionCutoff,
+            List<AgentDispatchAttempt> attempts
+    ) {
+        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(workspaceId)
+                .orElseThrow(() -> badRequest("Default attachment storage config not found"));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        byte[] content = dispatchAttemptExportContent(workspaceId, actorId, filter, retentionCutoff, attempts, now);
+        String filename = "agent-dispatch-attempts-" + workspaceId + dispatchAttemptExportFilenameSuffix(filter) + "-" + now.format(EXPORT_FILENAME_TIME) + ".json";
+        StoredAttachment stored = attachmentStorageService.store(
+                storageConfig,
+                new AttachmentUpload(filename, "application/json", content, null)
+        );
+        try {
+            Attachment attachment = new Attachment();
+            attachment.setWorkspaceId(workspaceId);
+            attachment.setStorageConfigId(storageConfig.getId());
+            attachment.setUploaderId(actorId);
+            attachment.setFilename(filename);
+            attachment.setContentType("application/json");
+            attachment.setStorageKey(stored.storageKey());
+            attachment.setSizeBytes(stored.sizeBytes());
+            attachment.setChecksum(stored.checksum());
+            attachment.setVisibility("restricted");
+            Attachment savedAttachment = attachmentRepository.save(attachment);
+
+            ExportJob exportJob = new ExportJob();
+            exportJob.setWorkspaceId(workspaceId);
+            exportJob.setRequestedById(actorId);
+            exportJob.setExportType("agent_dispatch_attempts");
+            exportJob.setStatus("completed");
+            exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setRequestPayload(dispatchAttemptFilterPayload(filter));
+            exportJob.setCreatedAt(now);
+            exportJob.setStartedAt(now);
+            exportJob.setFinishedAt(now);
+            ExportJob savedExportJob = exportJobRepository.save(exportJob);
+            ObjectNode payload = dispatchAttemptFilterPayload(filter)
+                    .put("workspaceId", workspaceId.toString())
+                    .put("exportJobId", savedExportJob.getId().toString())
+                    .put("fileAttachmentId", savedAttachment.getId().toString())
+                    .put("attemptsIncluded", attempts.size())
+                    .put("actorUserId", actorId.toString());
+            if (retentionCutoff != null) {
+                payload.put("retentionCutoff", retentionCutoff.toString());
+            }
+            domainEventService.record(workspaceId, "agent_dispatch_attempt", workspaceId, "agent.dispatch_attempts.exported", payload);
+            return ExportJobResponse.from(savedExportJob, savedAttachment);
+        } catch (RuntimeException ex) {
+            attachmentStorageService.delete(storageConfig, stored.storageKey());
+            throw ex;
+        }
+    }
+
+    private byte[] dispatchAttemptExportContent(
+            UUID workspaceId,
+            UUID actorId,
+            AgentDispatchAttemptFilter filter,
+            OffsetDateTime retentionCutoff,
+            List<AgentDispatchAttempt> attempts,
+            OffsetDateTime exportedAt
+    ) {
+        ObjectNode document = dispatchAttemptFilterPayload(filter)
+                .put("workspaceId", workspaceId.toString())
+                .put("exportedAt", exportedAt.toString())
+                .put("attemptsIncluded", attempts.size());
+        if (actorId != null) {
+            document.put("actorUserId", actorId.toString());
+        }
+        if (retentionCutoff != null) {
+            document.put("retentionCutoff", retentionCutoff.toString());
+        }
+        ArrayNode rows = objectMapper.createArrayNode();
+        attempts.stream()
+                .map(AgentDispatchAttemptResponse::from)
+                .map(attempt -> (JsonNode) objectMapper.valueToTree(attempt))
+                .forEach(rows::add);
+        document.set("attempts", rows);
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(document);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Could not serialize agent dispatch attempt export", ex);
+        }
+    }
+
+    private String dispatchAttemptExportFilenameSuffix(AgentDispatchAttemptFilter filter) {
+        List<String> parts = new ArrayList<>();
+        if (filter.attemptType() != null) {
+            parts.add(filter.attemptType());
+        }
+        if (filter.status() != null) {
+            parts.add(filter.status());
+        }
+        return parts.isEmpty() ? "" : "-" + String.join("-", parts);
     }
 
     private void linkRepositories(AgentTask task, WorkItem item, List<UUID> repositoryConnectionIds) {
@@ -1528,6 +1945,98 @@ public class AgentService {
         return normalized;
     }
 
+    private AgentDispatchAttemptFilter dispatchAttemptFilter(
+            UUID agentTaskId,
+            UUID providerId,
+            UUID agentProfileId,
+            UUID workItemId,
+            String attemptType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo
+    ) {
+        if (startedFrom != null && startedTo != null && startedFrom.isAfter(startedTo)) {
+            throw badRequest("startedFrom must be before or equal to startedTo");
+        }
+        return new AgentDispatchAttemptFilter(
+                agentTaskId,
+                providerId,
+                agentProfileId,
+                workItemId,
+                normalizeDispatchAttemptType(attemptType),
+                normalizeDispatchAttemptStatus(status),
+                startedFrom,
+                startedTo
+        );
+    }
+
+    private String normalizeDispatchAttemptType(String attemptType) {
+        if (!hasText(attemptType) || "all".equalsIgnoreCase(attemptType.trim())) {
+            return null;
+        }
+        String normalized = normalizeKey(attemptType);
+        if (!List.of("dispatch", "retry", "cancel").contains(normalized)) {
+            throw badRequest("attemptType must be dispatch, retry, or cancel");
+        }
+        return normalized;
+    }
+
+    private String normalizeDispatchAttemptStatus(String status) {
+        if (!hasText(status) || "all".equalsIgnoreCase(status.trim())) {
+            return null;
+        }
+        String normalized = normalizeKey(status);
+        if (!List.of("succeeded", "failed").contains(normalized)) {
+            throw badRequest("status must be succeeded or failed");
+        }
+        return normalized;
+    }
+
+    private String normalizeRuntimePreviewAction(String action) {
+        String normalized = normalizeKey(firstText(action, "dispatched"));
+        if (!List.of("dispatched", "retried", "cancelled", "canceled").contains(normalized)) {
+            throw badRequest("action must be dispatched, retried, or cancelled");
+        }
+        return "canceled".equals(normalized) ? "cancelled" : normalized;
+    }
+
+    private int normalizeListLimit(Integer limit, int defaultLimit, int maxLimit) {
+        int normalized = limit == null ? defaultLimit : limit;
+        if (normalized < 1 || normalized > maxLimit) {
+            throw badRequest("limit must be between 1 and " + maxLimit);
+        }
+        return normalized;
+    }
+
+    private ObjectNode dispatchAttemptFilterPayload(AgentDispatchAttemptFilter filter) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        if (filter.agentTaskId() != null) {
+            payload.put("agentTaskId", filter.agentTaskId().toString());
+        }
+        if (filter.providerId() != null) {
+            payload.put("providerId", filter.providerId().toString());
+        }
+        if (filter.agentProfileId() != null) {
+            payload.put("agentProfileId", filter.agentProfileId().toString());
+        }
+        if (filter.workItemId() != null) {
+            payload.put("workItemId", filter.workItemId().toString());
+        }
+        if (filter.attemptType() != null) {
+            payload.put("attemptType", filter.attemptType());
+        }
+        if (filter.status() != null) {
+            payload.put("status", filter.status());
+        }
+        if (filter.startedFrom() != null) {
+            payload.put("startedFrom", filter.startedFrom().toString());
+        }
+        if (filter.startedTo() != null) {
+            payload.put("startedTo", filter.startedTo().toString());
+        }
+        return payload;
+    }
+
     private boolean isTerminal(String status) {
         return List.of("completed", "failed", "canceled").contains(status);
     }
@@ -1608,5 +2117,17 @@ public class AgentService {
 
     private ResponseStatusException notFound(String message) {
         return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+    }
+
+    private record AgentDispatchAttemptFilter(
+            UUID agentTaskId,
+            UUID providerId,
+            UUID agentProfileId,
+            UUID workItemId,
+            String attemptType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo
+    ) {
     }
 }

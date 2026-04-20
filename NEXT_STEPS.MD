@@ -4,12 +4,12 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should agent dispatch attempts get their own admin list/export/retention endpoints before real hosted API or CLI-worker execution is enabled, or is exposing them on each agent task enough for the next external-runtime pass?
-    - Answer: Give them their own admin list/export/retention endpoints
-2. Should import review CSV export jobs stay synchronous for the current review tables, or should large review exports move to queued export jobs with progress/status before public testing?
-    - Answer: Move to queued export jobs
-3. Should worker run retention filters expand beyond `workerType` to include `triggerType`, `status`, or date-range filters, or keep retention pruning intentionally narrow for now?
-    - Answer: Include triggertype, status, and date-range filters now
+1. Should queued import review CSV export jobs be picked up by the shared scheduled worker next, or remain manually processed through the admin endpoint until a broader export-job worker design exists?
+    - Answer: Allow it to be picked up by the shared scheduled worker
+2. Should agent dispatch attempt retention get workspace-level defaults and automatic scheduled pruning, or remain manual admin export/prune until real external adapters are enabled?
+    - Answer: Give workspace-level default and automatic scheduled pruning
+3. Should the first real Codex/Claude execution pass start with provider-specific credential validation, or start with a generic external-worker protocol that Codex/Claude adapters can implement later?
+    - Answer: Start with real provider-specific credential validation.
 
 ## Current State
 
@@ -25,34 +25,19 @@ Team, planning, board, reporting, dashboard, saved filter, saved view, personali
 
 Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered, versioned, diffed, materialized, conflicted, resolved, rerun, completed with guarded open-conflict acceptance, and exercised through checked-in CSV/Jira/Rally sample payload flows. Reusable transform presets have immutable version records, clone-from-version recovery, clone-and-retarget preview/apply, template-local overrides, value lookups, type translations, status translations, materialization snapshots, exact/modified reruns, and conflict-resolution worker pickup.
 
-Import review operations now have backend-generated export-job artifacts for job-level version diffs, conflict-resolution job audit tables, import export-artifact tables, and project/workspace import-completion metrics. The frontend passes current table filter state into those backend CSV export jobs and records the artifact in the shared export-job history/download flow. Smaller tables that do not yet need durable audit artifacts can still use local client-side CSV export.
+Import review operations now have backend-generated export-job artifacts for job-level version diffs, conflict-resolution job audit tables, import export-artifact tables, and project/workspace import-completion metrics. The frontend passes current table filter state into queued backend CSV export jobs, lets admins process queued review exports, and records completed artifacts in the shared export-job history/download flow. Smaller tables that do not yet need durable audit artifacts can still use local client-side CSV export.
 
 Import demo job endpoints remain workspace-admin-only. Local/default runtimes default sample jobs on for developer walkthroughs but workspace admins can toggle `sampleJobsEnabled` per workspace through import settings; production-like `prod`, `production`, `staging`, and `hosted` profiles require both the workspace setting and explicit deployment enablement with `TRASCK_IMPORT_SAMPLE_JOBS_ENABLED=true`.
 
-Automation, webhook, email, and import conflict-resolution worker executions write dedicated `automation_worker_runs` and `automation_worker_health` rows. Operations screens can filter run/health previews by worker type. Manual worker-run retention export and pruning now also accept `workerType`, so admins can export/prune automation, webhook, email, or import conflict-resolution worker history independently. Automatic retention pruning remains all-worker-type by design.
+Automation, webhook, email, and import conflict-resolution worker executions write dedicated `automation_worker_runs` and `automation_worker_health` rows. Operations screens can filter run/health previews by worker type. Manual worker-run retention export and pruning accept `workerType`, `triggerType`, `status`, and start-time range filters, so admins can export/prune targeted worker history without deleting unrelated run records. Automatic retention pruning remains all-worker-type by design.
 
-Agent delivery hardening keeps the generic worker protocol as the main extensibility path while Codex and Claude Code adapters expose explicit `stub`, `hosted_api`, and hardened `cli_worker` runtime modes behind the provider-neutral adapter contract. External execution must be intentionally enabled in provider config; CLI-worker config accepts named allowlisted command profiles instead of raw shell commands. Dispatch, retry, and cancel boundaries are now persisted in first-class `agent_dispatch_attempts` rows and included in `AgentTaskResponse.dispatchAttempts`, giving admins and tests a durable view of idempotency keys, payloads, external task IDs, transport, provider type, and failure messages before real external execution is enabled.
+Agent delivery hardening keeps the generic worker protocol as the main extensibility path while Codex and Claude Code adapters expose explicit `stub`, `hosted_api`, and hardened `cli_worker` runtime modes behind the provider-neutral adapter contract. External execution must be intentionally enabled in provider config; CLI-worker config accepts named allowlisted command profiles instead of raw shell commands. Provider runtime preview lets admins inspect non-stub payloads without dispatching work. Dispatch, retry, and cancel boundaries are persisted in first-class `agent_dispatch_attempts` rows, included in `AgentTaskResponse.dispatchAttempts`, and exposed through workspace admin list/export/prune endpoints so admins and tests have a durable view of idempotency keys, payloads, external task IDs, transport, provider type, and failure messages before real external execution is enabled.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, backend-generated filtered import review CSV export artifacts, import diff export artifact history/download controls, import completion metrics tables, and Vitest/Testing Library coverage.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
 ## Primary Next Steps
 
-### 1. External Agent Runtime Validation And Admin Preview
-
-Goal: prepare real hosted API or CLI-worker execution without making normal tests or local development call external systems.
-
-Planned work:
-
-- Add admin-facing validation/preview for Codex/Claude hosted API and CLI-worker runtime config.
-- Surface persisted dispatch attempts clearly in the agent task UI, including retry/cancel attempts and failure payloads.
-- Keep generic-worker compatibility as the fallback protocol for future providers.
-- Add targeted tests for dispatch-attempt failure recording, retry idempotency, cancel failures, and redaction boundaries.
-
-Done when:
-
-- A workspace admin can inspect exactly what would be sent to a non-stub adapter, prove idempotency/retry/cancel behavior at the boundary, and enable real execution only through explicit configuration.
-
-### 2. Manual End-To-End Product Test Pass
+### 1. Manual End-To-End Product Test Pass
 
 Goal: validate the now-operable automation, webhook, email, import, board, dashboard, and agent surfaces against realistic local data before public testing.
 
@@ -65,6 +50,20 @@ Planned work:
 Done when:
 
 - A local tester can operate delivery workers, inspect failures, retry/cancel jobs, export/prune worker history, create guarded sample imports, review/import conflict outcomes, and inspect agent task dispatch attempts without touching the database.
+
+### 2. Queued Operations Worker Consolidation
+
+Goal: reduce manual-only admin processing paths before broader user testing.
+
+Planned work:
+
+- Decide whether queued import review CSV exports should be picked up by the shared scheduled worker or wait for a generic export-job worker.
+- Align import review export jobs, audit/retention export jobs, and agent dispatch-attempt export jobs around one operations model where practical.
+- Keep external agent execution disabled by default while preserving runtime preview and dispatch-attempt inspection.
+
+Done when:
+
+- Admins can understand which queued/export/retention jobs are manual, which are scheduled, and where each job's artifact or failure can be inspected.
 
 ## Remaining Dashboard/Report APIs
 
@@ -79,7 +78,6 @@ The following work should be completed before the application is ready for a mea
 
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization/record editing/history/conflict resolution, and worker history as more APIs are exposed.
-- Decide whether `agent_dispatch_attempts` need dedicated admin list/export/retention endpoints before any real hosted API or CLI-worker execution is enabled.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import review export jobs, import record versions, clone-retarget, snapshot reruns, and external callback/delivery failures as those flows are added.
 - Review dedicated automatic worker-run pruning interval/window defaults after manual worker history grows enough to validate cadence.
 - Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials.
@@ -97,7 +95,7 @@ The following work should be completed before the application is ready for a mea
 - Add repository/query tests for high-use list screens and detail pages.
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization/conflicts/record editing/history, agent dispatch attempts, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
-- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, manual and automatic worker run retention schedule/window/throttle behavior, worker-type retention filters, SMTP provider settings, and Maildev/SMTP email delivery.
+- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, manual and automatic worker run retention schedule/window/throttle behavior, worker-type/trigger/status/date-range retention filters, SMTP provider settings, and Maildev/SMTP email delivery.
 - Expand import tests from parser/materialization/sample-fixture/backend-sample coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, conflict update semantics, production-profile sample gating, guarded completion reporting screens, durable review CSV export jobs, and field-specific import review UI assertions.
 - Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.

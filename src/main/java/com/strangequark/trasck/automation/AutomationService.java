@@ -65,7 +65,6 @@ import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -439,28 +438,43 @@ public class AutomationService {
     }
 
     @Transactional
-    public AutomationWorkerRunRetentionResponse exportWorkerRuns(UUID workspaceId, Integer limit, String workerType) {
+    public AutomationWorkerRunRetentionResponse exportWorkerRuns(
+            UUID workspaceId,
+            Integer limit,
+            String workerType,
+            String triggerType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo
+    ) {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
-        String normalizedWorkerType = normalizeWorkerTypeFilter(workerType);
-        WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, normalizeRetentionExportLimit(limit), normalizedWorkerType);
+        WorkerRunRetentionFilter filter = workerRunRetentionFilter(workerType, triggerType, status, startedFrom, startedTo);
+        WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, normalizeRetentionExportLimit(limit), filter);
         StoredWorkerRunRetentionExport export = storeWorkerRunRetentionExport(workspaceId, actorId, snapshot);
         return workerRunRetentionResponse(workspaceId, snapshot, export, 0);
     }
 
     @Transactional
-    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(UUID workspaceId, String workerType) {
+    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(
+            UUID workspaceId,
+            String workerType,
+            String triggerType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo
+    ) {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
-        return pruneWorkerRuns(workspaceId, actorId, normalizeWorkerTypeFilter(workerType));
+        return pruneWorkerRuns(workspaceId, actorId, workerRunRetentionFilter(workerType, triggerType, status, startedFrom, startedTo));
     }
 
     @Transactional
     public AutomationWorkerRunRetentionResponse pruneWorkerRunsInternal(UUID workspaceId) {
         activeWorkspace(workspaceId);
-        return pruneWorkerRuns(workspaceId, null, null);
+        return pruneWorkerRuns(workspaceId, null, WorkerRunRetentionFilter.empty());
     }
 
     @Transactional
@@ -473,14 +487,14 @@ public class AutomationService {
         }
         settings.setWorkerRunPruningLastStartedAt(now);
         automationWorkerSettingsRepository.save(settings);
-        AutomationWorkerRunRetentionResponse response = pruneWorkerRuns(workspaceId, null, null);
+        AutomationWorkerRunRetentionResponse response = pruneWorkerRuns(workspaceId, null, WorkerRunRetentionFilter.empty());
         settings.setWorkerRunPruningLastFinishedAt(OffsetDateTime.now(ZoneOffset.UTC));
         automationWorkerSettingsRepository.save(settings);
         return response;
     }
 
-    private AutomationWorkerRunRetentionResponse pruneWorkerRuns(UUID workspaceId, UUID actorId, String workerType) {
-        WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, MAX_WORKER_RUN_RETENTION_EXPORT_ROWS, workerType);
+    private AutomationWorkerRunRetentionResponse pruneWorkerRuns(UUID workspaceId, UUID actorId, WorkerRunRetentionFilter filter) {
+        WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, MAX_WORKER_RUN_RETENTION_EXPORT_ROWS, filter);
         if (snapshot.runsEligible() > MAX_WORKER_RUN_RETENTION_EXPORT_ROWS) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -494,16 +508,20 @@ public class AutomationService {
                         : null;
         int pruned = snapshot.cutoff() == null
                 ? 0
-                : snapshot.workerType() == null
-                        ? automationWorkerRunRepository.deleteRetainedRuns(workspaceId, snapshot.cutoff())
-                        : automationWorkerRunRepository.deleteRetainedRunsByWorkerType(workspaceId, snapshot.workerType(), snapshot.cutoff());
+                : automationWorkerRunRepository.deleteRetainedRunsFiltered(
+                        workspaceId,
+                        snapshot.filter().workerType(),
+                        snapshot.filter().triggerType(),
+                        snapshot.filter().status(),
+                        snapshot.filter().startedFrom(),
+                        snapshot.filter().startedTo(),
+                        snapshot.cutoff()
+                );
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("workspaceId", workspaceId.toString())
                 .put("runsEligible", snapshot.runsEligible())
                 .put("runsPruned", pruned);
-        if (snapshot.workerType() != null) {
-            payload.put("workerType", snapshot.workerType());
-        }
+        appendWorkerRunRetentionFilter(payload, snapshot.filter());
         if (actorId != null) {
             payload.put("actorUserId", actorId.toString());
         }
@@ -1267,32 +1285,38 @@ public class AutomationService {
         return ZoneOffset.UTC;
     }
 
-    private WorkerRunRetentionSnapshot workerRunRetentionSnapshot(UUID workspaceId, int limit, String workerType) {
+    private WorkerRunRetentionSnapshot workerRunRetentionSnapshot(UUID workspaceId, int limit, WorkerRunRetentionFilter filter) {
         AutomationWorkerSettings settings = workerSettings(workspaceId);
         OffsetDateTime cutoff = workerRunRetentionCutoff(settings);
         long eligible = cutoff == null
                 ? 0
-                : workerType == null
-                        ? automationWorkerRunRepository.countByWorkspaceIdAndStartedAtBefore(workspaceId, cutoff)
-                        : automationWorkerRunRepository.countByWorkspaceIdAndWorkerTypeAndStartedAtBefore(workspaceId, workerType, cutoff);
+                : automationWorkerRunRepository.countRetainedRunsFiltered(
+                        workspaceId,
+                        filter.workerType(),
+                        filter.triggerType(),
+                        filter.status(),
+                        filter.startedFrom(),
+                        filter.startedTo(),
+                        cutoff
+                );
         List<AutomationWorkerRunHistoryResponse> runs = cutoff == null
                 ? List.of()
-                : retainedWorkerRuns(workspaceId, workerType, cutoff, limit).stream()
+                : retainedWorkerRuns(workspaceId, filter, cutoff, limit).stream()
                         .map(AutomationWorkerRunHistoryResponse::from)
                         .toList();
-        return new WorkerRunRetentionSnapshot(settings, workerType, cutoff, eligible, runs);
+        return new WorkerRunRetentionSnapshot(settings, filter, cutoff, eligible, runs);
     }
 
-    private List<AutomationWorkerRun> retainedWorkerRuns(UUID workspaceId, String workerType, OffsetDateTime cutoff, int limit) {
-        PageRequest page = PageRequest.of(0, limit);
-        if (workerType == null) {
-            return automationWorkerRunRepository.findByWorkspaceIdAndStartedAtBeforeOrderByStartedAtAsc(workspaceId, cutoff, page);
-        }
-        return automationWorkerRunRepository.findByWorkspaceIdAndWorkerTypeAndStartedAtBeforeOrderByStartedAtAsc(
+    private List<AutomationWorkerRun> retainedWorkerRuns(UUID workspaceId, WorkerRunRetentionFilter filter, OffsetDateTime cutoff, int limit) {
+        return automationWorkerRunRepository.findRetainedRunsFiltered(
                 workspaceId,
-                workerType,
+                filter.workerType(),
+                filter.triggerType(),
+                filter.status(),
+                filter.startedFrom(),
+                filter.startedTo(),
                 cutoff,
-                page
+                limit
         );
     }
 
@@ -1313,7 +1337,7 @@ public class AutomationService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         String filename = "automation-worker-runs-"
                 + workspaceId
-                + (snapshot.workerType() == null ? "" : "-" + snapshot.workerType())
+                + workerRunRetentionFilenameSuffix(snapshot.filter())
                 + "-"
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".json";
@@ -1341,6 +1365,8 @@ public class AutomationService {
             exportJob.setExportType("automation_worker_runs");
             exportJob.setStatus("completed");
             exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setRequestPayload(workerRunRetentionFilterPayload(snapshot.filter()));
+            exportJob.setCreatedAt(now);
             exportJob.setStartedAt(now);
             exportJob.setFinishedAt(now);
             ExportJob savedExportJob = exportJobRepository.save(exportJob);
@@ -1364,9 +1390,7 @@ public class AutomationService {
                 .put("exportBeforePrune", Boolean.TRUE.equals(snapshot.settings().getWorkerRunExportBeforePrune()))
                 .put("runsEligible", snapshot.runsEligible())
                 .put("runsIncluded", snapshot.runs().size());
-        if (snapshot.workerType() != null) {
-            document.put("workerType", snapshot.workerType());
-        }
+        appendWorkerRunRetentionFilter(document, snapshot.filter());
         if (actorId != null) {
             document.put("actorUserId", actorId.toString());
         }
@@ -1392,7 +1416,11 @@ public class AutomationService {
     ) {
         return new AutomationWorkerRunRetentionResponse(
                 workspaceId,
-                snapshot.workerType(),
+                snapshot.filter().workerType(),
+                snapshot.filter().triggerType(),
+                snapshot.filter().status(),
+                snapshot.filter().startedFrom(),
+                snapshot.filter().startedTo(),
                 Boolean.TRUE.equals(snapshot.settings().getWorkerRunRetentionEnabled()),
                 snapshot.settings().getWorkerRunRetentionDays(),
                 Boolean.TRUE.equals(snapshot.settings().getWorkerRunExportBeforePrune()),
@@ -1756,6 +1784,85 @@ public class AutomationService {
         return normalized;
     }
 
+    private WorkerRunRetentionFilter workerRunRetentionFilter(
+            String workerType,
+            String triggerType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo
+    ) {
+        if (startedFrom != null && startedTo != null && startedFrom.isAfter(startedTo)) {
+            throw badRequest("startedFrom must be before or equal to startedTo");
+        }
+        return new WorkerRunRetentionFilter(
+                normalizeWorkerTypeFilter(workerType),
+                normalizeWorkerRunTriggerType(triggerType),
+                normalizeWorkerRunStatus(status),
+                startedFrom,
+                startedTo
+        );
+    }
+
+    private String normalizeWorkerRunTriggerType(String triggerType) {
+        if (!hasText(triggerType) || "all".equalsIgnoreCase(triggerType.trim())) {
+            return null;
+        }
+        String normalized = triggerType.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (!List.of("manual", "scheduled").contains(normalized)) {
+            throw badRequest("triggerType must be manual or scheduled");
+        }
+        return normalized;
+    }
+
+    private String normalizeWorkerRunStatus(String status) {
+        if (!hasText(status) || "all".equalsIgnoreCase(status.trim())) {
+            return null;
+        }
+        String normalized = status.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (!List.of("running", "succeeded", "failed").contains(normalized)) {
+            throw badRequest("status must be running, succeeded, or failed");
+        }
+        return normalized;
+    }
+
+    private String workerRunRetentionFilenameSuffix(WorkerRunRetentionFilter filter) {
+        List<String> parts = new ArrayList<>();
+        if (filter.workerType() != null) {
+            parts.add(filter.workerType());
+        }
+        if (filter.triggerType() != null) {
+            parts.add(filter.triggerType());
+        }
+        if (filter.status() != null) {
+            parts.add(filter.status());
+        }
+        return parts.isEmpty() ? "" : "-" + String.join("-", parts);
+    }
+
+    private ObjectNode workerRunRetentionFilterPayload(WorkerRunRetentionFilter filter) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        appendWorkerRunRetentionFilter(payload, filter);
+        return payload;
+    }
+
+    private void appendWorkerRunRetentionFilter(ObjectNode payload, WorkerRunRetentionFilter filter) {
+        if (filter.workerType() != null) {
+            payload.put("workerType", filter.workerType());
+        }
+        if (filter.triggerType() != null) {
+            payload.put("triggerType", filter.triggerType());
+        }
+        if (filter.status() != null) {
+            payload.put("status", filter.status());
+        }
+        if (filter.startedFrom() != null) {
+            payload.put("startedFrom", filter.startedFrom().toString());
+        }
+        if (filter.startedTo() != null) {
+            payload.put("startedTo", filter.startedTo().toString());
+        }
+    }
+
     private int normalizeRetentionExportLimit(Integer limit) {
         if (limit == null) {
             return 500;
@@ -1808,11 +1915,23 @@ public class AutomationService {
 
     private record WorkerRunRetentionSnapshot(
             AutomationWorkerSettings settings,
-            String workerType,
+            WorkerRunRetentionFilter filter,
             OffsetDateTime cutoff,
             long runsEligible,
             List<AutomationWorkerRunHistoryResponse> runs
     ) {
+    }
+
+    private record WorkerRunRetentionFilter(
+            String workerType,
+            String triggerType,
+            String status,
+            OffsetDateTime startedFrom,
+            OffsetDateTime startedTo
+    ) {
+        static WorkerRunRetentionFilter empty() {
+            return new WorkerRunRetentionFilter(null, null, null, null, null);
+        }
     }
 
     private record StoredWorkerRunRetentionExport(

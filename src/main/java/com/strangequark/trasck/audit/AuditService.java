@@ -223,7 +223,10 @@ public class AuditService {
     }
 
     private OffsetDateTime exportJobCursorStartedAt(ExportJob job) {
-        return job.getStartedAt() == null ? EXPORT_CURSOR_FLOOR : job.getStartedAt();
+        if (job.getStartedAt() != null) {
+            return job.getStartedAt();
+        }
+        return job.getCreatedAt() == null ? EXPORT_CURSOR_FLOOR : job.getCreatedAt();
     }
 
     @Transactional(readOnly = true)
@@ -330,6 +333,7 @@ public class AuditService {
             exportJob.setExportType("audit_retention");
             exportJob.setStatus("completed");
             exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setCreatedAt(now);
             exportJob.setStartedAt(now);
             exportJob.setFinishedAt(now);
             ExportJob savedExportJob = exportJobRepository.save(exportJob);

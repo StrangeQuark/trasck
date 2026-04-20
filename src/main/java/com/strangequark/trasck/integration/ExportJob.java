@@ -1,5 +1,6 @@
 package com.strangequark.trasck.integration;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -10,6 +11,8 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @DynamicInsert
@@ -36,6 +39,16 @@ public class ExportJob {
 
     @Column(name = "file_attachment_id")
     private UUID fileAttachmentId;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "request_payload")
+    private JsonNode requestPayload;
+
+    @Column(name = "error_message")
+    private String errorMessage;
+
+    @Column(name = "created_at")
+    private OffsetDateTime createdAt;
 
     @Column(name = "started_at")
     private OffsetDateTime startedAt;
@@ -90,6 +103,30 @@ public class ExportJob {
 
     public void setFileAttachmentId(UUID fileAttachmentId) {
         this.fileAttachmentId = fileAttachmentId;
+    }
+
+    public JsonNode getRequestPayload() {
+        return requestPayload;
+    }
+
+    public void setRequestPayload(JsonNode requestPayload) {
+        this.requestPayload = requestPayload;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(OffsetDateTime createdAt) {
+        this.createdAt = createdAt;
     }
 
     public OffsetDateTime getStartedAt() {

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 final class ExternalAgentRuntimeConfig {
 
@@ -68,6 +69,38 @@ final class ExternalAgentRuntimeConfig {
     }
 
     ObjectNode dispatchPayload(AgentTask task, AgentProvider provider, AgentProfile profile, String action) {
+        return runtimePayload(task.getId(), profile.getId(), provider, action);
+    }
+
+    ObjectNode previewPayload(UUID taskId, UUID profileId, AgentProvider provider, String action) {
+        return runtimePayload(taskId, profileId, provider, action);
+    }
+
+    String externalTaskId(AgentTask task) {
+        return externalTaskId(task.getId());
+    }
+
+    String externalTaskId(UUID taskId) {
+        return adapterType.replace("_", "-") + "-" + mode.replace("_", "-") + "-" + taskId;
+    }
+
+    String mode() {
+        return mode;
+    }
+
+    boolean externalExecutionEnabled() {
+        return externalExecutionEnabled;
+    }
+
+    String transport() {
+        return switch (mode) {
+            case "hosted_api" -> "provider_hosted_api";
+            case "cli_worker" -> "backend_cli_worker";
+            default -> "internal_stub";
+        };
+    }
+
+    private ObjectNode runtimePayload(UUID taskId, UUID profileId, AgentProvider provider, String action) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("adapter", adapterType)
                 .put("protocolVersion", "trasck.agent-runtime.v1")
@@ -76,13 +109,13 @@ final class ExternalAgentRuntimeConfig {
                 .put("transport", transport())
                 .put("externalDispatch", !"stub".equals(mode))
                 .put("externalExecutionEnabled", externalExecutionEnabled)
-                .put("agentTaskId", task.getId().toString())
+                .put("agentTaskId", taskId.toString())
                 .put("providerId", provider.getId().toString())
                 .put("providerKey", provider.getProviderKey())
-                .put("agentProfileId", profile.getId().toString())
+                .put("agentProfileId", profileId.toString())
                 .put("callbackHeaderName", AgentCallbackJwtService.CALLBACK_HEADER)
                 .put("requiresCallbackJwt", true)
-                .put("idempotencyKey", idempotencyKey(task, action))
+                .put("idempotencyKey", idempotencyKey(taskId, action))
                 .put("retrySupported", true)
                 .put("cancelSupported", true)
                 .put("requestChangesSupported", true)
@@ -93,10 +126,6 @@ final class ExternalAgentRuntimeConfig {
             payload.set("cliWorker", cliWorkerPayload());
         }
         return payload;
-    }
-
-    String externalTaskId(AgentTask task) {
-        return adapterType.replace("_", "-") + "-" + mode.replace("_", "-") + "-" + task.getId();
     }
 
     private ObjectNode hostedApiPayload() {
@@ -117,16 +146,8 @@ final class ExternalAgentRuntimeConfig {
         return payload;
     }
 
-    private String transport() {
-        return switch (mode) {
-            case "hosted_api" -> "provider_hosted_api";
-            case "cli_worker" -> "backend_cli_worker";
-            default -> "internal_stub";
-        };
-    }
-
-    private String idempotencyKey(AgentTask task, String action) {
-        return adapterType + ":" + mode + ":" + task.getId() + ":" + action;
+    private String idempotencyKey(UUID taskId, String action) {
+        return adapterType + ":" + mode + ":" + taskId + ":" + action;
     }
 
     private static JsonNode firstObject(JsonNode preferred, JsonNode fallback) {

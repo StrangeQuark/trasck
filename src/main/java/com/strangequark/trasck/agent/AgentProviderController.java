@@ -43,6 +43,14 @@ public class AgentProviderController {
         return agentService.updateProvider(providerId, request);
     }
 
+    @PostMapping("/agent-providers/{providerId}/runtime-preview")
+    public AgentRuntimePreviewResponse previewRuntime(
+            @PathVariable UUID providerId,
+            @RequestBody(required = false) AgentRuntimePreviewRequest request
+    ) {
+        return agentService.previewRuntime(providerId, request);
+    }
+
     @PostMapping("/agent-providers/{providerId}/credentials")
     public ResponseEntity<AgentProviderCredentialResponse> createCredential(
             @PathVariable UUID providerId,
