@@ -135,10 +135,12 @@ class ConfigurationApiIntegrationTest {
         JsonNode boardWork = getJson("/api/v1/boards/" + boardId + "/work-items");
         assertThat(boardWork.at("/columns")).hasSize(3);
         assertThat(boardWork.at("/swimlanes/0/columns/0/workItems")).hasSize(2);
+        JsonNode readyPeerStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + boardPeerStoryId + "/move", objectMapper.createObjectNode()
+                .put("targetColumnId", readyColumn.at("/id").asText()));
         JsonNode boardRankedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/move", objectMapper.createObjectNode()
                 .put("targetColumnId", readyColumn.at("/id").asText())
                 .put("previousWorkItemId", boardPeerStoryId.toString()));
-        assertThat(boardRankedStory.at("/rank").asText()).isGreaterThan(boardPeerStory.at("/rank").asText());
+        assertThat(boardRankedStory.at("/rank").asText()).isGreaterThan(readyPeerStory.at("/rank").asText());
         assertThat(uuid(boardRankedStory, "/statusId")).isEqualTo(statusId(setup, "ready"));
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
@@ -340,6 +342,7 @@ class ConfigurationApiIntegrationTest {
                 .put("enabled", true)
                 .set("transformationConfig", presetConfig));
         assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/import-transform-presets")).hasSize(1);
+        assertThat(getJson("/api/v1/import-transform-presets/" + transformPreset.at("/id").asText() + "/versions")).hasSize(1);
 
         ObjectNode mappingBody = objectMapper.createObjectNode()
                 .put("name", "Jira story mapping")
@@ -384,10 +387,41 @@ class ConfigurationApiIntegrationTest {
         JsonNode materializationRuns = getJson("/api/v1/import-jobs/" + importJobId + "/materialization-runs");
         assertThat(materializationRuns).hasSize(1);
         assertThat(materializationRuns.at("/0/transformPresetVersion").asInt()).isEqualTo(1);
-        UUID importedWorkItemId = uuid(materialized, "/records/0/targetId");
+        UUID importedWorkItemId = uuid(materialized, "/records/1/targetId");
         JsonNode importedWorkItem = getJson("/api/v1/work-items/" + importedWorkItemId);
         assertThat(importedWorkItem.at("/title").asText()).isEqualTo("Parsed story");
         assertThat(importedWorkItem.at("/visibility").asText()).isEqualTo("public");
+        ObjectNode updatedPresetConfig = presetConfig.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ArrayNode) updatedPresetConfig.get("title"))
+                .add(objectMapper.createObjectNode()
+                        .put("function", "suffix")
+                        .put("value", " v2"));
+        JsonNode updatedTransformPreset = patch("/api/v1/import-transform-presets/" + transformPreset.at("/id").asText(), objectMapper.createObjectNode()
+                .put("name", "Jira title cleanup")
+                .put("description", "Reusable Jira title cleanup v2")
+                .put("enabled", true)
+                .set("transformationConfig", updatedPresetConfig));
+        assertThat(updatedTransformPreset.at("/version").asInt()).isEqualTo(2);
+        JsonNode presetVersions = getJson("/api/v1/import-transform-presets/" + transformPreset.at("/id").asText() + "/versions");
+        assertThat(presetVersions).hasSize(2);
+        assertThat(presetVersions.at("/0/version").asInt()).isEqualTo(2);
+        JsonNode updatedMaterialized = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
+                .put("mappingTemplateId", mapping.at("/id").asText())
+                .put("limit", 10)
+                .put("updateExisting", true));
+        assertThat(updatedMaterialized.at("/updated").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(updatedMaterialized.at("/skipped").asInt()).isZero();
+        assertThat(getJson("/api/v1/work-items/" + importedWorkItemId).at("/title").asText()).isEqualTo("Parsed story v2");
+        JsonNode skippedMaterialized = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
+                .put("mappingTemplateId", mapping.at("/id").asText())
+                .put("limit", 10)
+                .put("updateExisting", false));
+        assertThat(skippedMaterialized.at("/created").asInt()).isZero();
+        assertThat(skippedMaterialized.at("/skipped").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(skippedMaterialized.at("/conflicts").asInt()).isGreaterThanOrEqualTo(1);
+        JsonNode updatedMaterializationRuns = getJson("/api/v1/import-jobs/" + importJobId + "/materialization-runs");
+        assertThat(updatedMaterializationRuns).hasSize(3);
+        assertThat(updatedMaterializationRuns.at("/0/recordsSkipped").asInt()).isGreaterThanOrEqualTo(1);
         JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
     }

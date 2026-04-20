@@ -41,6 +41,8 @@ import com.strangequark.trasck.integration.ImportMappingTemplate;
 import com.strangequark.trasck.integration.ImportMappingTemplateRepository;
 import com.strangequark.trasck.integration.ImportTransformPreset;
 import com.strangequark.trasck.integration.ImportTransformPresetRepository;
+import com.strangequark.trasck.integration.ImportTransformPresetVersion;
+import com.strangequark.trasck.integration.ImportTransformPresetVersionRepository;
 import com.strangequark.trasck.organization.Organization;
 import com.strangequark.trasck.organization.OrganizationRepository;
 import com.strangequark.trasck.project.Project;
@@ -161,6 +163,9 @@ class JpaPersistenceTest {
     private ImportTransformPresetRepository importTransformPresetRepository;
 
     @Autowired
+    private ImportTransformPresetVersionRepository importTransformPresetVersionRepository;
+
+    @Autowired
     private ImportMaterializationRunRepository importMaterializationRunRepository;
 
     @Autowired
@@ -187,9 +192,9 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(126);
+        assertThat(tableCount).isEqualTo(127);
         assertThat(permissionCount).isEqualTo(31);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(123);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(124);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_automatic_enabled")).isTrue();
@@ -197,7 +202,9 @@ class JpaPersistenceTest {
         assertThat(columnExists("email_provider_settings", "smtp_password_encrypted")).isTrue();
         assertThat(columnExists("import_mapping_templates", "transform_preset_id")).isTrue();
         assertThat(columnExists("import_transform_presets", "version")).isTrue();
+        assertThat(columnExists("import_transform_preset_versions", "change_type")).isTrue();
         assertThat(columnExists("board_swimlanes", "saved_filter_id")).isTrue();
+        assertThat(columnExists("import_materialization_runs", "records_skipped")).isTrue();
     }
 
     @Test
@@ -424,6 +431,18 @@ class JpaPersistenceTest {
         preset.setVersion(1);
         preset = importTransformPresetRepository.saveAndFlush(preset);
 
+        ImportTransformPresetVersion presetVersion = new ImportTransformPresetVersion();
+        presetVersion.setPresetId(preset.getId());
+        presetVersion.setWorkspaceId(fixture.workspace.getId());
+        presetVersion.setVersion(1);
+        presetVersion.setName(preset.getName());
+        presetVersion.setDescription(preset.getDescription());
+        presetVersion.setTransformationConfig(presetTransform);
+        presetVersion.setEnabled(true);
+        presetVersion.setChangeType("created");
+        presetVersion.setCreatedById(fixture.user.getId());
+        presetVersion = importTransformPresetVersionRepository.saveAndFlush(presetVersion);
+
         ImportMappingTemplate template = new ImportMappingTemplate();
         template.setWorkspaceId(fixture.workspace.getId());
         template.setProjectId(fixture.project.getId());
@@ -456,6 +475,8 @@ class JpaPersistenceTest {
         materializationRun.setRecordsCreated(1);
         materializationRun.setRecordsUpdated(0);
         materializationRun.setRecordsFailed(0);
+        materializationRun.setRecordsSkipped(0);
+        materializationRun.setRecordsConflicted(0);
         materializationRun.setFinishedAt(OffsetDateTime.now());
         materializationRun = importMaterializationRunRepository.saveAndFlush(materializationRun);
 
@@ -475,8 +496,10 @@ class JpaPersistenceTest {
         assertThat(reloadedEmailSettings.getProvider()).isEqualTo("smtp");
         assertThat(reloadedEmailSettings.getSmtpPasswordEncrypted()).isEqualTo("aesgcm:v1:test");
         assertThat(importTransformPresetRepository.findById(preset.getId()).orElseThrow().getVersion()).isEqualTo(1);
+        assertThat(importTransformPresetVersionRepository.findById(presetVersion.getId()).orElseThrow().getChangeType()).isEqualTo("created");
         assertThat(importMappingTemplateRepository.findById(template.getId()).orElseThrow().getTransformPresetId()).isEqualTo(preset.getId());
         assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getTransformPresetVersion()).isEqualTo(1);
+        assertThat(importMaterializationRunRepository.findById(materializationRun.getId()).orElseThrow().getRecordsSkipped()).isZero();
     }
 
     private ImportJob createImportJob(CoreFixture fixture, String provider) {
