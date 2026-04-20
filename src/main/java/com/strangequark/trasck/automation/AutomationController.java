@@ -145,6 +145,16 @@ public class AutomationController {
         return automationService.updateWorkerSettings(workspaceId, request);
     }
 
+    @GetMapping("/workspaces/{workspaceId}/automation-worker-runs")
+    public List<AutomationWorkerRunHistoryResponse> listWorkerRuns(@PathVariable UUID workspaceId) {
+        return automationService.listWorkerRuns(workspaceId);
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/automation-worker-health")
+    public List<AutomationWorkerHealthResponse> listWorkerHealth(@PathVariable UUID workspaceId) {
+        return automationService.listWorkerHealth(workspaceId);
+    }
+
     @GetMapping("/automation-jobs/{jobId}")
     public AutomationExecutionJobResponse getJob(@PathVariable UUID jobId) {
         return automationService.getJob(jobId);

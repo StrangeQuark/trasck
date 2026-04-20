@@ -57,6 +57,10 @@ public class ImportMappingTemplate {
     @Column(name = "defaults")
     private JsonNode defaults;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "transformation_config")
+    private JsonNode transformationConfig;
+
     @Column(name = "enabled")
     private Boolean enabled;
 
@@ -152,6 +156,14 @@ public class ImportMappingTemplate {
 
     public void setDefaults(JsonNode defaults) {
         this.defaults = defaults;
+    }
+
+    public JsonNode getTransformationConfig() {
+        return transformationConfig;
+    }
+
+    public void setTransformationConfig(JsonNode transformationConfig) {
+        this.transformationConfig = transformationConfig;
     }
 
     public Boolean getEnabled() {

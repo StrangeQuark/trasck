@@ -63,6 +63,99 @@ public class ImportJobController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/import-mapping-templates/{mappingTemplateId}/value-lookups")
+    public List<ImportMappingValueLookupResponse> listValueLookups(@PathVariable UUID mappingTemplateId) {
+        return importJobService.listValueLookups(mappingTemplateId);
+    }
+
+    @PostMapping("/import-mapping-templates/{mappingTemplateId}/value-lookups")
+    public ResponseEntity<ImportMappingValueLookupResponse> createValueLookup(
+            @PathVariable UUID mappingTemplateId,
+            @RequestBody ImportMappingValueLookupRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createValueLookup(mappingTemplateId, request));
+    }
+
+    @PatchMapping("/import-mapping-templates/{mappingTemplateId}/value-lookups/{lookupId}")
+    public ImportMappingValueLookupResponse updateValueLookup(
+            @PathVariable UUID mappingTemplateId,
+            @PathVariable UUID lookupId,
+            @RequestBody ImportMappingValueLookupRequest request
+    ) {
+        return importJobService.updateValueLookup(mappingTemplateId, lookupId, request);
+    }
+
+    @DeleteMapping("/import-mapping-templates/{mappingTemplateId}/value-lookups/{lookupId}")
+    public ResponseEntity<Void> deleteValueLookup(
+            @PathVariable UUID mappingTemplateId,
+            @PathVariable UUID lookupId
+    ) {
+        importJobService.deleteValueLookup(mappingTemplateId, lookupId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/import-mapping-templates/{mappingTemplateId}/type-translations")
+    public List<ImportMappingTypeTranslationResponse> listTypeTranslations(@PathVariable UUID mappingTemplateId) {
+        return importJobService.listTypeTranslations(mappingTemplateId);
+    }
+
+    @PostMapping("/import-mapping-templates/{mappingTemplateId}/type-translations")
+    public ResponseEntity<ImportMappingTypeTranslationResponse> createTypeTranslation(
+            @PathVariable UUID mappingTemplateId,
+            @RequestBody ImportMappingTypeTranslationRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createTypeTranslation(mappingTemplateId, request));
+    }
+
+    @PatchMapping("/import-mapping-templates/{mappingTemplateId}/type-translations/{translationId}")
+    public ImportMappingTypeTranslationResponse updateTypeTranslation(
+            @PathVariable UUID mappingTemplateId,
+            @PathVariable UUID translationId,
+            @RequestBody ImportMappingTypeTranslationRequest request
+    ) {
+        return importJobService.updateTypeTranslation(mappingTemplateId, translationId, request);
+    }
+
+    @DeleteMapping("/import-mapping-templates/{mappingTemplateId}/type-translations/{translationId}")
+    public ResponseEntity<Void> deleteTypeTranslation(
+            @PathVariable UUID mappingTemplateId,
+            @PathVariable UUID translationId
+    ) {
+        importJobService.deleteTypeTranslation(mappingTemplateId, translationId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/import-mapping-templates/{mappingTemplateId}/status-translations")
+    public List<ImportMappingStatusTranslationResponse> listStatusTranslations(@PathVariable UUID mappingTemplateId) {
+        return importJobService.listStatusTranslations(mappingTemplateId);
+    }
+
+    @PostMapping("/import-mapping-templates/{mappingTemplateId}/status-translations")
+    public ResponseEntity<ImportMappingStatusTranslationResponse> createStatusTranslation(
+            @PathVariable UUID mappingTemplateId,
+            @RequestBody ImportMappingStatusTranslationRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createStatusTranslation(mappingTemplateId, request));
+    }
+
+    @PatchMapping("/import-mapping-templates/{mappingTemplateId}/status-translations/{translationId}")
+    public ImportMappingStatusTranslationResponse updateStatusTranslation(
+            @PathVariable UUID mappingTemplateId,
+            @PathVariable UUID translationId,
+            @RequestBody ImportMappingStatusTranslationRequest request
+    ) {
+        return importJobService.updateStatusTranslation(mappingTemplateId, translationId, request);
+    }
+
+    @DeleteMapping("/import-mapping-templates/{mappingTemplateId}/status-translations/{translationId}")
+    public ResponseEntity<Void> deleteStatusTranslation(
+            @PathVariable UUID mappingTemplateId,
+            @PathVariable UUID translationId
+    ) {
+        importJobService.deleteStatusTranslation(mappingTemplateId, translationId);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/import-jobs/{importJobId}")
     public ImportJobResponse getImportJob(@PathVariable UUID importJobId) {
         return importJobService.getImportJob(importJobId);

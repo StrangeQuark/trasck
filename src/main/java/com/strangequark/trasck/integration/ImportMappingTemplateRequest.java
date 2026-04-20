@@ -12,6 +12,7 @@ public record ImportMappingTemplateRequest(
         String statusKey,
         Object fieldMapping,
         Object defaults,
+        Object transformationConfig,
         Boolean enabled
 ) {
 }

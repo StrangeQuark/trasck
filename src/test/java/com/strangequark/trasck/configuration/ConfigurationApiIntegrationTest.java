@@ -235,6 +235,8 @@ class ConfigurationApiIntegrationTest {
                 .put("dryRun", true)
                 .put("maxAttempts", 2));
         assertThat(emailWorkerRun.at("/sent").asInt()).isEqualTo(1);
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs")).hasSizeGreaterThanOrEqualTo(3);
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-health")).hasSizeGreaterThanOrEqualTo(3);
         JsonNode workerSettings = patch("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings", objectMapper.createObjectNode()
                 .put("automationJobsEnabled", true)
                 .put("webhookDeliveriesEnabled", true)
@@ -258,7 +260,7 @@ class ConfigurationApiIntegrationTest {
         assertThat(importRecord.at("/sourceId").asText()).isEqualTo("JIRA-1");
         ObjectNode parseBody = objectMapper.createObjectNode()
                 .put("content", """
-                        {"issues":[{"key":"JIRA-2","fields":{"summary":"Parsed story"}}]}
+                        {"issues":[{"key":"JIRA-2","fields":{"summary":"  Parsed story  ","issuetype":{"name":"Story"},"status":{"name":"To Do"},"security":"Public"}}]}
                         """);
         JsonNode parsedImport = postJson("/api/v1/import-jobs/" + importJobId + "/parse", parseBody);
         assertThat(parsedImport.at("/recordsParsed").asInt()).isEqualTo(1);
@@ -269,21 +271,44 @@ class ConfigurationApiIntegrationTest {
                 .put("sourceType", "issue")
                 .put("targetType", "work_item")
                 .put("projectId", projectId.toString())
-                .put("workItemTypeKey", "story")
                 .put("enabled", true);
         mappingBody.set("fieldMapping", objectMapper.createObjectNode()
                 .put("title", "fields.summary")
+                .put("typeKey", "fields.issuetype.name")
+                .put("statusKey", "fields.status.name")
                 .put("descriptionMarkdown", "fields.description"));
         mappingBody.set("defaults", objectMapper.createObjectNode()
                 .put("descriptionMarkdown", "Imported Jira issue"));
+        ObjectNode transformationConfig = objectMapper.createObjectNode();
+        transformationConfig.set("title", objectMapper.createArrayNode().add("trim"));
+        mappingBody.set("transformationConfig", transformationConfig);
         JsonNode mapping = postJson("/api/v1/workspaces/" + workspaceId + "/import-mapping-templates", mappingBody);
+        postJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/type-translations", objectMapper.createObjectNode()
+                .put("sourceTypeKey", "Story")
+                .put("targetTypeKey", "story")
+                .put("enabled", true));
+        postJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/status-translations", objectMapper.createObjectNode()
+                .put("sourceStatusKey", "To Do")
+                .put("targetStatusKey", "open")
+                .put("enabled", true));
+        postJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/value-lookups", objectMapper.createObjectNode()
+                .put("sourceField", "fields.security")
+                .put("sourceValue", "Public")
+                .put("targetField", "visibility")
+                .put("targetValue", "public")
+                .put("enabled", true));
+        assertThat(getJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/type-translations")).hasSize(1);
+        assertThat(getJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/status-translations")).hasSize(1);
+        assertThat(getJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/value-lookups")).hasSize(1);
         JsonNode materialized = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
                 .put("mappingTemplateId", mapping.at("/id").asText())
                 .put("limit", 10)
                 .put("updateExisting", false));
         assertThat(materialized.at("/created").asInt()).isEqualTo(1);
         UUID importedWorkItemId = uuid(materialized, "/records/0/targetId");
-        assertThat(getJson("/api/v1/work-items/" + importedWorkItemId).at("/title").asText()).isEqualTo("Parsed story");
+        JsonNode importedWorkItem = getJson("/api/v1/work-items/" + importedWorkItemId);
+        assertThat(importedWorkItem.at("/title").asText()).isEqualTo("Parsed story");
+        assertThat(importedWorkItem.at("/visibility").asText()).isEqualTo("public");
         JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
     }

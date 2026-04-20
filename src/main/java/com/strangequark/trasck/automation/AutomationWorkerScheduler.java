@@ -42,7 +42,8 @@ public class AutomationWorkerScheduler {
                                 settings.getWebhookLimit(),
                                 settings.getWebhookMaxAttempts(),
                                 settings.getWebhookDryRun()
-                        )
+                        ),
+                        null
                 );
             }
             if (Boolean.TRUE.equals(settings.getEmailDeliveriesEnabled())) {
