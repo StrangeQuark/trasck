@@ -569,6 +569,21 @@ export interface AutomationWorkerRun {
   finishedAt?: ISODateTime;
 }
 
+export interface AutomationWorkerRunRetention {
+  workspaceId: UUID;
+  workerType?: AutomationWorkerRun["workerType"];
+  retentionEnabled: boolean;
+  retentionDays?: number;
+  exportBeforePrune: boolean;
+  cutoff?: ISODateTime;
+  runsEligible: number;
+  runsIncluded: number;
+  runsPruned: number;
+  exportJobId?: UUID;
+  fileAttachmentId?: UUID;
+  runs: AutomationWorkerRun[];
+}
+
 export interface AutomationWorkerHealth {
   workspaceId: UUID;
   workerType: AutomationWorkerRun["workerType"];
@@ -698,6 +713,16 @@ export interface ImportJobVersionDiffExportResponse {
 export interface ImportJobVersionDiffExportJobRequest {
   format?: "json" | "csv";
   filterColumn?: "all" | "source" | "statusLabel" | "versionLabel" | "changeType" | "path" | "previousValue" | "value" | string;
+  filter?: string;
+}
+
+export interface ImportReviewCsvExportJobRequest {
+  tableType: "conflict_resolution_jobs" | "export_jobs" | "project_completion" | "workspace_completion";
+  importJobId?: UUID;
+  projectId?: UUID;
+  status?: string;
+  exportType?: string;
+  filterColumn?: string;
   filter?: string;
 }
 
@@ -913,6 +938,29 @@ export interface ImportMappingTemplate {
   updatedAt: ISODateTime;
 }
 
+export interface AgentDispatchAttempt {
+  id: UUID;
+  workspaceId: UUID;
+  agentTaskId: UUID;
+  providerId: UUID;
+  agentProfileId: UUID;
+  workItemId: UUID;
+  requestedById?: UUID;
+  attemptType: "dispatch" | "retry" | "cancel";
+  dispatchMode: string;
+  providerType: string;
+  transport?: string;
+  status: "succeeded" | "failed";
+  externalTaskId?: string;
+  idempotencyKey?: string;
+  externalDispatch: boolean;
+  requestPayload: JsonObject;
+  responsePayload: JsonObject;
+  errorMessage?: string;
+  startedAt: ISODateTime;
+  finishedAt?: ISODateTime;
+}
+
 export interface AgentTask {
   id: UUID;
   workspaceId: UUID;
@@ -935,6 +983,7 @@ export interface AgentTask {
   messages: unknown[];
   artifacts: unknown[];
   repositories: unknown[];
+  dispatchAttempts: AgentDispatchAttempt[];
   callbackHeaderName?: string;
   callbackToken?: string;
 }
@@ -950,10 +999,10 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 4. Work item detail tabs: comments, links, watchers, work logs, labels, attachments, activity, and reporting history all hang off the selected work item ID.
 5. Product configuration: create custom fields/contexts, add field configurations for project/type overrides, create screens/fields/assignments, then create/update work items to exercise required-field enforcement.
 6. Planning configuration: list/create boards with columns and saved-filter/query-backed swimlanes, read board work items with backend swimlane groupings, use board-scoped rank/transition/move commands for drag/drop, send `targetColumnId` and/or `targetStatusId` when deriving transitions from a target column/status, include card-level `previousWorkItemId`/`nextWorkItemId` from the target column when rank should update in the same board move, create releases and release scope, create project/workspace roadmaps, and add roadmap items linked to work items.
-7. Automation configuration: create a notification preference, configure webhooks, create automation rules/actions, configure workspace Maildev/SMTP email provider settings, run `POST /api/v1/automation-rules/{ruleId}/execute`, then read automation jobs/logs, current-user notifications, webhook delivery rows, email delivery rows, worker runs, worker health, and scheduled worker settings. Webhook/email deliveries can be inspected, retried, cancelled, and processed manually; scheduled automation/webhook/email workers, scheduled import conflict-resolution pickup, and worker run retention settings are controlled per workspace, worker run retention export/prune is admin-triggered, worker runs/health can be filtered with `workerType`, and automatic worker-run pruning can be toggled per workspace with interval/window/last-run settings. Import conflict-resolution pickup writes `AutomationWorkerRun`/`AutomationWorkerHealth` rows with `workerType=import_conflict_resolution`.
-8. Import review/materialization: create an import job, parse CSV/Jira/Rally content into records, or enable workspace sample jobs with `GET/PATCH /api/v1/workspaces/{workspaceId}/import-settings` and create a backend-generated demo job through `GET /api/v1/workspaces/{workspaceId}/import-samples` plus `POST /api/v1/workspaces/{workspaceId}/import-samples/{sampleKey}/jobs`. Filter records by status/conflict/source type, edit source records with `PATCH /api/v1/import-job-records/{recordId}` when needed, show lifecycle versions from `GET /api/v1/import-job-records/{recordId}/versions` and backend-normalized field diff rows from `GET /api/v1/import-job-records/{recordId}/version-diffs`, show job-level field diff groups from `GET /api/v1/import-jobs/{importJobId}/version-diffs`, load audit-shaped exports from `GET /api/v1/import-jobs/{importJobId}/version-diffs/export`, create stored JSON or filtered CSV export-job artifacts with `POST /api/v1/import-jobs/{importJobId}/version-diffs/export-jobs`, list artifact history with `GET /api/v1/workspaces/{workspaceId}/export-jobs?exportType=import_job_version_diffs`, and download artifacts with `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`. Create reusable versioned import transform presets, review preset version history with `GET /api/v1/import-transform-presets/{presetId}/versions`, clone historical preset versions into standalone presets, preview/apply clone-and-retarget of selected mapping templates, create an import mapping template that can reference a preset and optional local transformation overrides, add value lookups or type/status translations where needed, materialize records into work items, review/resolve single, selected bulk, or filtered bulk conflicts, rerun materialization snapshots with the source `updateExisting` flag or an explicit override, display materialization run snapshots including skipped/conflicted counters, and move the job through start/complete/fail/cancel states. Filtered bulk conflict resolution uses `POST /api/v1/import-jobs/{importJobId}/conflicts/resolve-preview` first; preview accepts `page` and `pageSize`, returns `matched`, `returned`, `hasMore`, and `maxResolutionBatchSize`, and synchronous apply succeeds only when `expectedCount` matches, `confirmation` is `RESOLVE FILTERED CONFLICTS`, and the matched set is within the server batch cap. Larger filtered sets can be persisted as queued jobs through `POST /api/v1/import-jobs/{importJobId}/conflicts/resolve-async`, listed through `GET /api/v1/import-jobs/{importJobId}/conflict-resolution-jobs` or `GET /api/v1/workspaces/{workspaceId}/import-conflict-resolution-jobs?status=...`, inspected through `GET /api/v1/import-conflict-resolution-jobs/{jobId}`, run individually through `POST /api/v1/import-conflict-resolution-jobs/{jobId}/run`, canceled/retried through `/cancel` and `/retry`, processed in bounded workspace batches through `POST /api/v1/workspaces/{workspaceId}/import-conflict-resolution-jobs/process?limit=...`, or picked up by workspace worker settings when `importConflictResolutionEnabled=true`. Completing with open conflicts requires `acceptOpenConflicts=true`, `openConflictConfirmation=COMPLETE WITH OPEN CONFLICTS`, and a non-empty `openConflictReason`; successful completion returns first-class `openConflictCompletion*` fields on the import job response and feeds project/workspace dashboard import-completion summaries plus `GET /api/v1/reports/projects/{projectId}/imports/completions` and `GET /api/v1/reports/workspaces/{workspaceId}/imports/completions`.
+7. Automation configuration: create a notification preference, configure webhooks, create automation rules/actions, configure workspace Maildev/SMTP email provider settings, run `POST /api/v1/automation-rules/{ruleId}/execute`, then read automation jobs/logs, current-user notifications, webhook delivery rows, email delivery rows, worker runs, worker health, and scheduled worker settings. Webhook/email deliveries can be inspected, retried, cancelled, and processed manually; scheduled automation/webhook/email workers, scheduled import conflict-resolution pickup, and worker run retention settings are controlled per workspace. Worker runs/health can be filtered with `workerType`; manual worker run retention export/prune also accepts `workerType`; automatic worker-run pruning can be toggled per workspace with interval/window/last-run settings. Import conflict-resolution pickup writes `AutomationWorkerRun`/`AutomationWorkerHealth` rows with `workerType=import_conflict_resolution`.
+8. Import review/materialization: create an import job, parse CSV/Jira/Rally content into records, or enable workspace sample jobs with `GET/PATCH /api/v1/workspaces/{workspaceId}/import-settings` and create a backend-generated demo job through `GET /api/v1/workspaces/{workspaceId}/import-samples` plus `POST /api/v1/workspaces/{workspaceId}/import-samples/{sampleKey}/jobs`. Filter records by status/conflict/source type, edit source records with `PATCH /api/v1/import-job-records/{recordId}` when needed, show lifecycle versions from `GET /api/v1/import-job-records/{recordId}/versions` and backend-normalized field diff rows from `GET /api/v1/import-job-records/{recordId}/version-diffs`, show job-level field diff groups from `GET /api/v1/import-jobs/{importJobId}/version-diffs`, load audit-shaped exports from `GET /api/v1/import-jobs/{importJobId}/version-diffs/export`, create stored JSON or filtered CSV export-job artifacts with `POST /api/v1/import-jobs/{importJobId}/version-diffs/export-jobs`, create filtered CSV artifacts for conflict job/export job/project completion/workspace completion review tables with `POST /api/v1/workspaces/{workspaceId}/import-review/export-jobs`, list artifact history with `GET /api/v1/workspaces/{workspaceId}/export-jobs?exportType=...`, and download artifacts with `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`. Create reusable versioned import transform presets, review preset version history with `GET /api/v1/import-transform-presets/{presetId}/versions`, clone historical preset versions into standalone presets, preview/apply clone-and-retarget of selected mapping templates, create an import mapping template that can reference a preset and optional local transformation overrides, add value lookups or type/status translations where needed, materialize records into work items, review/resolve single, selected bulk, or filtered bulk conflicts, rerun materialization snapshots with the source `updateExisting` flag or an explicit override, display materialization run snapshots including skipped/conflicted counters, and move the job through start/complete/fail/cancel states. Filtered bulk conflict resolution uses `POST /api/v1/import-jobs/{importJobId}/conflicts/resolve-preview` first; preview accepts `page` and `pageSize`, returns `matched`, `returned`, `hasMore`, and `maxResolutionBatchSize`, and synchronous apply succeeds only when `expectedCount` matches, `confirmation` is `RESOLVE FILTERED CONFLICTS`, and the matched set is within the server batch cap. Larger filtered sets can be persisted as queued jobs through `POST /api/v1/import-jobs/{importJobId}/conflicts/resolve-async`, listed through `GET /api/v1/import-jobs/{importJobId}/conflict-resolution-jobs` or `GET /api/v1/workspaces/{workspaceId}/import-conflict-resolution-jobs?status=...`, inspected through `GET /api/v1/import-conflict-resolution-jobs/{jobId}`, run individually through `POST /api/v1/import-conflict-resolution-jobs/{jobId}/run`, canceled/retried through `/cancel` and `/retry`, processed in bounded workspace batches through `POST /api/v1/workspaces/{workspaceId}/import-conflict-resolution-jobs/process?limit=...`, or picked up by workspace worker settings when `importConflictResolutionEnabled=true`. Completing with open conflicts requires `acceptOpenConflicts=true`, `openConflictConfirmation=COMPLETE WITH OPEN CONFLICTS`, and a non-empty `openConflictReason`; successful completion returns first-class `openConflictCompletion*` fields on the import job response and feeds project/workspace dashboard import-completion summaries plus `GET /api/v1/reports/projects/{projectId}/imports/completions` and `GET /api/v1/reports/workspaces/{workspaceId}/imports/completions`.
 9. Dashboard builder: create a saved filter, optionally execute it with `GET /api/v1/saved-filters/{savedFilterId}/work-items`, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`. Import completion widgets use `widgetType=import_completion_summary` with `config.reportType=project_dashboard_summary` and `query.projectId`, or `widgetType=portfolio_import_completion_summary` with `config.reportType=workspace_dashboard_summary`.
-10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
+10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status and `dispatchAttempts` until review or completion.
 11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
 12. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
 
@@ -966,9 +1015,9 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 - Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, saved-filter-ID and inline-query board swimlanes, board work item columns/swimlanes, board-scoped rank/transition/move commands with target column/status transition derivation and card-level relative insertion, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, focused project/workspace import-completion metrics, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists and cursor-paged work item execution, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
-- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings including scheduled import conflict-resolution pickup, worker run/health/export/prune APIs with `import_conflict_resolution` worker rows and worker-type filters, automatic worker-run pruning interval/window settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, workspace import sample settings, guarded backend sample catalog/job creation, parser, editable record APIs, filtered record lists, record version history and backend diff rows, job-level diff/export rows, stored JSON/CSV import diff export artifact history/download, versioned transform preset plus immutable preset version history, clone-from-version, clone-retarget preview/apply, mapping-template, value lookup, transformation pipeline validation, type/status translation, materialization snapshot/skipped/conflicted counters, single/selected/filtered conflict review and resolution with paginated preview safeguards, queued filtered conflict-resolution jobs for larger sets, guarded completion with typed open-conflict confirmation and first-class audit/report fields, and exact/modified rerun APIs.
+- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings including scheduled import conflict-resolution pickup, worker run/health/export/prune APIs with `import_conflict_resolution` worker rows and worker-type filters, automatic worker-run pruning interval/window settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, workspace import sample settings, guarded backend sample catalog/job creation, parser, editable record APIs, filtered record lists, record version history and backend diff rows, job-level diff/export rows, stored JSON/CSV import diff export artifact history/download, stored CSV import review table exports for conflict jobs/export jobs/completion metrics, versioned transform preset plus immutable preset version history, clone-from-version, clone-retarget preview/apply, mapping-template, value lookup, transformation pipeline validation, type/status translation, materialization snapshot/skipped/conflicted counters, single/selected/filtered conflict review and resolution with paginated preview safeguards, queued filtered conflict-resolution jobs for larger sets, guarded completion with typed open-conflict confirmation and first-class audit/report fields, and exact/modified rerun APIs.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
-- Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
+- Agents: providers, credentials, callback keys, profiles, repository connections, assignment, dispatch attempts, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
 
 ## Custom Field Search
 

@@ -168,14 +168,18 @@ public class AutomationController {
     @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/export")
     public AutomationWorkerRunRetentionResponse exportWorkerRuns(
             @PathVariable UUID workspaceId,
-            @RequestParam(required = false) Integer limit
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String workerType
     ) {
-        return automationService.exportWorkerRuns(workspaceId, limit);
+        return automationService.exportWorkerRuns(workspaceId, limit, workerType);
     }
 
     @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/prune")
-    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(@PathVariable UUID workspaceId) {
-        return automationService.pruneWorkerRuns(workspaceId);
+    public AutomationWorkerRunRetentionResponse pruneWorkerRuns(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String workerType
+    ) {
+        return automationService.pruneWorkerRuns(workspaceId, workerType);
     }
 
     @GetMapping("/workspaces/{workspaceId}/email-provider-settings")

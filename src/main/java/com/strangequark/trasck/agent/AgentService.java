@@ -64,6 +64,7 @@ public class AgentService {
     private final AgentMessageRepository agentMessageRepository;
     private final AgentArtifactRepository agentArtifactRepository;
     private final AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
+    private final AgentDispatchAttemptRepository agentDispatchAttemptRepository;
     private final EventConsumerConfigRepository eventConsumerConfigRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
@@ -97,6 +98,7 @@ public class AgentService {
             AgentMessageRepository agentMessageRepository,
             AgentArtifactRepository agentArtifactRepository,
             AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository,
+            AgentDispatchAttemptRepository agentDispatchAttemptRepository,
             EventConsumerConfigRepository eventConsumerConfigRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
@@ -129,6 +131,7 @@ public class AgentService {
         this.agentMessageRepository = agentMessageRepository;
         this.agentArtifactRepository = agentArtifactRepository;
         this.agentTaskRepositoryLinkRepository = agentTaskRepositoryLinkRepository;
+        this.agentDispatchAttemptRepository = agentDispatchAttemptRepository;
         this.eventConsumerConfigRepository = eventConsumerConfigRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
@@ -592,7 +595,7 @@ public class AgentService {
         }
         AgentProfile profile = activeProfile(task.getWorkspaceId(), task.getAgentProfileId());
         AgentProvider provider = activeProvider(task.getWorkspaceId(), task.getProviderId());
-        adapter(provider.getProviderType()).cancel(task, provider, profile);
+        recordCancelAttempt(task, provider, profile, actorId);
         task.setStatus("canceled");
         task.setCanceledAt(OffsetDateTime.now());
         AgentTask saved = agentTaskRepository.save(task);
@@ -848,13 +851,22 @@ public class AgentService {
     private String dispatch(AgentTask task, WorkItem item, AgentProvider provider, AgentProfile profile, UUID actorId, boolean retry) {
         provider.setConfig(callbackJwtService.ensureProviderKeyPair(provider));
         agentProviderRepository.save(provider);
-        AgentDispatchResult result = retry
-                ? adapter(provider.getProviderType()).retry(task, provider, profile)
-                : adapter(provider.getProviderType()).dispatch(task, provider, profile);
+        String attemptType = retry ? "retry" : "dispatch";
+        OffsetDateTime startedAt = OffsetDateTime.now();
+        AgentDispatchResult result;
+        try {
+            result = retry
+                    ? adapter(provider.getProviderType()).retry(task, provider, profile)
+                    : adapter(provider.getProviderType()).dispatch(task, provider, profile);
+        } catch (RuntimeException ex) {
+            persistDispatchAttempt(task, provider, profile, actorId, attemptType, "failed", null, null, ex.getMessage(), startedAt);
+            throw ex;
+        }
         task.setExternalTaskId(result.externalTaskId());
         task.setStatus("running");
         task.setStartedAt(OffsetDateTime.now());
         AgentTask saved = agentTaskRepository.save(task);
+        persistDispatchAttempt(saved, provider, profile, actorId, attemptType, "succeeded", result.externalTaskId(), result.dispatchPayload(), null, startedAt);
         appendTaskEvent(saved, "running", "info", "Agent task dispatched.", result.dispatchPayload());
         recordAgentTaskEvent(saved, item, provider, profile, "agent.task.dispatched", actorId, null);
         String callbackToken = callbackJwtService.issue(saved, provider, profile);
@@ -862,6 +874,67 @@ public class AgentService {
             recordWorkerWebhookDispatchRequested(saved, item, provider, profile, result.dispatchPayload(), actorId, retry);
         }
         return callbackToken;
+    }
+
+    private void recordCancelAttempt(AgentTask task, AgentProvider provider, AgentProfile profile, UUID actorId) {
+        OffsetDateTime startedAt = OffsetDateTime.now();
+        try {
+            adapter(provider.getProviderType()).cancel(task, provider, profile);
+            persistDispatchAttempt(task, provider, profile, actorId, "cancel", "succeeded", task.getExternalTaskId(), objectMapper.createObjectNode()
+                    .put("adapter", provider.getProviderType())
+                    .put("action", "cancel")
+                    .put("agentTaskId", task.getId().toString())
+                    .put("providerId", provider.getId().toString())
+                    .put("transport", firstText(task.getDispatchMode(), provider.getDispatchMode()))
+                    .put("idempotencyKey", provider.getProviderType() + ":" + task.getId() + ":cancel"), null, startedAt);
+        } catch (RuntimeException ex) {
+            persistDispatchAttempt(task, provider, profile, actorId, "cancel", "failed", task.getExternalTaskId(), null, ex.getMessage(), startedAt);
+            throw ex;
+        }
+    }
+
+    private void persistDispatchAttempt(
+            AgentTask task,
+            AgentProvider provider,
+            AgentProfile profile,
+            UUID actorId,
+            String attemptType,
+            String status,
+            String externalTaskId,
+            JsonNode payload,
+            String errorMessage,
+            OffsetDateTime startedAt
+    ) {
+        JsonNode requestPayload = payload == null ? objectMapper.createObjectNode() : payload;
+        ObjectNode responsePayload = objectMapper.createObjectNode()
+                .put("status", status);
+        if (hasText(externalTaskId)) {
+            responsePayload.put("externalTaskId", externalTaskId);
+        }
+        if (hasText(errorMessage)) {
+            responsePayload.put("errorMessage", truncate(errorMessage, 2_000));
+        }
+        AgentDispatchAttempt attempt = new AgentDispatchAttempt();
+        attempt.setWorkspaceId(task.getWorkspaceId());
+        attempt.setAgentTaskId(task.getId());
+        attempt.setProviderId(provider.getId());
+        attempt.setAgentProfileId(profile.getId());
+        attempt.setWorkItemId(task.getWorkItemId());
+        attempt.setRequestedById(actorId);
+        attempt.setAttemptType(attemptType);
+        attempt.setDispatchMode(firstText(firstText(task.getDispatchMode(), provider.getDispatchMode()), "managed"));
+        attempt.setProviderType(provider.getProviderType());
+        attempt.setTransport(firstText(firstText(textAt(requestPayload, "transport"), textAt(requestPayload, "dispatchMode")), provider.getDispatchMode()));
+        attempt.setStatus(status);
+        attempt.setExternalTaskId(externalTaskId);
+        attempt.setIdempotencyKey(textAt(requestPayload, "idempotencyKey"));
+        attempt.setExternalDispatch(requestPayload.path("externalDispatch").asBoolean(false));
+        attempt.setRequestPayload(requestPayload);
+        attempt.setResponsePayload(responsePayload);
+        attempt.setErrorMessage(hasText(errorMessage) ? truncate(errorMessage, 2_000) : null);
+        attempt.setStartedAt(startedAt);
+        attempt.setFinishedAt(OffsetDateTime.now());
+        agentDispatchAttemptRepository.save(attempt);
     }
 
     private void linkRepositories(AgentTask task, WorkItem item, List<UUID> repositoryConnectionIds) {
@@ -973,6 +1046,7 @@ public class AgentService {
                 agentMessageRepository.findByAgentTaskIdOrderByCreatedAtAsc(task.getId()),
                 agentArtifactRepository.findByAgentTaskIdOrderByCreatedAtAsc(task.getId()),
                 agentTaskRepositoryLinkRepository.findByAgentTaskIdOrderByCreatedAtAsc(task.getId()),
+                agentDispatchAttemptRepository.findByAgentTaskIdOrderByStartedAtAscIdAsc(task.getId()),
                 callbackToken
         );
     }
@@ -1482,6 +1556,14 @@ public class AgentService {
 
     private String firstText(String preferred, String fallback) {
         return hasText(preferred) ? preferred.trim() : fallback;
+    }
+
+    private String textAt(JsonNode node, String fieldName) {
+        JsonNode value = node == null ? null : node.get(fieldName);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        return value.isTextual() ? value.asText() : value.toString();
     }
 
     private String truncate(String value, int maxLength) {

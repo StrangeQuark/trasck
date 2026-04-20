@@ -155,6 +155,20 @@ class ImportSampleFixtureIntegrationTest {
                 + "/dashboard-summary?from=2020-01-01T00:00:00Z&to=2030-01-01T00:00:00Z");
         assertThat(workspaceSummary.at("/importCompletions/completedWithOpenConflicts").asLong()).isGreaterThanOrEqualTo(3);
         assertThat(widgetTypes(workspaceSummary.at("/widgets"))).contains("portfolio_import_completion_summary");
+
+        JsonNode projectCompletionExport = postJson("/api/v1/workspaces/" + workspaceId + "/import-review/export-jobs", objectMapper.createObjectNode()
+                .put("tableType", "project_completion")
+                .put("projectId", projectId.toString())
+                .put("filterColumn", "scope")
+                .put("filter", "Project"));
+        assertThat(projectCompletionExport.at("/exportType").asText()).isEqualTo("import_project_completion");
+        assertThat(projectCompletionExport.at("/filename").asText()).endsWith(".csv");
+        HttpResponse<String> downloadedProjectCompletionExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + projectCompletionExport.at("/id").asText() + "/download");
+        assertThat(downloadedProjectCompletionExport.body()).contains("Scope,Completed,Completed With Open Conflicts", "Project");
+
+        JsonNode workspaceCompletionExport = postJson("/api/v1/workspaces/" + workspaceId + "/import-review/export-jobs", objectMapper.createObjectNode()
+                .put("tableType", "workspace_completion"));
+        assertThat(workspaceCompletionExport.at("/exportType").asText()).isEqualTo("import_workspace_completion");
     }
 
     private void exerciseLargeConflictResolutionJobOperations(UUID workspaceId) throws Exception {
@@ -194,6 +208,14 @@ class ImportSampleFixtureIntegrationTest {
         assertThat(completedWorkerRun.at("/completed").asInt()).isEqualTo(1);
         assertThat(completedWorkerRun.at("/jobs/0/resolvedCount").asInt()).isEqualTo(501);
         assertThat(openConflictCount(importJobId)).isZero();
+        JsonNode conflictJobExport = postJson("/api/v1/workspaces/" + workspaceId + "/import-review/export-jobs", objectMapper.createObjectNode()
+                .put("tableType", "conflict_resolution_jobs")
+                .put("importJobId", importJobId.toString())
+                .put("filterColumn", "status")
+                .put("filter", "completed"));
+        assertThat(conflictJobExport.at("/exportType").asText()).isEqualTo("import_conflict_resolution_jobs");
+        HttpResponse<String> downloadedConflictJobExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + conflictJobExport.at("/id").asText() + "/download");
+        assertThat(downloadedConflictJobExport.body()).contains("Status,Resolution,Scope,Filters,Counts,Requested,Finished", "completed");
         JsonNode workerRuns = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs");
         assertThat(hasWorkerRun(workerRuns, "import_conflict_resolution", "succeeded")).isTrue();
         assertThat(hasWorkerRun(workerRuns, "import_conflict_resolution", "failed")).isTrue();
@@ -287,6 +309,14 @@ class ImportSampleFixtureIntegrationTest {
         assertThat(downloadedCsvExport.statusCode()).isEqualTo(200);
         assertThat(downloadedCsvExport.headers().firstValue("Content-Type")).hasValueSatisfying(value -> assertThat(value).contains("text/csv"));
         assertThat(downloadedCsvExport.body()).contains("Source,Status,Version,Change,Field,Previous,Current", sample.titlePath());
+        JsonNode exportJobsCsv = postJson("/api/v1/workspaces/" + workspaceId + "/import-review/export-jobs", objectMapper.createObjectNode()
+                .put("tableType", "export_jobs")
+                .put("exportType", "import_job_version_diffs")
+                .put("filterColumn", "filename")
+                .put("filter", "import-job-version-diffs"));
+        assertThat(exportJobsCsv.at("/exportType").asText()).isEqualTo("import_export_jobs");
+        HttpResponse<String> downloadedExportJobsCsv = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + exportJobsCsv.at("/id").asText() + "/download");
+        assertThat(downloadedExportJobsCsv.body()).contains("Status,Filename,Size,Finished,Checksum", "import-job-version-diffs");
 
         JsonNode conflictRun = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
                 .put("mappingTemplateId", mapping.at("/id").asText())

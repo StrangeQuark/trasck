@@ -11,6 +11,8 @@ import com.strangequark.trasck.activity.WorkLog;
 import com.strangequark.trasck.activity.WorkLogRepository;
 import com.strangequark.trasck.agent.AgentArtifact;
 import com.strangequark.trasck.agent.AgentArtifactRepository;
+import com.strangequark.trasck.agent.AgentDispatchAttempt;
+import com.strangequark.trasck.agent.AgentDispatchAttemptRepository;
 import com.strangequark.trasck.agent.AgentMessage;
 import com.strangequark.trasck.agent.AgentMessageRepository;
 import com.strangequark.trasck.agent.AgentProfile;
@@ -162,6 +164,9 @@ class JpaPersistenceTest {
     private AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
 
     @Autowired
+    private AgentDispatchAttemptRepository agentDispatchAttemptRepository;
+
+    @Autowired
     private AutomationWorkerSettingsRepository automationWorkerSettingsRepository;
 
     @Autowired
@@ -212,9 +217,9 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(130);
+        assertThat(tableCount).isEqualTo(131);
         assertThat(permissionCount).isEqualTo(31);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(127);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(128);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_automatic_enabled")).isTrue();
@@ -231,6 +236,7 @@ class JpaPersistenceTest {
         assertThat(columnExists("import_job_records", "conflict_materialization_run_id")).isTrue();
         assertThat(columnExists("import_job_record_versions", "snapshot")).isTrue();
         assertThat(columnExists("import_workspace_settings", "sample_jobs_enabled")).isTrue();
+        assertThat(columnExists("agent_dispatch_attempts", "idempotency_key")).isTrue();
     }
 
     @Test
@@ -372,6 +378,27 @@ class JpaPersistenceTest {
         event.setMetadata(objectMapper.createObjectNode().put("source", "test"));
         agentTaskEventRepository.saveAndFlush(event);
 
+        AgentDispatchAttempt dispatchAttempt = new AgentDispatchAttempt();
+        dispatchAttempt.setWorkspaceId(fixture.workspace.getId());
+        dispatchAttempt.setAgentTaskId(task.getId());
+        dispatchAttempt.setProviderId(provider.getId());
+        dispatchAttempt.setAgentProfileId(profile.getId());
+        dispatchAttempt.setWorkItemId(item.getId());
+        dispatchAttempt.setRequestedById(fixture.user.getId());
+        dispatchAttempt.setAttemptType("dispatch");
+        dispatchAttempt.setDispatchMode("webhook_push");
+        dispatchAttempt.setProviderType("codex");
+        dispatchAttempt.setTransport("provider_hosted_api");
+        dispatchAttempt.setStatus("succeeded");
+        dispatchAttempt.setExternalTaskId(task.getExternalTaskId());
+        dispatchAttempt.setIdempotencyKey("codex:" + task.getId() + ":dispatch");
+        dispatchAttempt.setExternalDispatch(true);
+        dispatchAttempt.setRequestPayload(objectMapper.createObjectNode().put("agentTaskId", task.getId().toString()));
+        dispatchAttempt.setResponsePayload(objectMapper.createObjectNode().put("externalTaskId", task.getExternalTaskId()));
+        dispatchAttempt.setStartedAt(OffsetDateTime.now());
+        dispatchAttempt.setFinishedAt(OffsetDateTime.now());
+        agentDispatchAttemptRepository.saveAndFlush(dispatchAttempt);
+
         AgentMessage message = new AgentMessage();
         message.setAgentTaskId(task.getId());
         message.setSenderUserId(agentUser.getId());
@@ -403,6 +430,7 @@ class JpaPersistenceTest {
         assertThat(reloaded.getContextSnapshot().get("workItemKey").asText()).isEqualTo("AGENT-1");
         assertThat(agentProviderCredentialRepository.count()).isEqualTo(1);
         assertThat(agentTaskEventRepository.count()).isEqualTo(1);
+        assertThat(agentDispatchAttemptRepository.findByAgentTaskIdOrderByStartedAtAscIdAsc(task.getId())).hasSize(1);
         assertThat(agentMessageRepository.count()).isEqualTo(1);
         assertThat(agentArtifactRepository.count()).isEqualTo(1);
         assertThat(agentTaskRepositoryLinkRepository.count()).isEqualTo(1);

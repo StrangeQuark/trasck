@@ -429,6 +429,14 @@ public class ImportJobController {
         return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createJobVersionDiffExportJob(importJobId, request));
     }
 
+    @PostMapping("/workspaces/{workspaceId}/import-review/export-jobs")
+    public ResponseEntity<ExportJobResponse> createImportReviewCsvExportJob(
+            @PathVariable UUID workspaceId,
+            @RequestBody ImportReviewCsvExportJobRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createImportReviewCsvExportJob(workspaceId, request));
+    }
+
     @PostMapping("/import-jobs/{importJobId}/records")
     public ResponseEntity<ImportJobRecordResponse> createRecord(
             @PathVariable UUID importJobId,

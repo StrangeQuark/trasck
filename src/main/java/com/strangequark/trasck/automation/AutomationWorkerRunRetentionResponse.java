@@ -6,6 +6,7 @@ import java.util.UUID;
 
 public record AutomationWorkerRunRetentionResponse(
         UUID workspaceId,
+        String workerType,
         Boolean retentionEnabled,
         Integer retentionDays,
         Boolean exportBeforePrune,

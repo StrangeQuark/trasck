@@ -233,6 +233,10 @@ class AgentIntegrationTest {
         String callbackToken = task.at("/callbackToken").asText();
         assertThat(task.at("/status").asText()).isEqualTo("running");
         assertThat(callbackToken).isNotBlank();
+        assertThat(task.at("/dispatchAttempts")).hasSize(1);
+        assertThat(task.at("/dispatchAttempts/0/attemptType").asText()).isEqualTo("dispatch");
+        assertThat(task.at("/dispatchAttempts/0/status").asText()).isEqualTo("succeeded");
+        assertThat(task.at("/dispatchAttempts/0/requestPayload/idempotencyKey").asText()).contains(taskId.toString());
         assertThat(read(get("/api/v1/work-items/" + workItemId, accessToken)).at("/assigneeId").asText()).isEqualTo(agentUserId.toString());
         assertThat(read(get("/api/v1/agent-tasks/" + taskId, accessToken)).at("/events")).isNotEmpty();
         JsonNode rotatedSimProvider = read(post("/api/v1/agent-providers/" + providerId + "/callback-keys/rotate", objectMapper.createObjectNode(), accessToken));
@@ -241,10 +245,14 @@ class AgentIntegrationTest {
                 .put("status", "completed")
                 .put("message", "old key"), callbackToken);
         assertThat(expiredKeyCallback.statusCode()).isEqualTo(401);
-        read(post("/api/v1/agent-tasks/" + taskId + "/cancel", objectMapper.createObjectNode(), accessToken));
+        JsonNode canceledTask = read(post("/api/v1/agent-tasks/" + taskId + "/cancel", objectMapper.createObjectNode(), accessToken));
+        assertThat(canceledTask.at("/dispatchAttempts")).hasSize(2);
+        assertThat(canceledTask.at("/dispatchAttempts/1/attemptType").asText()).isEqualTo("cancel");
         JsonNode retriedTask = read(post("/api/v1/agent-tasks/" + taskId + "/retry", objectMapper.createObjectNode(), accessToken));
         callbackToken = retriedTask.at("/callbackToken").asText();
         assertThat(callbackToken).isNotBlank();
+        assertThat(retriedTask.at("/dispatchAttempts")).hasSize(3);
+        assertThat(retriedTask.at("/dispatchAttempts/2/attemptType").asText()).isEqualTo("retry");
 
         ObjectNode workerAssignRequest = objectMapper.createObjectNode()
                 .put("agentProfileId", workerProfileId.toString());
@@ -253,6 +261,7 @@ class AgentIntegrationTest {
         JsonNode workerTask = read(post("/api/v1/work-items/" + workerWorkItemId + "/assign-agent", workerAssignRequest, accessToken));
         UUID workerTaskId = uuid(workerTask, "/id");
         assertThat(workerTask.at("/status").asText()).isEqualTo("running");
+        assertThat(workerTask.at("/dispatchAttempts/0/requestPayload/protocolVersion").asText()).isEqualTo("trasck.worker.v1");
         domainEventOutboxDispatcher.dispatchPending();
         assertThat(workerWebhook.deliveries()).hasSize(1);
         JsonNode durablePushDispatch = workerWebhook.deliveries().get(0);

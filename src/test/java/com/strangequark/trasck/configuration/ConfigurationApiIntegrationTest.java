@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -40,6 +41,9 @@ class ConfigurationApiIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     private String accessToken;
 
@@ -318,6 +322,17 @@ class ConfigurationApiIntegrationTest {
         assertThat(workerRunExport.at("/exportJobId").isMissingNode() || workerRunExport.at("/exportJobId").isNull()).isFalse();
         JsonNode workerRunPrune = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/prune", objectMapper.createObjectNode());
         assertThat(workerRunPrune.at("/runsPruned").asInt()).isEqualTo(0);
+        jdbcTemplate.update("update automation_worker_runs set started_at = now() - interval '2 days' where workspace_id = ?", workspaceId);
+        JsonNode emailWorkerRunExport = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/export?limit=5&workerType=email", objectMapper.createObjectNode());
+        assertThat(emailWorkerRunExport.at("/workerType").asText()).isEqualTo("email");
+        assertThat(emailWorkerRunExport.at("/runsIncluded").asInt()).isEqualTo(1);
+        assertThat(emailWorkerRunExport.at("/runs")).hasSize(1);
+        assertThat(emailWorkerRunExport.at("/runs/0/workerType").asText()).isEqualTo("email");
+        JsonNode emailWorkerRunPrune = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/prune?workerType=email", objectMapper.createObjectNode());
+        assertThat(emailWorkerRunPrune.at("/workerType").asText()).isEqualTo("email");
+        assertThat(emailWorkerRunPrune.at("/runsPruned").asInt()).isEqualTo(1);
+        JsonNode remainingWebhookRuns = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs?workerType=webhook");
+        assertThat(remainingWebhookRuns).isNotEmpty();
 
         JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
                 .put("provider", "jira"));

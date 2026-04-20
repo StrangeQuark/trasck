@@ -16,7 +16,16 @@ public interface AutomationWorkerRunRepository extends JpaRepository<AutomationW
 
     long countByWorkspaceIdAndStartedAtBefore(UUID workspaceId, OffsetDateTime cutoff);
 
+    long countByWorkspaceIdAndWorkerTypeAndStartedAtBefore(UUID workspaceId, String workerType, OffsetDateTime cutoff);
+
     List<AutomationWorkerRun> findByWorkspaceIdAndStartedAtBeforeOrderByStartedAtAsc(UUID workspaceId, OffsetDateTime cutoff, Pageable pageable);
+
+    List<AutomationWorkerRun> findByWorkspaceIdAndWorkerTypeAndStartedAtBeforeOrderByStartedAtAsc(
+            UUID workspaceId,
+            String workerType,
+            OffsetDateTime cutoff,
+            Pageable pageable
+    );
 
     @Modifying
     @Query("""
@@ -25,4 +34,17 @@ public interface AutomationWorkerRunRepository extends JpaRepository<AutomationW
               and run.startedAt < :cutoff
             """)
     int deleteRetainedRuns(@Param("workspaceId") UUID workspaceId, @Param("cutoff") OffsetDateTime cutoff);
+
+    @Modifying
+    @Query("""
+            delete from AutomationWorkerRun run
+            where run.workspaceId = :workspaceId
+              and run.workerType = :workerType
+              and run.startedAt < :cutoff
+            """)
+    int deleteRetainedRunsByWorkerType(
+            @Param("workspaceId") UUID workspaceId,
+            @Param("workerType") String workerType,
+            @Param("cutoff") OffsetDateTime cutoff
+    );
 }
