@@ -6,6 +6,13 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.JsonValues;
 import com.strangequark.trasck.access.PermissionService;
+import com.strangequark.trasck.activity.Attachment;
+import com.strangequark.trasck.activity.AttachmentRepository;
+import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
+import com.strangequark.trasck.activity.storage.AttachmentStorageService;
+import com.strangequark.trasck.activity.storage.AttachmentUpload;
+import com.strangequark.trasck.activity.storage.StoredAttachment;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
@@ -16,6 +23,8 @@ import com.strangequark.trasck.workitem.WorkItemService;
 import com.strangequark.trasck.workitem.WorkItemUpdateRequest;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -27,8 +36,10 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.PatternSyntaxException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -41,6 +52,9 @@ public class ImportJobService {
     private static final int DEFAULT_CONFLICT_PREVIEW_PAGE_SIZE = 50;
     private static final int MAX_CONFLICT_PREVIEW_PAGE_SIZE = 200;
     private static final int MAX_FILTERED_CONFLICT_RESOLUTION_BATCH_SIZE = 500;
+    private static final int DEFAULT_CONFLICT_RESOLUTION_WORKER_LIMIT = 10;
+    private static final int MAX_CONFLICT_RESOLUTION_WORKER_LIMIT = 50;
+    private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
     private static final Set<String> SUPPORTED_TRANSFORM_FUNCTIONS = Set.of(
             "trim",
@@ -70,12 +84,22 @@ public class ImportJobService {
     private final ImportMappingValueLookupRepository importMappingValueLookupRepository;
     private final ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository;
     private final ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository;
+    private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorageService attachmentStorageService;
+    private final ExportJobRepository exportJobRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final WorkItemService workItemService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+
+    @Value("${trasck.imports.conflict-resolution.scheduler.enabled:false}")
+    private boolean scheduledConflictResolutionJobsEnabled;
+
+    @Value("${trasck.imports.conflict-resolution.scheduler.limit:10}")
+    private int scheduledConflictResolutionJobLimit;
 
     public ImportJobService(
             ObjectMapper objectMapper,
@@ -90,6 +114,10 @@ public class ImportJobService {
             ImportMappingValueLookupRepository importMappingValueLookupRepository,
             ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository,
             ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository,
+            AttachmentStorageConfigRepository attachmentStorageConfigRepository,
+            AttachmentRepository attachmentRepository,
+            AttachmentStorageService attachmentStorageService,
+            ExportJobRepository exportJobRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             WorkItemService workItemService,
@@ -109,6 +137,10 @@ public class ImportJobService {
         this.importMappingValueLookupRepository = importMappingValueLookupRepository;
         this.importMappingTypeTranslationRepository = importMappingTypeTranslationRepository;
         this.importMappingStatusTranslationRepository = importMappingStatusTranslationRepository;
+        this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
+        this.attachmentRepository = attachmentRepository;
+        this.attachmentStorageService = attachmentStorageService;
+        this.exportJobRepository = exportJobRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.workItemService = workItemService;
@@ -808,6 +840,20 @@ public class ImportJobService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<ImportConflictResolutionJobResponse> listWorkspaceConflictResolutionJobs(UUID workspaceId, String status) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        String normalizedStatus = normalizedFilter(status);
+        List<ImportConflictResolutionJob> jobs = normalizedStatus == null
+                ? importConflictResolutionJobRepository.findByWorkspaceIdOrderByRequestedAtDesc(workspaceId)
+                : importConflictResolutionJobRepository.findByWorkspaceIdAndStatusOrderByRequestedAtDesc(workspaceId, normalizedStatus);
+        return jobs.stream()
+                .map(ImportConflictResolutionJobResponse::from)
+                .toList();
+    }
+
     @Transactional
     public ImportConflictResolutionJobResponse createConflictResolutionJob(UUID importJobId, ImportConflictBulkResolutionRequest request) {
         ImportConflictBulkResolutionRequest resolutionRequest = required(request, "request");
@@ -860,8 +906,87 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         ImportConflictResolutionJob resolutionJob = conflictResolutionJob(jobId);
         permissionService.requireWorkspacePermission(actorId, resolutionJob.getWorkspaceId(), "workspace.admin");
+        return runConflictResolutionJob(resolutionJob, actorId);
+    }
+
+    @Transactional
+    public ImportConflictResolutionJobResponse cancelConflictResolutionJob(UUID jobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportConflictResolutionJob resolutionJob = conflictResolutionJob(jobId);
+        permissionService.requireWorkspacePermission(actorId, resolutionJob.getWorkspaceId(), "workspace.admin");
         if (!Set.of("queued", "failed").contains(resolutionJob.getStatus())) {
-            throw badRequest("Conflict resolution job must be queued or failed to run");
+            throw badRequest("Conflict resolution job must be queued or failed to cancel");
+        }
+        resolutionJob.setStatus("cancelled");
+        resolutionJob.setFinishedAt(OffsetDateTime.now());
+        resolutionJob.setErrorMessage("Cancelled by user");
+        ImportConflictResolutionJob saved = importConflictResolutionJobRepository.save(resolutionJob);
+        recordConflictResolutionJobEvent(saved, "import_conflict_resolution_job.cancelled", actorId);
+        return ImportConflictResolutionJobResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportConflictResolutionJobResponse retryConflictResolutionJob(UUID jobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportConflictResolutionJob resolutionJob = conflictResolutionJob(jobId);
+        permissionService.requireWorkspacePermission(actorId, resolutionJob.getWorkspaceId(), "workspace.admin");
+        if (!Set.of("failed", "cancelled").contains(resolutionJob.getStatus())) {
+            throw badRequest("Conflict resolution job must be failed or cancelled to retry");
+        }
+        resolutionJob.setStatus("queued");
+        resolutionJob.setStartedAt(null);
+        resolutionJob.setFinishedAt(null);
+        resolutionJob.setErrorMessage(null);
+        resolutionJob.setResolvedCount(0);
+        resolutionJob.setFailedCount(0);
+        resolutionJob.setRequestedAt(OffsetDateTime.now());
+        ImportConflictResolutionJob saved = importConflictResolutionJobRepository.save(resolutionJob);
+        recordConflictResolutionJobEvent(saved, "import_conflict_resolution_job.retried", actorId);
+        return ImportConflictResolutionJobResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportConflictResolutionWorkerResponse processConflictResolutionJobs(UUID workspaceId, Integer limit) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return processQueuedConflictResolutionJobs(workspaceId, normalizeConflictResolutionWorkerLimit(limit), actorId);
+    }
+
+    @Scheduled(fixedDelayString = "${trasck.imports.conflict-resolution.fixed-delay-ms:5000}")
+    @Transactional
+    public void runScheduledConflictResolutionJobs() {
+        if (!scheduledConflictResolutionJobsEnabled) {
+            return;
+        }
+        processQueuedConflictResolutionJobs(null, normalizeConflictResolutionWorkerLimit(scheduledConflictResolutionJobLimit), null);
+    }
+
+    private ImportConflictResolutionWorkerResponse processQueuedConflictResolutionJobs(UUID workspaceId, int limit, UUID actorId) {
+        List<ImportConflictResolutionJob> queuedJobs = workspaceId == null
+                ? importConflictResolutionJobRepository.findQueued(PageRequest.of(0, limit))
+                : importConflictResolutionJobRepository.findQueuedByWorkspaceId(workspaceId, PageRequest.of(0, limit));
+        List<ImportConflictResolutionJobResponse> responses = new ArrayList<>();
+        int completed = 0;
+        int failed = 0;
+        for (ImportConflictResolutionJob queuedJob : queuedJobs) {
+            ImportConflictResolutionJobResponse response = runConflictResolutionJob(
+                    queuedJob,
+                    actorId == null ? queuedJob.getRequestedById() : actorId
+            );
+            responses.add(response);
+            if ("completed".equals(response.status())) {
+                completed++;
+            } else if ("failed".equals(response.status())) {
+                failed++;
+            }
+        }
+        return new ImportConflictResolutionWorkerResponse(workspaceId, responses.size(), completed, failed, responses);
+    }
+
+    private ImportConflictResolutionJobResponse runConflictResolutionJob(ImportConflictResolutionJob resolutionJob, UUID actorId) {
+        if (!"queued".equals(resolutionJob.getStatus())) {
+            throw badRequest("Conflict resolution job must be queued to run");
         }
         resolutionJob.setStatus("running");
         resolutionJob.setStartedAt(OffsetDateTime.now());
@@ -869,7 +994,8 @@ public class ImportJobService {
         resolutionJob.setErrorMessage(null);
         resolutionJob.setResolvedCount(0);
         resolutionJob.setFailedCount(0);
-        importConflictResolutionJobRepository.save(resolutionJob);
+        ImportConflictResolutionJob running = importConflictResolutionJobRepository.save(resolutionJob);
+        recordConflictResolutionJobEvent(running, "import_conflict_resolution_job.running", actorId);
         try {
             ImportJob job = mutableImportJob(resolutionJob.getImportJobId());
             long currentMatched = importJobRecordRepository.countFiltered(
@@ -1024,6 +1150,16 @@ public class ImportJobService {
         return pageSize;
     }
 
+    private int normalizeConflictResolutionWorkerLimit(Integer limit) {
+        if (limit == null) {
+            return DEFAULT_CONFLICT_RESOLUTION_WORKER_LIMIT;
+        }
+        if (limit < 1 || limit > MAX_CONFLICT_RESOLUTION_WORKER_LIMIT) {
+            throw badRequest("limit must be between 1 and " + MAX_CONFLICT_RESOLUTION_WORKER_LIMIT);
+        }
+        return limit;
+    }
+
     private int resolveFilteredConflictsForJob(ImportJob job, ImportConflictResolutionJob resolutionJob, UUID actorId) {
         int resolved = 0;
         while (true) {
@@ -1106,6 +1242,59 @@ public class ImportJobService {
         ImportJobVersionDiffResponse diffs = listJobVersionDiffs(importJobId);
         ImportJob job = importJob(importJobId);
         return new ImportJobVersionDiffExportResponse(OffsetDateTime.now(), response(job), diffs);
+    }
+
+    @Transactional
+    public ExportJobResponse createJobVersionDiffExportJob(UUID importJobId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = importJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        ImportJobVersionDiffExportResponse export = new ImportJobVersionDiffExportResponse(
+                OffsetDateTime.now(ZoneOffset.UTC),
+                response(job),
+                listJobVersionDiffs(importJobId)
+        );
+        AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(job.getWorkspaceId())
+                .orElseThrow(() -> badRequest("Default attachment storage config not found"));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        String filename = "import-job-version-diffs-"
+                + importJobId
+                + "-"
+                + now.format(EXPORT_FILENAME_TIME)
+                + ".json";
+        byte[] content = jsonBytes(export);
+        StoredAttachment stored = attachmentStorageService.store(
+                storageConfig,
+                new AttachmentUpload(filename, "application/json", content, null)
+        );
+        try {
+            Attachment attachment = new Attachment();
+            attachment.setWorkspaceId(job.getWorkspaceId());
+            attachment.setStorageConfigId(storageConfig.getId());
+            attachment.setUploaderId(actorId);
+            attachment.setFilename(filename);
+            attachment.setContentType("application/json");
+            attachment.setStorageKey(stored.storageKey());
+            attachment.setSizeBytes(stored.sizeBytes());
+            attachment.setChecksum(stored.checksum());
+            attachment.setVisibility("restricted");
+            Attachment savedAttachment = attachmentRepository.save(attachment);
+
+            ExportJob exportJob = new ExportJob();
+            exportJob.setWorkspaceId(job.getWorkspaceId());
+            exportJob.setRequestedById(actorId);
+            exportJob.setExportType("import_job_version_diffs");
+            exportJob.setStatus("completed");
+            exportJob.setFileAttachmentId(savedAttachment.getId());
+            exportJob.setStartedAt(now);
+            exportJob.setFinishedAt(now);
+            ExportJob savedExportJob = exportJobRepository.save(exportJob);
+            recordImportJobVersionDiffExportEvent(job, savedExportJob, savedAttachment, actorId);
+            return ExportJobResponse.from(savedExportJob, savedAttachment);
+        } catch (RuntimeException ex) {
+            attachmentStorageService.delete(storageConfig, stored.storageKey());
+            throw ex;
+        }
     }
 
     private ImportMaterializeResponse processMaterialization(
@@ -2328,8 +2517,10 @@ public class ImportJobService {
                 .put("expectedCount", safeCount(job.getExpectedCount()))
                 .put("matchedCount", safeCount(job.getMatchedCount()))
                 .put("resolvedCount", safeCount(job.getResolvedCount()))
-                .put("failedCount", safeCount(job.getFailedCount()))
-                .put("actorUserId", actorId.toString());
+                .put("failedCount", safeCount(job.getFailedCount()));
+        if (actorId != null) {
+            payload.put("actorUserId", actorId.toString());
+        }
         if (job.getStatusFilter() != null) {
             payload.put("statusFilter", job.getStatusFilter());
         }
@@ -2343,6 +2534,16 @@ public class ImportJobService {
             payload.put("errorMessage", job.getErrorMessage());
         }
         domainEventService.record(job.getWorkspaceId(), "import_conflict_resolution_job", job.getId(), eventType, payload);
+    }
+
+    private void recordImportJobVersionDiffExportEvent(ImportJob job, ExportJob exportJob, Attachment attachment, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("importJobId", job.getId().toString())
+                .put("exportJobId", exportJob.getId().toString())
+                .put("fileAttachmentId", attachment.getId().toString())
+                .put("filename", attachment.getFilename())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(job.getWorkspaceId(), "import_job", job.getId(), "import_job.version_diff_export_created", payload);
     }
 
     private void recordImportJobRecordVersion(ImportJobRecord record, String changeType, UUID actorId) {
@@ -2458,6 +2659,14 @@ public class ImportJobService {
         Map<String, JsonNode> fields = new TreeMap<>();
         flattenSnapshot(snapshot == null ? objectMapper.createObjectNode() : snapshot, "", fields);
         return fields;
+    }
+
+    private byte[] jsonBytes(Object value) {
+        try {
+            return objectMapper.writeValueAsBytes(value);
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Unable to serialize export content", ex);
+        }
     }
 
     private void flattenSnapshot(JsonNode value, String prefix, Map<String, JsonNode> fields) {

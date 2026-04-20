@@ -57,6 +57,17 @@ public class ReportingController {
         return reportingService.projectDashboardSummary(projectId, from, to, teamId, iterationId);
     }
 
+    @GetMapping("/projects/{projectId}/imports/completions")
+    public ProjectReportSummaryResponse.ImportCompletionMetricsResponse projectImportCompletions(
+            @PathVariable UUID projectId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) UUID teamId,
+            @RequestParam(required = false) UUID iterationId
+    ) {
+        return reportingService.projectImportCompletions(projectId, from, to, teamId, iterationId);
+    }
+
     @GetMapping("/workspaces/{workspaceId}/dashboard-summary")
     public PortfolioReportSummaryResponse workspaceDashboardSummary(
             @PathVariable UUID workspaceId,
@@ -65,6 +76,16 @@ public class ReportingController {
             @RequestParam(required = false) List<UUID> projectIds
     ) {
         return reportingService.workspaceDashboardSummary(workspaceId, from, to, projectIds);
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/imports/completions")
+    public ProjectReportSummaryResponse.ImportCompletionMetricsResponse workspaceImportCompletions(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) List<UUID> projectIds
+    ) {
+        return reportingService.workspaceImportCompletions(workspaceId, from, to, projectIds);
     }
 
     @GetMapping("/programs/{programId}/dashboard-summary")
