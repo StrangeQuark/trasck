@@ -35,6 +35,8 @@ import com.strangequark.trasck.integration.EmailProviderSettings;
 import com.strangequark.trasck.integration.EmailProviderSettingsRepository;
 import com.strangequark.trasck.integration.ImportJobRecord;
 import com.strangequark.trasck.integration.ImportJobRecordRepository;
+import com.strangequark.trasck.integration.ImportJobRecordVersion;
+import com.strangequark.trasck.integration.ImportJobRecordVersionRepository;
 import com.strangequark.trasck.integration.ImportMaterializationRun;
 import com.strangequark.trasck.integration.ImportMaterializationRunRepository;
 import com.strangequark.trasck.integration.ImportJob;
@@ -177,6 +179,9 @@ class JpaPersistenceTest {
     private ImportJobRecordRepository importJobRecordRepository;
 
     @Autowired
+    private ImportJobRecordVersionRepository importJobRecordVersionRepository;
+
+    @Autowired
     private ImportMappingTemplateRepository importMappingTemplateRepository;
 
     @DynamicPropertySource
@@ -197,9 +202,9 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(127);
+        assertThat(tableCount).isEqualTo(128);
         assertThat(permissionCount).isEqualTo(31);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(124);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(125);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_automatic_enabled")).isTrue();
@@ -213,6 +218,7 @@ class JpaPersistenceTest {
         assertThat(columnExists("import_materialization_runs", "mapping_rules_snapshot")).isTrue();
         assertThat(columnExists("import_job_records", "conflict_status")).isTrue();
         assertThat(columnExists("import_job_records", "conflict_materialization_run_id")).isTrue();
+        assertThat(columnExists("import_job_record_versions", "snapshot")).isTrue();
     }
 
     @Test
@@ -519,6 +525,14 @@ class JpaPersistenceTest {
         conflictRecord.setConflictDetectedAt(OffsetDateTime.now());
         conflictRecord.setConflictMaterializationRunId(materializationRun.getId());
         conflictRecord = importJobRecordRepository.saveAndFlush(conflictRecord);
+        ImportJobRecordVersion recordVersion = new ImportJobRecordVersion();
+        recordVersion.setImportJobRecordId(conflictRecord.getId());
+        recordVersion.setImportJobId(importJob.getId());
+        recordVersion.setVersion(1);
+        recordVersion.setChangeType("updated");
+        recordVersion.setChangedById(fixture.user.getId());
+        recordVersion.setSnapshot(objectMapper.createObjectNode().put("status", "conflict"));
+        recordVersion = importJobRecordVersionRepository.saveAndFlush(recordVersion);
 
         entityManager.clear();
 
@@ -544,6 +558,9 @@ class JpaPersistenceTest {
         ImportJobRecord reloadedConflictRecord = importJobRecordRepository.findById(conflictRecord.getId()).orElseThrow();
         assertThat(reloadedConflictRecord.getConflictStatus()).isEqualTo("open");
         assertThat(reloadedConflictRecord.getConflictMaterializationRunId()).isEqualTo(materializationRun.getId());
+        ImportJobRecordVersion reloadedRecordVersion = importJobRecordVersionRepository.findById(recordVersion.getId()).orElseThrow();
+        assertThat(reloadedRecordVersion.getImportJobRecordId()).isEqualTo(conflictRecord.getId());
+        assertThat(reloadedRecordVersion.getSnapshot().get("status").asText()).isEqualTo("conflict");
     }
 
     private ImportJob createImportJob(CoreFixture fixture, String provider) {

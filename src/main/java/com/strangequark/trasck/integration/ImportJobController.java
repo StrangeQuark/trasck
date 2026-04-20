@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -79,6 +80,24 @@ public class ImportJobController {
             @RequestBody(required = false) ImportTransformPresetCloneRequest request
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.cloneTransformPresetVersion(presetId, versionId, request));
+    }
+
+    @PostMapping("/import-transform-presets/{presetId}/versions/{versionId}/retarget-preview")
+    public ImportTransformPresetRetargetResponse previewCloneAndRetargetTransformPresetVersion(
+            @PathVariable UUID presetId,
+            @PathVariable UUID versionId,
+            @RequestBody(required = false) ImportTransformPresetRetargetRequest request
+    ) {
+        return importJobService.previewCloneAndRetargetTransformPresetVersion(presetId, versionId, request);
+    }
+
+    @PostMapping("/import-transform-presets/{presetId}/versions/{versionId}/retarget")
+    public ResponseEntity<ImportTransformPresetRetargetResponse> cloneAndRetargetTransformPresetVersion(
+            @PathVariable UUID presetId,
+            @PathVariable UUID versionId,
+            @RequestBody(required = false) ImportTransformPresetRetargetRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.cloneAndRetargetTransformPresetVersion(presetId, versionId, request));
     }
 
     @PatchMapping("/import-transform-presets/{presetId}")
@@ -213,8 +232,11 @@ public class ImportJobController {
     }
 
     @PostMapping("/import-jobs/{importJobId}/complete")
-    public ImportJobResponse completeImportJob(@PathVariable UUID importJobId) {
-        return importJobService.completeImportJob(importJobId);
+    public ImportJobResponse completeImportJob(
+            @PathVariable UUID importJobId,
+            @RequestBody(required = false) ImportJobCompleteRequest request
+    ) {
+        return importJobService.completeImportJob(importJobId, request);
     }
 
     @PostMapping("/import-jobs/{importJobId}/fail")
@@ -244,8 +266,13 @@ public class ImportJobController {
     }
 
     @GetMapping("/import-jobs/{importJobId}/records")
-    public List<ImportJobRecordResponse> listRecords(@PathVariable UUID importJobId) {
-        return importJobService.listRecords(importJobId);
+    public List<ImportJobRecordResponse> listRecords(
+            @PathVariable UUID importJobId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String conflictStatus,
+            @RequestParam(required = false) String sourceType
+    ) {
+        return importJobService.listRecords(importJobId, status, conflictStatus, sourceType);
     }
 
     @GetMapping("/import-jobs/{importJobId}/materialization-runs")
@@ -274,12 +301,25 @@ public class ImportJobController {
         return importJobService.resolveConflict(recordId, request);
     }
 
+    @PostMapping("/import-jobs/{importJobId}/conflicts/resolve")
+    public ImportConflictBulkResolutionResponse resolveConflicts(
+            @PathVariable UUID importJobId,
+            @RequestBody ImportConflictBulkResolutionRequest request
+    ) {
+        return importJobService.resolveConflicts(importJobId, request);
+    }
+
     @PatchMapping("/import-job-records/{recordId}")
     public ImportJobRecordResponse updateRecord(
             @PathVariable UUID recordId,
             @RequestBody ImportJobRecordRequest request
     ) {
         return importJobService.updateRecord(recordId, request);
+    }
+
+    @GetMapping("/import-job-records/{recordId}/versions")
+    public List<ImportJobRecordVersionResponse> listRecordVersions(@PathVariable UUID recordId) {
+        return importJobService.listRecordVersions(recordId);
     }
 
     @PostMapping("/import-jobs/{importJobId}/records")

@@ -17,6 +17,7 @@ import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -49,6 +50,7 @@ public class ImportJobService {
     private final ObjectMapper objectMapper;
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
+    private final ImportJobRecordVersionRepository importJobRecordVersionRepository;
     private final ImportMappingTemplateRepository importMappingTemplateRepository;
     private final ImportTransformPresetRepository importTransformPresetRepository;
     private final ImportTransformPresetVersionRepository importTransformPresetVersionRepository;
@@ -67,6 +69,7 @@ public class ImportJobService {
             ObjectMapper objectMapper,
             ImportJobRepository importJobRepository,
             ImportJobRecordRepository importJobRecordRepository,
+            ImportJobRecordVersionRepository importJobRecordVersionRepository,
             ImportMappingTemplateRepository importMappingTemplateRepository,
             ImportTransformPresetRepository importTransformPresetRepository,
             ImportTransformPresetVersionRepository importTransformPresetVersionRepository,
@@ -84,6 +87,7 @@ public class ImportJobService {
         this.objectMapper = objectMapper;
         this.importJobRepository = importJobRepository;
         this.importJobRecordRepository = importJobRecordRepository;
+        this.importJobRecordVersionRepository = importJobRecordVersionRepository;
         this.importMappingTemplateRepository = importMappingTemplateRepository;
         this.importTransformPresetRepository = importTransformPresetRepository;
         this.importTransformPresetVersionRepository = importTransformPresetVersionRepository;
@@ -183,24 +187,76 @@ public class ImportJobService {
         ImportTransformPresetCloneRequest cloneRequest = request == null ? new ImportTransformPresetCloneRequest(null, null, null) : request;
         UUID actorId = currentUserService.requireUserId();
         ImportTransformPreset sourcePreset = transformPreset(presetId);
-        ImportTransformPresetVersion version = importTransformPresetVersionRepository.findByIdAndPresetId(versionId, presetId)
-                .orElseThrow(() -> notFound("Import transform preset version not found"));
+        ImportTransformPresetVersion version = transformPresetVersion(presetId, versionId);
         activeWorkspace(sourcePreset.getWorkspaceId());
         permissionService.requireWorkspacePermission(actorId, sourcePreset.getWorkspaceId(), "workspace.admin");
-        ImportTransformPreset clone = new ImportTransformPreset();
-        clone.setWorkspaceId(sourcePreset.getWorkspaceId());
-        clone.setName(uniquePresetName(
-                sourcePreset.getWorkspaceId(),
-                hasText(cloneRequest.name()) ? cloneRequest.name().trim() : version.getName() + " copy"
-        ));
-        clone.setDescription(hasText(cloneRequest.description()) ? cloneRequest.description().trim() : version.getDescription());
-        clone.setTransformationConfig(version.getTransformationConfig() == null ? objectMapper.createObjectNode() : version.getTransformationConfig().deepCopy());
-        clone.setEnabled(cloneRequest.enabled() == null ? Boolean.TRUE.equals(version.getEnabled()) : cloneRequest.enabled());
-        clone.setVersion(1);
-        ImportTransformPreset saved = importTransformPresetRepository.saveAndFlush(clone);
+        ImportTransformPreset saved = createTransformPresetClone(sourcePreset, version, cloneRequest.name(), cloneRequest.description(), cloneRequest.enabled());
         recordTransformPresetVersion(saved, "created", actorId);
         recordTransformPresetCloneEvent(saved, sourcePreset.getId(), version, actorId);
         return ImportTransformPresetResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public ImportTransformPresetRetargetResponse previewCloneAndRetargetTransformPresetVersion(
+            UUID presetId,
+            UUID versionId,
+            ImportTransformPresetRetargetRequest request
+    ) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportTransformPreset sourcePreset = transformPreset(presetId);
+        ImportTransformPresetVersion version = transformPresetVersion(presetId, versionId);
+        activeWorkspace(sourcePreset.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, sourcePreset.getWorkspaceId(), "workspace.admin");
+        ImportTransformPresetRetargetRequest retargetRequest = request == null
+                ? new ImportTransformPresetRetargetRequest(null, null, null, List.of())
+                : request;
+        List<ImportMappingTemplate> templates = selectedRetargetTemplates(sourcePreset.getWorkspaceId(), retargetRequest.mappingTemplateIds());
+        String cloneName = uniquePresetName(
+                sourcePreset.getWorkspaceId(),
+                hasText(retargetRequest.name()) ? retargetRequest.name().trim() : version.getName() + " copy"
+        );
+        String cloneDescription = hasText(retargetRequest.description()) ? retargetRequest.description().trim() : version.getDescription();
+        Boolean enabled = retargetRequest.enabled() == null ? Boolean.TRUE.equals(version.getEnabled()) : retargetRequest.enabled();
+        return ImportTransformPresetRetargetResponse.preview(
+                sourcePreset,
+                version,
+                cloneName,
+                cloneDescription,
+                enabled,
+                retargetTemplateResponses(templates, null)
+        );
+    }
+
+    @Transactional
+    public ImportTransformPresetRetargetResponse cloneAndRetargetTransformPresetVersion(
+            UUID presetId,
+            UUID versionId,
+            ImportTransformPresetRetargetRequest request
+    ) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportTransformPreset sourcePreset = transformPreset(presetId);
+        ImportTransformPresetVersion version = transformPresetVersion(presetId, versionId);
+        activeWorkspace(sourcePreset.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, sourcePreset.getWorkspaceId(), "workspace.admin");
+        ImportTransformPresetRetargetRequest retargetRequest = request == null
+                ? new ImportTransformPresetRetargetRequest(null, null, null, List.of())
+                : request;
+        List<ImportMappingTemplate> templates = selectedRetargetTemplates(sourcePreset.getWorkspaceId(), retargetRequest.mappingTemplateIds());
+        ImportTransformPreset saved = createTransformPresetClone(sourcePreset, version, retargetRequest.name(), retargetRequest.description(), retargetRequest.enabled());
+        recordTransformPresetVersion(saved, "created", actorId);
+        recordTransformPresetCloneEvent(saved, sourcePreset.getId(), version, actorId);
+        for (ImportMappingTemplate template : templates) {
+            template.setTransformPresetId(saved.getId());
+            importMappingTemplateRepository.save(template);
+            recordMappingTemplateEvent(template, "import_mapping_template.transform_preset_retargeted", actorId);
+        }
+        recordTransformPresetRetargetEvent(saved, sourcePreset.getId(), version, templates, actorId);
+        return ImportTransformPresetRetargetResponse.applied(
+                sourcePreset,
+                version,
+                saved,
+                retargetTemplateResponses(templates, saved.getId())
+        );
     }
 
     @Transactional
@@ -441,10 +497,17 @@ public class ImportJobService {
     }
 
     @Transactional
-    public ImportJobResponse completeImportJob(UUID importJobId) {
+    public ImportJobResponse completeImportJob(UUID importJobId, ImportJobCompleteRequest request) {
         UUID actorId = currentUserService.requireUserId();
         ImportJob job = mutableImportJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        long openConflicts = importJobRecordRepository.countByImportJobIdAndConflictStatus(job.getId(), "open");
+        if (openConflicts > 0 && !Boolean.TRUE.equals(request == null ? null : request.acceptOpenConflicts())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Import job has " + openConflicts + " open conflicts; set acceptOpenConflicts to true to complete anyway"
+            );
+        }
         job.setStatus("completed");
         job.setFinishedAt(OffsetDateTime.now());
         ImportJob saved = importJobRepository.save(job);
@@ -486,6 +549,7 @@ public class ImportJobService {
         record.setImportJobId(job.getId());
         applyRecordRequest(record, createRequest, true);
         ImportJobRecord saved = importJobRecordRepository.save(record);
+        recordImportJobRecordVersion(saved, "created", actorId);
         recordJobEvent(job, "import_job.record_created", actorId);
         return ImportJobRecordResponse.from(saved);
     }
@@ -501,6 +565,7 @@ public class ImportJobService {
         applyRecordRequest(record, updateRequest, false);
         clearConflict(record);
         ImportJobRecord saved = importJobRecordRepository.save(record);
+        recordImportJobRecordVersion(saved, "updated", actorId);
         recordJobEvent(job, "import_job.record_updated", actorId);
         return ImportJobRecordResponse.from(saved);
     }
@@ -523,11 +588,13 @@ public class ImportJobService {
                 record.setSourceType(parsedRecord.sourceType());
                 record.setSourceId(parsedRecord.sourceId());
             }
+            boolean newRecord = record.getId() == null;
             record.setStatus("pending");
             record.setErrorMessage(null);
             clearConflict(record);
             record.setRawPayload(parsedRecord.rawPayload());
             ImportJobRecord saved = importJobRecordRepository.save(record);
+            recordImportJobRecordVersion(saved, newRecord ? "parsed" : "reparsed", actorId);
             responses.add(ImportJobRecordResponse.from(saved));
         }
         if ("queued".equals(job.getStatus())) {
@@ -623,46 +690,66 @@ public class ImportJobService {
     @Transactional
     public ImportJobRecordResponse resolveConflict(UUID recordId, ImportConflictResolutionRequest request) {
         ImportConflictResolutionRequest resolutionRequest = required(request, "request");
-        String resolution = requiredText(resolutionRequest.resolution(), "resolution").toLowerCase(Locale.ROOT);
-        if (!Set.of("skip", "update_existing", "create_new").contains(resolution)) {
-            throw badRequest("resolution must be skip, update_existing, or create_new");
-        }
+        String resolution = validatedConflictResolution(resolutionRequest.resolution());
         UUID actorId = currentUserService.requireUserId();
         ImportJobRecord record = importJobRecordRepository.findById(recordId)
                 .orElseThrow(() -> notFound("Import job record not found"));
         ImportJob job = importJob(record.getImportJobId());
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
-        if (!"open".equals(record.getConflictStatus())) {
-            throw badRequest("Import job record does not have an open conflict");
-        }
-        record.setConflictStatus("resolved");
-        record.setConflictResolution(resolution);
-        record.setConflictResolvedAt(OffsetDateTime.now());
-        record.setConflictResolvedById(actorId);
-        if ("skip".equals(resolution)) {
-            record.setStatus("skipped");
-            record.setErrorMessage(null);
-        } else if ("update_existing".equals(resolution)) {
-            record.setStatus("pending");
-            record.setErrorMessage(null);
-        } else {
-            record.setStatus("pending");
-            record.setTargetType(null);
-            record.setTargetId(null);
-            record.setErrorMessage(null);
-        }
+        applyConflictResolution(record, resolution, actorId);
         ImportJobRecord saved = importJobRecordRepository.save(record);
+        recordImportJobRecordVersion(saved, "conflict_resolved", actorId);
         recordConflictResolvedEvent(job, saved, actorId);
         return ImportJobRecordResponse.from(saved);
     }
 
-    @Transactional(readOnly = true)
-    public List<ImportJobRecordResponse> listRecords(UUID importJobId) {
+    @Transactional
+    public ImportConflictBulkResolutionResponse resolveConflicts(UUID importJobId, ImportConflictBulkResolutionRequest request) {
+        ImportConflictBulkResolutionRequest resolutionRequest = required(request, "request");
+        String resolution = validatedConflictResolution(resolutionRequest.resolution());
+        List<UUID> recordIds = resolutionRequest.recordIds() == null
+                ? List.of()
+                : new ArrayList<>(new LinkedHashSet<>(resolutionRequest.recordIds()));
+        if (recordIds.isEmpty()) {
+            throw badRequest("recordIds is required");
+        }
         UUID actorId = currentUserService.requireUserId();
         ImportJob job = importJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
-        return importJobRecordRepository.findByImportJobIdOrderBySourceTypeAscSourceIdAsc(job.getId()).stream()
+        List<ImportJobRecord> records = importJobRecordRepository.findByIdInAndImportJobIdOrderBySourceTypeAscSourceIdAsc(recordIds, job.getId());
+        if (records.size() != recordIds.size()) {
+            throw badRequest("All import job records must belong to the import job");
+        }
+        List<ImportJobRecordResponse> responses = new ArrayList<>();
+        for (ImportJobRecord record : records) {
+            applyConflictResolution(record, resolution, actorId);
+            ImportJobRecord saved = importJobRecordRepository.save(record);
+            recordImportJobRecordVersion(saved, "conflict_resolved", actorId);
+            recordConflictResolvedEvent(job, saved, actorId);
+            responses.add(ImportJobRecordResponse.from(saved));
+        }
+        return new ImportConflictBulkResolutionResponse(job.getId(), resolution, recordIds.size(), responses.size(), responses);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportJobRecordResponse> listRecords(UUID importJobId, String status, String conflictStatus, String sourceType) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJob job = importJob(importJobId);
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        return importJobRecordRepository.findFiltered(job.getId(), normalizedFilter(status), normalizedFilter(conflictStatus), normalizedFilter(sourceType)).stream()
                 .map(ImportJobRecordResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportJobRecordVersionResponse> listRecordVersions(UUID recordId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportJobRecord record = importJobRecordRepository.findById(recordId)
+                .orElseThrow(() -> notFound("Import job record not found"));
+        ImportJob job = importJob(record.getImportJobId());
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        return importJobRecordVersionRepository.findByImportJobRecordIdOrderByVersionDesc(record.getId()).stream()
+                .map(ImportJobRecordVersionResponse::from)
                 .toList();
     }
 
@@ -698,15 +785,20 @@ public class ImportJobService {
                 skipped++;
                 conflicts++;
                 recordMaterializationConflict(record, materializationRun, "Existing import target would be skipped because updateExisting is false");
-                responses.add(ImportJobRecordResponse.from(importJobRecordRepository.save(record)));
+                ImportJobRecord saved = importJobRecordRepository.save(record);
+                recordImportJobRecordVersion(saved, "conflict_opened", actorId);
+                responses.add(ImportJobRecordResponse.from(saved));
                 continue;
             }
+            String recordChangeType;
             try {
                 MaterializedWorkItem workItem = materializeRecord(job, template, rules, project, record, updateExisting, transformations);
                 if (workItem.created()) {
                     created++;
+                    recordChangeType = "materialized_created";
                 } else {
                     updated++;
+                    recordChangeType = "materialized_updated";
                 }
                 clearConflict(record);
                 record.setTargetType("work_item");
@@ -717,12 +809,16 @@ public class ImportJobService {
                 failed++;
                 record.setStatus("failed");
                 record.setErrorMessage(ex.getReason());
+                recordChangeType = "materialization_failed";
             } catch (RuntimeException ex) {
                 failed++;
                 record.setStatus("failed");
                 record.setErrorMessage(ex.getMessage());
+                recordChangeType = "materialization_failed";
             }
-            responses.add(ImportJobRecordResponse.from(importJobRecordRepository.save(record)));
+            ImportJobRecord saved = importJobRecordRepository.save(record);
+            recordImportJobRecordVersion(saved, recordChangeType, actorId);
+            responses.add(ImportJobRecordResponse.from(saved));
         }
         finishMaterializationRun(materializationRun, processed, created, updated, failed, skipped, conflicts);
         recordMaterializationEvent(job, materializationRun, actorId);
@@ -887,6 +983,36 @@ public class ImportJobService {
             translation.setEnabled(request.enabled());
         } else if (create) {
             translation.setEnabled(true);
+        }
+    }
+
+    private String validatedConflictResolution(String value) {
+        String resolution = requiredText(value, "resolution").toLowerCase(Locale.ROOT);
+        if (!Set.of("skip", "update_existing", "create_new").contains(resolution)) {
+            throw badRequest("resolution must be skip, update_existing, or create_new");
+        }
+        return resolution;
+    }
+
+    private void applyConflictResolution(ImportJobRecord record, String resolution, UUID actorId) {
+        if (!"open".equals(record.getConflictStatus())) {
+            throw badRequest("Import job record does not have an open conflict");
+        }
+        record.setConflictStatus("resolved");
+        record.setConflictResolution(resolution);
+        record.setConflictResolvedAt(OffsetDateTime.now());
+        record.setConflictResolvedById(actorId);
+        if ("skip".equals(resolution)) {
+            record.setStatus("skipped");
+            record.setErrorMessage(null);
+        } else if ("update_existing".equals(resolution)) {
+            record.setStatus("pending");
+            record.setErrorMessage(null);
+        } else {
+            record.setStatus("pending");
+            record.setTargetType(null);
+            record.setTargetId(null);
+            record.setErrorMessage(null);
         }
     }
 
@@ -1387,6 +1513,57 @@ public class ImportJobService {
         return importTransformPresetRepository.findById(presetId).orElseThrow(() -> notFound("Import transform preset not found"));
     }
 
+    private ImportTransformPresetVersion transformPresetVersion(UUID presetId, UUID versionId) {
+        return importTransformPresetVersionRepository.findByIdAndPresetId(versionId, presetId)
+                .orElseThrow(() -> notFound("Import transform preset version not found"));
+    }
+
+    private ImportTransformPreset createTransformPresetClone(
+            ImportTransformPreset sourcePreset,
+            ImportTransformPresetVersion version,
+            String requestedName,
+            String requestedDescription,
+            Boolean requestedEnabled
+    ) {
+        ImportTransformPreset clone = new ImportTransformPreset();
+        clone.setWorkspaceId(sourcePreset.getWorkspaceId());
+        clone.setName(uniquePresetName(
+                sourcePreset.getWorkspaceId(),
+                hasText(requestedName) ? requestedName.trim() : version.getName() + " copy"
+        ));
+        clone.setDescription(hasText(requestedDescription) ? requestedDescription.trim() : version.getDescription());
+        clone.setTransformationConfig(version.getTransformationConfig() == null ? objectMapper.createObjectNode() : version.getTransformationConfig().deepCopy());
+        clone.setEnabled(requestedEnabled == null ? Boolean.TRUE.equals(version.getEnabled()) : requestedEnabled);
+        clone.setVersion(1);
+        return importTransformPresetRepository.saveAndFlush(clone);
+    }
+
+    private List<ImportMappingTemplate> selectedRetargetTemplates(UUID workspaceId, List<UUID> mappingTemplateIds) {
+        List<UUID> selectedIds = mappingTemplateIds == null ? List.of() : new ArrayList<>(new LinkedHashSet<>(mappingTemplateIds));
+        if (selectedIds.isEmpty()) {
+            throw badRequest("mappingTemplateIds is required");
+        }
+        List<ImportMappingTemplate> templates = importMappingTemplateRepository.findByIdInAndWorkspaceIdOrderByNameAsc(selectedIds, workspaceId);
+        if (templates.size() != selectedIds.size()) {
+            throw badRequest("All mapping templates must belong to the source preset workspace");
+        }
+        return templates;
+    }
+
+    private List<ImportTransformPresetRetargetTemplateResponse> retargetTemplateResponses(
+            List<ImportMappingTemplate> templates,
+            UUID newTransformPresetId
+    ) {
+        return templates.stream()
+                .map(template -> ImportTransformPresetRetargetTemplateResponse.from(
+                        template,
+                        newTransformPresetId,
+                        true,
+                        "Template will use the cloned transform preset"
+                ))
+                .toList();
+    }
+
     private ImportJob mutableImportJob(UUID importJobId) {
         ImportJob job = importJob(importJobId);
         if (List.of("completed", "failed", "cancelled").contains(job.getStatus())) {
@@ -1774,6 +1951,63 @@ public class ImportJobService {
         domainEventService.record(job.getWorkspaceId(), "import_job_record", record.getId(), "import_job_record.conflict_resolved", payload);
     }
 
+    private void recordImportJobRecordVersion(ImportJobRecord record, String changeType, UUID actorId) {
+        ImportJobRecordVersion version = new ImportJobRecordVersion();
+        version.setImportJobRecordId(record.getId());
+        version.setImportJobId(record.getImportJobId());
+        version.setVersion(nextImportJobRecordVersion(record.getId()));
+        version.setChangeType(changeType);
+        version.setChangedById(actorId);
+        version.setSnapshot(importJobRecordSnapshot(record));
+        importJobRecordVersionRepository.save(version);
+    }
+
+    private int nextImportJobRecordVersion(UUID recordId) {
+        return importJobRecordVersionRepository.findFirstByImportJobRecordIdOrderByVersionDesc(recordId)
+                .map(version -> version.getVersion() + 1)
+                .orElse(1);
+    }
+
+    private ObjectNode importJobRecordSnapshot(ImportJobRecord record) {
+        ObjectNode snapshot = objectMapper.createObjectNode()
+                .put("importJobId", record.getImportJobId().toString())
+                .put("sourceType", record.getSourceType())
+                .put("sourceId", record.getSourceId())
+                .put("status", record.getStatus());
+        if (record.getTargetType() != null) {
+            snapshot.put("targetType", record.getTargetType());
+        }
+        if (record.getTargetId() != null) {
+            snapshot.put("targetId", record.getTargetId().toString());
+        }
+        if (record.getErrorMessage() != null) {
+            snapshot.put("errorMessage", record.getErrorMessage());
+        }
+        if (record.getConflictStatus() != null) {
+            snapshot.put("conflictStatus", record.getConflictStatus());
+        }
+        if (record.getConflictReason() != null) {
+            snapshot.put("conflictReason", record.getConflictReason());
+        }
+        if (record.getConflictDetectedAt() != null) {
+            snapshot.put("conflictDetectedAt", record.getConflictDetectedAt().toString());
+        }
+        if (record.getConflictResolvedAt() != null) {
+            snapshot.put("conflictResolvedAt", record.getConflictResolvedAt().toString());
+        }
+        if (record.getConflictResolution() != null) {
+            snapshot.put("conflictResolution", record.getConflictResolution());
+        }
+        if (record.getConflictResolvedById() != null) {
+            snapshot.put("conflictResolvedById", record.getConflictResolvedById().toString());
+        }
+        if (record.getConflictMaterializationRunId() != null) {
+            snapshot.put("conflictMaterializationRunId", record.getConflictMaterializationRunId().toString());
+        }
+        snapshot.set("rawPayload", record.getRawPayload() == null ? objectMapper.createObjectNode() : record.getRawPayload().deepCopy());
+        return snapshot;
+    }
+
     private void recordMappingTemplateEvent(ImportMappingTemplate template, String eventType, UUID actorId) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("mappingTemplateId", template.getId().toString())
@@ -1809,6 +2043,29 @@ public class ImportJobService {
         domainEventService.record(clone.getWorkspaceId(), "import_transform_preset", clone.getId(), "import_transform_preset.cloned_from_version", payload);
     }
 
+    private void recordTransformPresetRetargetEvent(
+            ImportTransformPreset clone,
+            UUID sourcePresetId,
+            ImportTransformPresetVersion sourceVersion,
+            List<ImportMappingTemplate> templates,
+            UUID actorId
+    ) {
+        ArrayNode templateIds = objectMapper.createArrayNode();
+        for (ImportMappingTemplate template : templates) {
+            templateIds.add(template.getId().toString());
+        }
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("transformPresetId", clone.getId().toString())
+                .put("name", clone.getName())
+                .put("sourcePresetId", sourcePresetId.toString())
+                .put("sourceVersionId", sourceVersion.getId().toString())
+                .put("sourceVersion", sourceVersion.getVersion())
+                .put("retargetedTemplateCount", templates.size())
+                .put("actorUserId", actorId.toString());
+        payload.set("mappingTemplateIds", templateIds);
+        domainEventService.record(clone.getWorkspaceId(), "import_transform_preset", clone.getId(), "import_transform_preset.clone_retargeted", payload);
+    }
+
     private void recordTransformPresetVersion(ImportTransformPreset preset, String changeType, UUID actorId) {
         ImportTransformPresetVersion version = new ImportTransformPresetVersion();
         version.setPresetId(preset.getId());
@@ -1831,6 +2088,10 @@ public class ImportJobService {
             throw badRequest("limit must be between 1 and 200");
         }
         return limit;
+    }
+
+    private String normalizedFilter(String value) {
+        return hasText(value) ? value.trim().toLowerCase(Locale.ROOT) : null;
     }
 
     private <T> T required(T value, String fieldName) {
