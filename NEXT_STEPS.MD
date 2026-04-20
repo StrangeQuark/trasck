@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should transform preset version rollback be a direct "restore this version" endpoint, or should rollback create a new preset from a historical version so existing templates are not changed implicitly?
-    - Answer: Create a new preset from a historical version
-2. Should import conflicts get dedicated review/resolve APIs before the next materialization pass, or are skipped/conflicted counters plus run snapshots enough until the import UI is less JSON-heavy?
-    - Answer: Implement dedicated review/resolves APIs now
-3. Should exact import rerun from materialization snapshots be revisited immediately after conflict review APIs, or wait until import/export audit trails are manually tested end to end?
-    - Answer: Revisit immediately, and then test
-4. Should board move route tests exercise drag/drop card insertion in the frontend first, or should the backend get more board rank edge-case tests first?
-    - Answer: Do both, but implement the backend edge-case tests first
+1. Should `update_existing` import conflict resolution execute the update immediately from the conflict endpoint, or keep staging the record as `pending` for the next materialization/rerun?
+    - Answer: Stage as pending
+2. Should import record editing get a dedicated update API before materialization, or remain parse/create-only until the source-mapper UX settles?
+    - Answer: Give dedicated update API now
+3. Should exact materialization snapshot reruns always reuse the source run's `updateExisting` flag, or allow an admin override when rerunning from the UI?
+    - Answer: Both, default to use the existing updateExisting flag, but allow admins to override with explicitly in the UI/API as a modified rerun
+4. Should transform preset clone-from-version keep creating standalone presets only, or should it optionally retarget selected mapping templates to the clone in the same operation?
+    - Answer: Keep clone-only now, but add "Clone and retarget selected templates" into NEXT_STEPS.MD so that we can implement this later once the UI is mature enough to make that action clear
 
 ## Current State
 
@@ -23,7 +23,7 @@ Authentication and authorization foundations are implemented. Username/password 
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, keep a single role value per project-team assignment, and manage workspace roadmaps. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/archive boards, board columns, saved-filter/query-backed swimlanes, releases, release scope, project roadmaps, roadmap items, iterations, iteration scope, commitments, closes, and incomplete-work carryover. Boards expose per-column work item card data from configured status mappings plus backend swimlane groupings, and board-scoped rank/transition commands validate board membership before delegating to the normal work item command paths. Board transition commands still accept explicit `transitionKey`, drag/drop-style calls can derive the workflow transition from `targetColumnId` and/or `targetStatusId`, and the combined board move command can apply status transition plus card-level rank insertion in one request. Swimlanes can reference saved filter IDs directly while still supporting inline saved-filter/query-builder JSON for board-specific lanes. The browser board detail page renders draggable cards by column, supports card-level insertion drops, and exposes a manual move form with target column, previous/next, and transition-key controls.
+Team and planning APIs are implemented. Workspace admins can create/update/archive teams, manage immediate team membership joins/leaves, keep a single role value per project-team assignment, and manage workspace roadmaps. Project admins can assign teams to projects. Project users can list team/project-team data with read permission. Project board admins can create/update/archive boards, board columns, saved-filter/query-backed swimlanes, releases, release scope, project roadmaps, roadmap items, iterations, iteration scope, commitments, closes, and incomplete-work carryover. Boards expose per-column work item card data from configured status mappings plus backend swimlane groupings, and board-scoped rank/transition commands validate board membership before delegating to the normal work item command paths. Board transition commands still accept explicit `transitionKey`, drag/drop-style calls can derive the workflow transition from `targetColumnId` and/or `targetStatusId`, and the combined board move command can apply status transition plus card-level rank insertion in one request. Swimlanes can reference saved filter IDs directly while still supporting inline saved-filter/query-builder JSON for board-specific lanes. The browser board detail page renders draggable cards by column, supports card-level insertion drops, and exposes a manual move form with target column, previous/next, and transition-key controls. Backend and frontend tests cover card-level insertion behavior and invalid relative-card moves.
 
 Reporting foundations include status, assignment, team, and estimate history writes plus dedicated read APIs for work item status history, assignment history, team history, estimate history, and work-log summaries. Project, workspace/project-set, and program dashboard summaries are implemented. Persisted snapshot jobs populate `cycle_time_records`, `iteration_snapshots`, `velocity_snapshots`, and `cumulative_flow_snapshots`, with manual run/backfill/reconcile controls, raw snapshot read APIs, report-shaped time-series DTOs, and live/snapshot iteration report APIs. Configurable snapshot retention policies, dedicated cycle-time/iteration/velocity/cumulative-flow rollup tables, a generic experimental rollup table, manual rollup/backfill controls, archive-run metadata, and additive `rollupSeries` project snapshot output are implemented.
 
@@ -35,28 +35,28 @@ Activity and audit foundations are implemented. Static and configured durable co
 
 Automation and integration execution have moved beyond shells. Automation rule execution creates queued jobs; admin worker endpoints process queued/failed jobs and expose succeeded/failed counts. Workspace-level worker settings can enable scheduled automation, webhook, and email workers while preserving manual admin endpoints, and worker run retention settings now support manual export/prune plus optional automatic scheduled pruning through configured attachment storage and `export_jobs`. Automatic worker-run pruning has its own fixed-delay scheduler, configurable interval throttle, optional workspace-timezone window, and last-start/last-finish metadata. Webhook actions create durable delivery rows, and webhook delivery processing supports inspect, retry, cancel, dry-run/real HTTP POST, bounded retry, and `dead_letter` status. Email actions create durable delivery rows using workspace-level Maildev or SMTP provider settings; SMTP passwords are encrypted at rest through the same database-backed secret-cipher direction as current agent credentials, with room to move both behind external secret management later. Maildev is blocked in production profiles. Worker processing writes dedicated `automation_worker_runs` history and `automation_worker_health` rows for automation, webhook, and email workers.
 
-Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import mapping templates can materialize those records into work items through the normal work item service. Mapping templates now support reusable workspace transform presets, immutable first-class transform preset version history, template-local transformation overrides, legacy function names plus argument-based pipelines, reusable value lookups, type translations, and status translations, with REST/JPA coverage and integration tests proving materialization through those rules. Transform configs are validated on save, and each materialization creates an `import_materialization_runs` snapshot with the mapping template, transform preset, merged transformation config, counts, status, and actor/project metadata. Re-running materialization with `updateExisting=false` skips existing imported targets and records skipped/conflicted counts instead of duplicating work items; exact rerun-from-snapshot behavior is intentionally deferred until conflict resolution is broader.
+Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import mapping templates can materialize those records into work items through the normal work item service. Mapping templates now support reusable workspace transform presets, immutable first-class transform preset version history, clone-from-version recovery into standalone presets, template-local transformation overrides, legacy function names plus argument-based pipelines, reusable value lookups, type translations, and status translations, with REST/JPA coverage and integration tests proving materialization through those rules. Transform configs are validated on save, and each materialization creates an `import_materialization_runs` snapshot with the mapping template, mapping rules, transform preset, merged transformation config, counts, status, and actor/project metadata. Re-running materialization with `updateExisting=false` skips existing imported targets and opens first-class conflicts instead of duplicating work items. Open conflicts can be listed and resolved as `skip`, `update_existing`, or `create_new`; reparsing a source record clears stale conflict metadata. Exact rerun from a prior materialization run uses the stored mapping/template/rule/transform snapshots while applying the current import record conflict decisions.
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent provider/profile/repository/task flows, selector-fed common IDs, detail routes for configuration/planning/automation/import entities, card-level board drag/drop and manual move controls, worker retention export/prune/automatic schedule controls, transform preset CRUD, transform preset version-history display, mapping-template preset selection, and Vitest/Testing Library route smoke coverage.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent provider/profile/repository/task flows, selector-fed common IDs, detail routes for configuration/planning/automation/import entities, card-level board drag/drop and manual move controls, worker retention export/prune/automatic schedule controls, transform preset CRUD, transform preset version-history display, clone-from-version controls, mapping-template preset selection, materialization run display, import conflict review/resolve controls, exact materialization rerun controls, and Vitest/Testing Library route/component coverage.
 
 ## Primary Next Steps
 
-### 1. Frontend Manual-Test Polish
+### 1. Import Manual-Test Follow-Through
 
-Goal: make the current browser surface practical enough for a complete manual test without relying on raw IDs and JSON for routine flows.
+Goal: make the hardened import flows comfortable enough for a complete browser test without relying on raw JSON for routine review and resolution.
 
 Planned work:
 
-- Expand frontend route tests around card-level board detail moves, import template/preset/version editing, worker settings, retention export/prune, and materialization run display.
-- Replace remaining raw JSON child editors with field-specific forms for high-traffic import, automation, board, and configuration child records.
-- Add selector-fed detail/drawer flows for materialization runs, transform preset versions, worker runs, worker health, webhook/email deliveries, and saved filters used by boards.
-- Add UI affordances for import skipped/conflicted materialization results so conflicts are visible without reading raw JSON.
+- Add field-specific import record review/edit controls after deciding whether parsed records should be editable through a dedicated API.
+- Add clearer conflict detail views showing source payload, current target reference, resolution state, and the next materialization/rerun action.
+- Add UI support for transform pipelines and mapping-rule child records that keeps raw JSON as the advanced escape hatch.
+- Expand permission, activity, and audit assertions around conflict resolution, clone-from-version, exact reruns, and update-existing rerun behavior.
 
 Done when:
 
-- A user can exercise board moves, swimlanes, worker retention, transform preset history, and import materialization from the browser with only advanced rules/pipelines requiring JSON.
+- A user can clone historical transform presets, inspect and resolve import conflicts, rerun from a materialization snapshot, and verify import results from the browser with only advanced transform pipelines requiring JSON.
 
 ### 2. Backend Reliability Follow-Through
 
@@ -64,25 +64,24 @@ Goal: keep the growing backend safe enough for a full manual product test.
 
 Planned work:
 
-- Keep adding migration/JPA coverage for every new schema change; the latest pass covers transform preset versions, materialization skipped/conflicted counters, board saved-filter swimlanes, combined board moves, and dedicated automatic pruning schedule metadata.
-- Expand permission tests for hierarchy, workflow, collaboration, user-management, team/planning, public read, dashboard/search/personalization, notification defaults, automation workers, import parsing/materialization, worker history/health, attachment byte APIs, board-scoped commands, transform presets, and email provider settings.
-- Extend activity/audit projection coverage for request-changes, waiting-for-input, retry failures, cancellation failures, notification default changes, worker run failures, automatic pruning, and external callback/delivery failures. Import lifecycle/materialization/transform preset projection is now wired, but should continue getting targeted assertions as import conflict flows grow.
+- Keep adding migration/JPA coverage for every new schema change; the latest pass covers import conflict columns, mapping-rule snapshots, clone-from-version, exact reruns, materialization skipped/conflicted counters, board saved-filter swimlanes, combined board moves, and automatic pruning schedule metadata.
+- Expand permission tests for hierarchy, workflow, collaboration, user-management, team/planning, public read, dashboard/search/personalization, notification defaults, automation workers, import parsing/materialization/conflict resolution, worker history/health, attachment byte APIs, board-scoped commands, transform presets, and email provider settings.
+- Extend activity/audit projection coverage for request-changes, waiting-for-input, retry failures, cancellation failures, notification default changes, worker run failures, automatic pruning, import conflict resolution, snapshot reruns, and external callback/delivery failures.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 
 Done when:
 
 - A full backend test run gives useful confidence that core product, reporting, admin, integration, import, worker, and agent flows still align with the spec.
 
-### 3. Import, Worker, And Email Follow-Through
+### 3. Operations And Delivery Polish
 
-Goal: finish the remaining operational polish after the first import hardening pass.
+Goal: finish operational polish after the first import hardening pass.
 
 Planned work:
 
-- Design import conflict review/resolve APIs and decide when materialization snapshots become exact rerun inputs.
-- Add transform preset rollback or clone-from-version behavior after the version-history shape is manually reviewed.
-- Add more permission, activity, audit, and dead-letter tests around import conflicts, email delivery, scheduled workers, retry/cancel failures, worker retention, SMTP settings, automatic pruning schedule/throttle behavior, and worker settings.
+- Add more permission, activity, audit, and dead-letter tests around email delivery, scheduled workers, retry/cancel failures, worker retention, SMTP settings, automatic pruning schedule/throttle behavior, and worker settings.
 - Keep SMTP passwords database-encrypted for now, but preserve the secret-cipher abstraction so SMTP and agent credentials can move behind Vault/KMS/Secrets Manager later.
+- Exercise configured webhook, email, automation, and generic-worker delivery flows manually before enabling any non-test external endpoint by default.
 
 Done when:
 
@@ -100,12 +99,12 @@ The following work should be completed before the application is ready for a mea
 ### Backend Readiness
 
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
-- Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization, and worker history as more APIs are exposed.
+- Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization/conflict resolution, and worker history as more APIs are exposed.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
-- Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, and external callback/delivery failures as those flows are added; keep adding targeted assertions for import events as conflict resolution grows.
+- Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import conflict resolution, snapshot reruns, and external callback/delivery failures as those flows are added.
 - Review dedicated automatic worker-run pruning interval/window defaults after manual worker history grows enough to validate cadence.
 - Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials.
-- Revisit exact import rerun from materialization snapshots after conflict/idempotency flows have explicit review APIs.
+- Manually test exact import reruns against real CSV/Jira/Rally samples before expanding import update/delete semantics.
 
 ### Product Configuration Readiness
 
@@ -117,10 +116,10 @@ The following work should be completed before the application is ready for a mea
 
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for high-use list screens and detail pages.
-- Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization, and attachment byte APIs.
+- Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization/conflicts, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
 - Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, manual and automatic worker run retention schedule/window/throttle behavior, SMTP provider settings, and Maildev/SMTP email delivery.
-- Expand import tests from parser/materialization coverage into transform preset rollback/clone behavior, mapping conflict review, disabled rule behavior, invalid transform arguments, update-existing, exact rerun decisions, and deeper audit/activity assertions.
+- Expand import tests from parser/materialization coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, exact rerun override decisions, conflict update semantics, and deeper audit/activity assertions.
 - Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, comments, activity events, audit entries, or API responses.
@@ -132,7 +131,7 @@ The following work should be completed before the application is ready for a mea
 - Use the route-based frontend shell and global toast/error handling as the manual-test surface.
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
-- Replace raw JSON child editors with field-specific forms for common nested admin records.
+- Replace raw JSON child editors with field-specific forms for common nested admin/import records.
 - Expand frontend route tests and replace remaining raw ID inputs only after corresponding list endpoints exist.
 - Keep board drag/drop card-level insertion covered in route/component tests as the board UI grows.
-- Add UI for workspace email provider settings, import conflict review, transform preset version rollback/clone, and argument-based import transform pipelines beyond the current raw JSON advanced editors.
+- Add UI for workspace email provider settings, import record editing, conflict details, and argument-based import transform pipelines beyond the current raw JSON advanced editors.

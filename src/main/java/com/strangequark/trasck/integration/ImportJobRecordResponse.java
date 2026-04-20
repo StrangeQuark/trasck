@@ -1,6 +1,7 @@
 package com.strangequark.trasck.integration;
 
 import com.strangequark.trasck.JsonValues;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public record ImportJobRecordResponse(
@@ -12,7 +13,14 @@ public record ImportJobRecordResponse(
         UUID targetId,
         String status,
         String errorMessage,
-        Object rawPayload
+        Object rawPayload,
+        String conflictStatus,
+        String conflictReason,
+        OffsetDateTime conflictDetectedAt,
+        OffsetDateTime conflictResolvedAt,
+        String conflictResolution,
+        UUID conflictResolvedById,
+        UUID conflictMaterializationRunId
 ) {
     static ImportJobRecordResponse from(ImportJobRecord record) {
         return new ImportJobRecordResponse(
@@ -24,7 +32,14 @@ public record ImportJobRecordResponse(
                 record.getTargetId(),
                 record.getStatus(),
                 record.getErrorMessage(),
-                JsonValues.toJavaValue(record.getRawPayload())
+                JsonValues.toJavaValue(record.getRawPayload()),
+                record.getConflictStatus(),
+                record.getConflictReason(),
+                record.getConflictDetectedAt(),
+                record.getConflictResolvedAt(),
+                record.getConflictResolution(),
+                record.getConflictResolvedById(),
+                record.getConflictMaterializationRunId()
         );
     }
 }
