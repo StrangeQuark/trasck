@@ -13,6 +13,7 @@ public record AutomationWorkerSettingsRequest(
         Boolean emailDryRun,
         Boolean workerRunRetentionEnabled,
         Integer workerRunRetentionDays,
-        Boolean workerRunExportBeforePrune
+        Boolean workerRunExportBeforePrune,
+        Boolean workerRunPruningAutomaticEnabled
 ) {
 }

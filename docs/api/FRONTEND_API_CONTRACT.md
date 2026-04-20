@@ -33,7 +33,7 @@ Small configuration or scoped-detail endpoints still return arrays:
 - Setup seed data, auth token lists, service-token lists.
 - Workspace/project configuration lists: teams, team memberships, project-team assignments, labels, boards, board columns, board swimlanes, workflows, statuses, roles, field configurations, releases, release work items, roadmaps, and roadmap items.
 - Dashboard, dashboard widget, saved filter, saved view, report query catalog, repository connection, agent provider/profile/credential lists, including workspace/project/team scoped dashboard/filter/view/catalog lists.
-- Notification, notification preference, automation rule, automation condition, automation action, automation job/log, webhook/delivery, import job, and import record lists.
+- Notification, notification preference, automation rule, automation condition, automation action, automation job/log, webhook/delivery, import job, import transform preset, import mapping template, and import record lists.
 - Work item collaboration lists: comments, links, watchers, work logs, labels, attachments.
 - Reporting history lists for one work item or one scoped report.
 
@@ -376,6 +376,12 @@ export interface Board {
   updatedAt: ISODateTime;
 }
 
+export interface BoardWorkItemTransitionRequest {
+  transitionKey?: string;
+  targetColumnId?: UUID;
+  targetStatusId?: UUID;
+}
+
 export interface Release {
   id: UUID;
   projectId: UUID;
@@ -545,6 +551,36 @@ export interface ImportJob {
   records: ImportJobRecord[];
 }
 
+export interface ImportTransformPreset {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  description?: string;
+  transformationConfig: unknown;
+  enabled: boolean;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+export interface ImportMappingTemplate {
+  id: UUID;
+  workspaceId: UUID;
+  projectId?: UUID;
+  transformPresetId?: UUID;
+  name: string;
+  provider: string;
+  sourceType?: string;
+  targetType: "work_item" | string;
+  workItemTypeKey?: string;
+  statusKey?: string;
+  fieldMapping: unknown;
+  defaults: unknown;
+  transformationConfig: unknown;
+  enabled: boolean;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
 export interface AgentTask {
   id: UUID;
   workspaceId: UUID;
@@ -581,9 +617,9 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 3. Project work list: `GET /api/v1/projects/{projectId}/work-items?limit=50`, optionally add one typed custom-field filter, follow `nextCursor` for more pages, then `GET /api/v1/work-items/{workItemId}` for detail.
 4. Work item detail tabs: comments, links, watchers, work logs, labels, attachments, activity, and reporting history all hang off the selected work item ID.
 5. Product configuration: create custom fields/contexts, add field configurations for project/type overrides, create screens/fields/assignments, then create/update work items to exercise required-field enforcement.
-6. Planning configuration: list/create boards with columns and swimlanes, read board work items with backend swimlane groupings, use board-scoped rank/transition commands for drag/drop, create releases and release scope, create project/workspace roadmaps, and add roadmap items linked to work items.
-7. Automation configuration: create a notification preference, configure webhooks, create automation rules/actions, configure workspace Maildev/SMTP email provider settings, run `POST /api/v1/automation-rules/{ruleId}/execute`, then read automation jobs/logs, current-user notifications, webhook delivery rows, email delivery rows, worker runs, worker health, and scheduled worker settings. Webhook/email deliveries can be inspected, retried, cancelled, and processed manually; scheduled workers and worker run retention settings are controlled per workspace, and worker run retention export/prune is admin-triggered.
-8. Import review/materialization: create an import job, parse CSV/Jira/Rally content into records, create an import mapping template with optional legacy or argument-based transformation config, add value lookups or type/status translations where needed, materialize records into work items, and move the job through start/complete/fail/cancel states while showing records on the job detail screen.
+6. Planning configuration: list/create boards with columns and saved-filter/query-backed swimlanes, read board work items with backend swimlane groupings, use board-scoped rank/transition commands for drag/drop, send `targetColumnId` and/or `targetStatusId` when deriving transitions from a target column/status, create releases and release scope, create project/workspace roadmaps, and add roadmap items linked to work items.
+7. Automation configuration: create a notification preference, configure webhooks, create automation rules/actions, configure workspace Maildev/SMTP email provider settings, run `POST /api/v1/automation-rules/{ruleId}/execute`, then read automation jobs/logs, current-user notifications, webhook delivery rows, email delivery rows, worker runs, worker health, and scheduled worker settings. Webhook/email deliveries can be inspected, retried, cancelled, and processed manually; scheduled workers and worker run retention settings are controlled per workspace, worker run retention export/prune is admin-triggered, and automatic worker-run pruning can be toggled per workspace.
+8. Import review/materialization: create an import job, parse CSV/Jira/Rally content into records, create reusable import transform presets, create an import mapping template that can reference a preset and optional local transformation overrides, add value lookups or type/status translations where needed, materialize records into work items, and move the job through start/complete/fail/cancel states while showing records on the job detail screen.
 9. Dashboard builder: create a saved filter, optionally execute it with `GET /api/v1/saved-filters/{savedFilterId}/work-items`, create a governed report query catalog entry with optional `parametersSchema`, create a dashboard/widget, then render with `GET /api/v1/dashboards/{dashboardId}/render`.
 10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status until review or completion.
 11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
@@ -595,10 +631,10 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 - Auth: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation.
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
 - Product configuration: custom field/context/value CRUD, field configuration CRUD with project/type overrides, screen/field/assignment CRUD.
-- Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, board work item columns/swimlanes, board-scoped rank/transition commands, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
+- Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, saved-filter/query-backed board work item columns/swimlanes, board-scoped rank/transition commands with target column/status transition derivation, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
 - Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists and cursor-paged work item execution, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
-- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings, worker run/health/export/prune APIs, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, parser, mapping-template, value lookup, transformation pipeline, type/status translation, materialization, and record APIs.
+- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings, worker run/health/export/prune APIs, automatic worker-run pruning settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, parser, transform preset, mapping-template, value lookup, transformation pipeline, type/status translation, materialization, and record APIs.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections, assignment, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
 

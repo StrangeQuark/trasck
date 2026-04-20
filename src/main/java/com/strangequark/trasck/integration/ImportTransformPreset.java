@@ -17,8 +17,8 @@ import org.hibernate.type.SqlTypes;
 @Entity
 @DynamicInsert
 @DynamicUpdate
-@Table(name = "import_mapping_templates")
-public class ImportMappingTemplate {
+@Table(name = "import_transform_presets")
+public class ImportTransformPreset {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -28,37 +28,11 @@ public class ImportMappingTemplate {
     @Column(name = "workspace_id")
     private UUID workspaceId;
 
-    @Column(name = "project_id")
-    private UUID projectId;
-
     @Column(name = "name")
     private String name;
 
-    @Column(name = "provider")
-    private String provider;
-
-    @Column(name = "source_type")
-    private String sourceType;
-
-    @Column(name = "target_type")
-    private String targetType;
-
-    @Column(name = "work_item_type_key")
-    private String workItemTypeKey;
-
-    @Column(name = "status_key")
-    private String statusKey;
-
-    @Column(name = "transform_preset_id")
-    private UUID transformPresetId;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "field_mapping")
-    private JsonNode fieldMapping;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "defaults")
-    private JsonNode defaults;
+    @Column(name = "description")
+    private String description;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "transformation_config")
@@ -89,14 +63,6 @@ public class ImportMappingTemplate {
         this.workspaceId = workspaceId;
     }
 
-    public UUID getProjectId() {
-        return projectId;
-    }
-
-    public void setProjectId(UUID projectId) {
-        this.projectId = projectId;
-    }
-
     public String getName() {
         return name;
     }
@@ -105,68 +71,12 @@ public class ImportMappingTemplate {
         this.name = name;
     }
 
-    public String getProvider() {
-        return provider;
+    public String getDescription() {
+        return description;
     }
 
-    public void setProvider(String provider) {
-        this.provider = provider;
-    }
-
-    public String getSourceType() {
-        return sourceType;
-    }
-
-    public void setSourceType(String sourceType) {
-        this.sourceType = sourceType;
-    }
-
-    public String getTargetType() {
-        return targetType;
-    }
-
-    public void setTargetType(String targetType) {
-        this.targetType = targetType;
-    }
-
-    public String getWorkItemTypeKey() {
-        return workItemTypeKey;
-    }
-
-    public void setWorkItemTypeKey(String workItemTypeKey) {
-        this.workItemTypeKey = workItemTypeKey;
-    }
-
-    public String getStatusKey() {
-        return statusKey;
-    }
-
-    public void setStatusKey(String statusKey) {
-        this.statusKey = statusKey;
-    }
-
-    public UUID getTransformPresetId() {
-        return transformPresetId;
-    }
-
-    public void setTransformPresetId(UUID transformPresetId) {
-        this.transformPresetId = transformPresetId;
-    }
-
-    public JsonNode getFieldMapping() {
-        return fieldMapping;
-    }
-
-    public void setFieldMapping(JsonNode fieldMapping) {
-        this.fieldMapping = fieldMapping;
-    }
-
-    public JsonNode getDefaults() {
-        return defaults;
-    }
-
-    public void setDefaults(JsonNode defaults) {
-        this.defaults = defaults;
+    public void setDescription(String description) {
+        this.description = description;
     }
 
     public JsonNode getTransformationConfig() {

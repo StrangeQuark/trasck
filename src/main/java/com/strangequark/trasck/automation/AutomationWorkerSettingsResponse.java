@@ -18,6 +18,7 @@ public record AutomationWorkerSettingsResponse(
         Boolean workerRunRetentionEnabled,
         Integer workerRunRetentionDays,
         Boolean workerRunExportBeforePrune,
+        Boolean workerRunPruningAutomaticEnabled,
         OffsetDateTime updatedAt
 ) {
     static AutomationWorkerSettingsResponse from(AutomationWorkerSettings settings) {
@@ -36,6 +37,7 @@ public record AutomationWorkerSettingsResponse(
                 settings.getWorkerRunRetentionEnabled(),
                 settings.getWorkerRunRetentionDays(),
                 settings.getWorkerRunExportBeforePrune(),
+                settings.getWorkerRunPruningAutomaticEnabled(),
                 settings.getUpdatedAt()
         );
     }

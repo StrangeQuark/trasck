@@ -58,6 +58,9 @@ public class AutomationWorkerSettings {
     @Column(name = "worker_run_export_before_prune")
     private Boolean workerRunExportBeforePrune;
 
+    @Column(name = "worker_run_pruning_automatic_enabled")
+    private Boolean workerRunPruningAutomaticEnabled;
+
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
 
@@ -171,6 +174,14 @@ public class AutomationWorkerSettings {
 
     public void setWorkerRunExportBeforePrune(Boolean workerRunExportBeforePrune) {
         this.workerRunExportBeforePrune = workerRunExportBeforePrune;
+    }
+
+    public Boolean getWorkerRunPruningAutomaticEnabled() {
+        return workerRunPruningAutomaticEnabled;
+    }
+
+    public void setWorkerRunPruningAutomaticEnabled(Boolean workerRunPruningAutomaticEnabled) {
+        this.workerRunPruningAutomaticEnabled = workerRunPruningAutomaticEnabled;
     }
 
     public OffsetDateTime getUpdatedAt() {

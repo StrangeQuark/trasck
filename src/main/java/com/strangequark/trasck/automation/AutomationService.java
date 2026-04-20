@@ -441,6 +441,16 @@ public class AutomationService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "automation.admin");
+        return pruneWorkerRuns(workspaceId, actorId);
+    }
+
+    @Transactional
+    public AutomationWorkerRunRetentionResponse pruneWorkerRunsInternal(UUID workspaceId) {
+        activeWorkspace(workspaceId);
+        return pruneWorkerRuns(workspaceId, null);
+    }
+
+    private AutomationWorkerRunRetentionResponse pruneWorkerRuns(UUID workspaceId, UUID actorId) {
         WorkerRunRetentionSnapshot snapshot = workerRunRetentionSnapshot(workspaceId, MAX_WORKER_RUN_RETENTION_EXPORT_ROWS);
         if (snapshot.runsEligible() > MAX_WORKER_RUN_RETENTION_EXPORT_ROWS) {
             throw new ResponseStatusException(
@@ -456,9 +466,11 @@ public class AutomationService {
         int pruned = snapshot.cutoff() == null ? 0 : automationWorkerRunRepository.deleteRetainedRuns(workspaceId, snapshot.cutoff());
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("workspaceId", workspaceId.toString())
-                .put("actorUserId", actorId.toString())
                 .put("runsEligible", snapshot.runsEligible())
                 .put("runsPruned", pruned);
+        if (actorId != null) {
+            payload.put("actorUserId", actorId.toString());
+        }
         if (snapshot.cutoff() != null) {
             payload.put("cutoff", snapshot.cutoff().toString());
         }
@@ -1161,6 +1173,7 @@ public class AutomationService {
             settings.setWorkerRunRetentionEnabled(false);
             settings.setWorkerRunRetentionDays(null);
             settings.setWorkerRunExportBeforePrune(true);
+            settings.setWorkerRunPruningAutomaticEnabled(false);
             return settings;
         });
     }
@@ -1387,11 +1400,20 @@ public class AutomationService {
         if (request.workerRunExportBeforePrune() != null) {
             settings.setWorkerRunExportBeforePrune(request.workerRunExportBeforePrune());
         }
+        if (request.workerRunPruningAutomaticEnabled() != null) {
+            settings.setWorkerRunPruningAutomaticEnabled(request.workerRunPruningAutomaticEnabled());
+        }
         if (Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled()) && settings.getWorkerRunRetentionDays() == null) {
             throw badRequest("workerRunRetentionDays is required when worker run retention is enabled");
         }
+        if (Boolean.TRUE.equals(settings.getWorkerRunPruningAutomaticEnabled()) && !Boolean.TRUE.equals(settings.getWorkerRunRetentionEnabled())) {
+            throw badRequest("workerRunRetentionEnabled is required when automatic worker run pruning is enabled");
+        }
         if (settings.getWorkerRunExportBeforePrune() == null) {
             settings.setWorkerRunExportBeforePrune(true);
+        }
+        if (settings.getWorkerRunPruningAutomaticEnabled() == null) {
+            settings.setWorkerRunPruningAutomaticEnabled(false);
         }
     }
 

@@ -57,6 +57,9 @@ public class AutomationWorkerScheduler {
                         null
                 );
             }
+            if (Boolean.TRUE.equals(settings.getWorkerRunPruningAutomaticEnabled())) {
+                automationService.pruneWorkerRunsInternal(settings.getWorkspaceId());
+            }
         } catch (RuntimeException ex) {
             LOGGER.warn("Scheduled automation workers failed for workspace {}", settings.getWorkspaceId(), ex);
         }

@@ -399,6 +399,26 @@ public class WorkItemService {
         WorkflowAssignment assignment = workflowAssignment(item.getProjectId(), item.getTypeId());
         WorkflowTransition transition = workflowTransitionRepository.findAllowedTransition(assignment.getWorkflowId(), transitionKey, item.getStatusId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Workflow transition is not allowed from the current status"));
+        return applyTransition(item, transition, actorId);
+    }
+
+    @Transactional
+    public WorkItemResponse transitionToStatus(UUID workItemId, UUID targetStatusId) {
+        UUID actorId = currentUserService.requireUserId();
+        WorkItem item = activeWorkItem(workItemId);
+        permissionService.requireProjectPermission(actorId, item.getProjectId(), "work_item.transition");
+        if (same(item.getStatusId(), targetStatusId)) {
+            return WorkItemResponse.from(item);
+        }
+        WorkflowAssignment assignment = workflowAssignment(item.getProjectId(), item.getTypeId());
+        WorkflowTransition transition = workflowTransitionRepository.findAllowedTransitionsToStatus(assignment.getWorkflowId(), targetStatusId, item.getStatusId())
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Workflow transition is not allowed to the target status"));
+        return applyTransition(item, transition, actorId);
+    }
+
+    private WorkItemResponse applyTransition(WorkItem item, WorkflowTransition transition, UUID actorId) {
         WorkflowStatus toStatus = workflowStatusRepository.findById(transition.getToStatusId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Transition target status not found"));
         UUID fromStatusId = item.getStatusId();

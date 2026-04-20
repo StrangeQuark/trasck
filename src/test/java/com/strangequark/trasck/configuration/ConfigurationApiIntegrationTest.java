@@ -99,30 +99,40 @@ class ConfigurationApiIntegrationTest {
                 .put("doneColumn", false);
         openColumnBody.set("statusIds", objectMapper.createArrayNode().add(statusId(setup, "open").toString()));
         postJson("/api/v1/boards/" + boardId + "/columns", openColumnBody);
+        ObjectNode readyColumnBody = objectMapper.createObjectNode()
+                .put("name", "Ready")
+                .put("position", 1)
+                .put("doneColumn", false);
+        readyColumnBody.set("statusIds", objectMapper.createArrayNode().add(statusId(setup, "ready").toString()));
+        JsonNode readyColumn = postJson("/api/v1/boards/" + boardId + "/columns", readyColumnBody);
         ObjectNode columnBody = objectMapper.createObjectNode()
                 .put("name", "Done")
-                .put("position", 1)
+                .put("position", 2)
                 .put("doneColumn", true);
         columnBody.set("statusIds", objectMapper.createArrayNode().add(statusId(setup, "done").toString()));
         JsonNode column = postJson("/api/v1/boards/" + boardId + "/columns", columnBody);
         assertThat(column.at("/doneColumn").asBoolean()).isTrue();
         ObjectNode swimlaneBody = objectMapper.createObjectNode()
-                .put("name", "By reporter")
-                .put("swimlaneType", "reporter")
+                .put("name", "Reporter query")
+                .put("swimlaneType", "query")
                 .put("position", 0)
                 .put("enabled", true);
-        swimlaneBody.set("query", objectMapper.createObjectNode().put("value", actorId.toString()));
+        swimlaneBody.set("query", objectMapper.createObjectNode()
+                .set("where", objectMapper.createObjectNode()
+                        .put("field", "reporterId")
+                        .put("operator", "eq")
+                        .put("value", actorId.toString())));
         JsonNode swimlane = postJson("/api/v1/boards/" + boardId + "/swimlanes", swimlaneBody);
-        assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("reporter");
+        assertThat(swimlane.at("/swimlaneType").asText()).isEqualTo("query");
         assertThat(getJson("/api/v1/projects/" + projectId + "/boards")).hasSizeGreaterThanOrEqualTo(2);
         JsonNode boardWork = getJson("/api/v1/boards/" + boardId + "/work-items");
-        assertThat(boardWork.at("/columns")).hasSize(2);
+        assertThat(boardWork.at("/columns")).hasSize(3);
         assertThat(boardWork.at("/swimlanes/0/columns/0/workItems")).hasSize(2);
         JsonNode boardRankedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/rank", objectMapper.createObjectNode()
                 .put("previousWorkItemId", boardPeerStoryId.toString()));
         assertThat(boardRankedStory.at("/rank").asText()).isGreaterThan(boardPeerStory.at("/rank").asText());
         JsonNode boardTransitionedStory = postJson("/api/v1/boards/" + boardId + "/work-items/" + storyId + "/transition", objectMapper.createObjectNode()
-                .put("transitionKey", "open_to_ready"));
+                .put("targetColumnId", readyColumn.at("/id").asText()));
         assertThat(uuid(boardTransitionedStory, "/statusId")).isEqualTo(statusId(setup, "ready"));
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
@@ -278,9 +288,11 @@ class ConfigurationApiIntegrationTest {
                 .put("emailDryRun", true)
                 .put("workerRunRetentionEnabled", true)
                 .put("workerRunRetentionDays", 1)
-                .put("workerRunExportBeforePrune", true));
+                .put("workerRunExportBeforePrune", true)
+                .put("workerRunPruningAutomaticEnabled", true));
         assertThat(workerSettings.at("/automationJobsEnabled").asBoolean()).isTrue();
         assertThat(workerSettings.at("/workerRunRetentionEnabled").asBoolean()).isTrue();
+        assertThat(workerSettings.at("/workerRunPruningAutomaticEnabled").asBoolean()).isTrue();
         JsonNode workerRunExport = postJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs/export?limit=5", objectMapper.createObjectNode());
         assertThat(workerRunExport.at("/retentionEnabled").asBoolean()).isTrue();
         assertThat(workerRunExport.at("/exportJobId").isMissingNode() || workerRunExport.at("/exportJobId").isNull()).isFalse();
@@ -304,12 +316,28 @@ class ConfigurationApiIntegrationTest {
         JsonNode parsedImport = postJson("/api/v1/import-jobs/" + importJobId + "/parse", parseBody);
         assertThat(parsedImport.at("/recordsParsed").asInt()).isEqualTo(1);
         assertThat(parsedImport.at("/records/0/sourceId").asText()).isEqualTo("JIRA-2");
+        ObjectNode presetConfig = objectMapper.createObjectNode();
+        presetConfig.set("title", objectMapper.createArrayNode()
+                .add(objectMapper.createObjectNode().put("function", "trim"))
+                .add(objectMapper.createObjectNode()
+                        .put("function", "replace")
+                        .put("target", "Imported: ")
+                        .put("replacement", ""))
+                .add(objectMapper.createObjectNode().put("function", "collapse_whitespace")));
+        JsonNode transformPreset = postJson("/api/v1/workspaces/" + workspaceId + "/import-transform-presets", objectMapper.createObjectNode()
+                .put("name", "Jira title cleanup")
+                .put("description", "Reusable Jira title cleanup")
+                .put("enabled", true)
+                .set("transformationConfig", presetConfig));
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/import-transform-presets")).hasSize(1);
+
         ObjectNode mappingBody = objectMapper.createObjectNode()
                 .put("name", "Jira story mapping")
                 .put("provider", "jira")
                 .put("sourceType", "issue")
                 .put("targetType", "work_item")
                 .put("projectId", projectId.toString())
+                .put("transformPresetId", transformPreset.at("/id").asText())
                 .put("enabled", true);
         mappingBody.set("fieldMapping", objectMapper.createObjectNode()
                 .put("title", "fields.summary")
@@ -318,16 +346,8 @@ class ConfigurationApiIntegrationTest {
                 .put("descriptionMarkdown", "fields.description"));
         mappingBody.set("defaults", objectMapper.createObjectNode()
                 .put("descriptionMarkdown", "Imported Jira issue"));
-        ObjectNode transformationConfig = objectMapper.createObjectNode();
-        transformationConfig.set("title", objectMapper.createArrayNode()
-                .add(objectMapper.createObjectNode().put("function", "trim"))
-                .add(objectMapper.createObjectNode()
-                        .put("function", "replace")
-                        .put("target", "Imported: ")
-                        .put("replacement", ""))
-                .add(objectMapper.createObjectNode().put("function", "collapse_whitespace")));
-        mappingBody.set("transformationConfig", transformationConfig);
         JsonNode mapping = postJson("/api/v1/workspaces/" + workspaceId + "/import-mapping-templates", mappingBody);
+        assertThat(uuid(mapping, "/transformPresetId")).isEqualTo(uuid(transformPreset, "/id"));
         postJson("/api/v1/import-mapping-templates/" + mapping.at("/id").asText() + "/type-translations", objectMapper.createObjectNode()
                 .put("sourceTypeKey", "Story")
                 .put("targetTypeKey", "story")
