@@ -67,6 +67,11 @@ public class ImportJobController {
         return importJobService.getTransformPreset(presetId);
     }
 
+    @GetMapping("/import-transform-presets/{presetId}/versions")
+    public List<ImportTransformPresetVersionResponse> listTransformPresetVersions(@PathVariable UUID presetId) {
+        return importJobService.listTransformPresetVersions(presetId);
+    }
+
     @PatchMapping("/import-transform-presets/{presetId}")
     public ImportTransformPresetResponse updateTransformPreset(
             @PathVariable UUID presetId,

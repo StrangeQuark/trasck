@@ -88,7 +88,8 @@ public class ActivityProjectionConsumer implements DomainEventConsumer {
                 || eventType.startsWith("repository_connection.")
                 || eventType.startsWith("team.")
                 || eventType.startsWith("project_team.")
-                || eventType.startsWith("iteration.");
+                || eventType.startsWith("iteration.")
+                || eventType.startsWith("import_");
     }
 
     private void createIfMissing(DomainEvent event, UUID actorId, String entityType, UUID entityId, JsonNode metadata) {

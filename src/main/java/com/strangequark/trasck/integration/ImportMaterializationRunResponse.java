@@ -22,6 +22,8 @@ public record ImportMaterializationRunResponse(
         Integer recordsCreated,
         Integer recordsUpdated,
         Integer recordsFailed,
+        Integer recordsSkipped,
+        Integer recordsConflicted,
         OffsetDateTime createdAt,
         OffsetDateTime finishedAt
 ) {
@@ -44,6 +46,8 @@ public record ImportMaterializationRunResponse(
                 run.getRecordsCreated(),
                 run.getRecordsUpdated(),
                 run.getRecordsFailed(),
+                run.getRecordsSkipped(),
+                run.getRecordsConflicted(),
                 run.getCreatedAt(),
                 run.getFinishedAt()
         );

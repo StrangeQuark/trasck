@@ -76,6 +76,12 @@ public class ImportMaterializationRun {
     @Column(name = "records_failed")
     private Integer recordsFailed;
 
+    @Column(name = "records_skipped")
+    private Integer recordsSkipped;
+
+    @Column(name = "records_conflicted")
+    private Integer recordsConflicted;
+
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
@@ -212,6 +218,22 @@ public class ImportMaterializationRun {
 
     public void setRecordsFailed(Integer recordsFailed) {
         this.recordsFailed = recordsFailed;
+    }
+
+    public Integer getRecordsSkipped() {
+        return recordsSkipped;
+    }
+
+    public void setRecordsSkipped(Integer recordsSkipped) {
+        this.recordsSkipped = recordsSkipped;
+    }
+
+    public Integer getRecordsConflicted() {
+        return recordsConflicted;
+    }
+
+    public void setRecordsConflicted(Integer recordsConflicted) {
+        this.recordsConflicted = recordsConflicted;
     }
 
     public OffsetDateTime getCreatedAt() {

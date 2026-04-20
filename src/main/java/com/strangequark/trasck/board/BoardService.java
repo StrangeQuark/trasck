@@ -275,12 +275,9 @@ public class BoardService {
         if (!hasRankChange && !hasTransitionChange) {
             throw badRequest("targetColumnId, targetStatusId, transitionKey, previousWorkItemId, or nextWorkItemId is required");
         }
-        if (moveRequest.previousWorkItemId() != null) {
-            requireWorkItemOnBoard(board, moveRequest.previousWorkItemId());
-        }
-        if (moveRequest.nextWorkItemId() != null) {
-            requireWorkItemOnBoard(board, moveRequest.nextWorkItemId());
-        }
+        WorkItem previous = moveRequest.previousWorkItemId() == null ? null : requireWorkItemOnBoard(board, moveRequest.previousWorkItemId());
+        WorkItem next = moveRequest.nextWorkItemId() == null ? null : requireWorkItemOnBoard(board, moveRequest.nextWorkItemId());
+        validateRelativeItemsForTargetColumn(board, moveRequest.targetColumnId(), previous, next);
         WorkItemResponse response = WorkItemResponse.from(item);
         if (hasTransitionChange) {
             if (hasText(moveRequest.transitionKey())) {
@@ -548,6 +545,24 @@ public class BoardService {
             throw badRequest("targetStatusId is not mapped to this board");
         }
         return requestedStatusId;
+    }
+
+    private void validateRelativeItemsForTargetColumn(Board board, UUID targetColumnId, WorkItem previous, WorkItem next) {
+        if (targetColumnId == null || previous == null && next == null) {
+            return;
+        }
+        BoardColumn targetColumn = boardColumnRepository.findByIdAndBoardId(targetColumnId, board.getId())
+                .orElseThrow(() -> badRequest("targetColumnId is not on this board"));
+        List<UUID> targetStatuses = statusIds(targetColumn.getStatusIds());
+        if (targetStatuses.isEmpty()) {
+            throw badRequest("Target board column has no mapped statuses");
+        }
+        if (previous != null && !targetStatuses.contains(previous.getStatusId())) {
+            throw badRequest("previousWorkItemId is not in the target column");
+        }
+        if (next != null && !targetStatuses.contains(next.getStatusId())) {
+            throw badRequest("nextWorkItemId is not in the target column");
+        }
     }
 
     private List<BoardColumnWorkItemsResponse> swimlaneColumns(

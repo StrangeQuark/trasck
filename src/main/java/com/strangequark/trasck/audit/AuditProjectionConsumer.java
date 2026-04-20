@@ -68,7 +68,8 @@ public class AuditProjectionConsumer implements DomainEventConsumer {
                 || eventType.startsWith("repository_connection.")
                 || eventType.startsWith("team.")
                 || eventType.startsWith("project_team.")
-                || eventType.startsWith("iteration.");
+                || eventType.startsWith("iteration.")
+                || eventType.startsWith("import_");
     }
 
     private Set<UUID> auditWorkspaces(DomainEvent event) {

@@ -12,6 +12,8 @@ public record ImportMaterializeResponse(
         int created,
         int updated,
         int failed,
+        int skipped,
+        int conflicts,
         List<ImportJobRecordResponse> records
 ) {
 }
