@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should parsed CSV/Jira/Rally import records stay review-only until mapping templates exist, or should the next pass create work items directly from a minimal default mapping?
-    - Answer: The next pass is going to implement mapping templates, so create work items as well during that time
-2. Should automation and webhook delivery workers stay manually triggered through admin endpoints for now, or should backend scheduled workers be enabled behind workspace-level settings?
-    - Answer: Implement both
-3. Should email automation actions use a development log/outbox provider first, or should SMTP configuration be added before email actions leave queued execution logs?
-    - Answer: Sure, use maildev for a development provider now, but make sure you add a note somewhere in NEXT_STEPS so we don't forget to implement the SMTP config and remove maildev later
-4. Should the next board frontend pass prioritize real draggable card/swimlane rendering, or finish update/archive forms for every configuration, planning, automation, and import entity first?
-    - Answer: Do both, first finish the forms for the entities and then implement real draggable card/swimlane rendering
+1. Should import mapping templates stay as path/default mappings for now, or should the next import pass add transformation functions, value lookup tables, and type/status translation tables?
+    - Answer: Add transformation functions, value lookup tables, and type/status translation tables
+2. Should Maildev remain a local-development-only provider once SMTP settings are added, or should workspace admins be able to keep selecting a development email provider in non-production environments?
+    - Answer: Sure, allow for non-prod environments
+3. Should scheduled worker execution get dedicated run-history/health rows now, or should job/delivery rows remain the first operational history until an operations dashboard exists?
+    - Answer: Add dedicated run-history/health rows now
+4. Should the frontend edit/archive pass use inline forms on the current admin pages, or should it introduce detail drawers/routes for each configuration, planning, automation, and import entity?
+    - Answer: Introduce detail drawers/routes for each entity
 
 ## Current State
 
@@ -33,7 +33,7 @@ Product configuration APIs are implemented for the first backend pass. Workspace
 
 Activity and audit foundations are implemented. Static and configured durable consumers project domain events into cursor-page work-item/project/workspace activity streams, cursor-page workspace audit logs, and configured delivery rows. Tests cover durable outbox failure, retry, dead-letter, disabled consumers, unknown replay consumers, and multi-consumer delivery. Audit retention policy metadata is configurable per workspace; exports write JSON artifacts through configured attachment/object storage and create `export_jobs`, manual/scheduled pruning writes a stored export before deleting eligible rows, and workspace admins can list export jobs, inspect export metadata, and download stored export files.
 
-Automation and integration execution have moved beyond shells. Automation rule execution now creates queued jobs; admin worker endpoints process queued/failed jobs and expose succeeded/failed counts. Webhook actions create durable delivery rows, and an admin worker endpoint processes queued/failed webhook deliveries with bounded retry and `dead_letter` status. Email actions are still logged as queued work until an email delivery provider is selected. Notification preferences support both user self-service rows and workspace-admin default policy rows. Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records before materializing work items.
+Automation and integration execution have moved beyond shells. Automation rule execution now creates queued jobs; admin worker endpoints process queued/failed jobs and expose succeeded/failed counts. Workspace-level worker settings can enable scheduled automation, webhook, and email workers while preserving manual admin endpoints. Webhook actions create durable delivery rows, and webhook delivery processing supports inspect, retry, cancel, dry-run/real HTTP POST, bounded retry, and `dead_letter` status. Email actions create durable Maildev development-provider delivery rows, with manual/scheduled dry-run or SMTP-backed processing. Notification preferences support both user self-service rows and workspace-admin default policy rows. Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records; import mapping templates can materialize those records into work items through the normal work item service.
 
 The provider-neutral AI agent slice is implemented. Workspace admins and Agent Managers can create simulated, Codex, Claude Code, and generic-worker agent providers, list/deactivate/re-encrypt redacted provider credentials, rotate per-provider callback signing keys without exposing raw secrets, create assignable agent profiles backed by agent users, optionally scope profiles to projects, add repository connections, assign work items to agents, receive signed callbacks, create review artifacts/comments, accept agent results, and project agent events into activity/audit streams. Current adapters prove queued/running/waiting/review lifecycle behavior without shell commands or paid/external AI execution.
 
@@ -41,36 +41,21 @@ Local runtime and contract polish is in place. The backend has checked-in HTTP e
 
 ## Primary Next Steps
 
-### 1. Import Materialization And Delivery Administration
-
-Goal: turn parsed/imported records and queued delivery rows into reviewable, operable product workflows.
-
-Planned work:
-
-- Add import mapping templates and a materialization endpoint that can create or update work items from parsed CSV/Jira/Rally records.
-- Add webhook delivery retry/dead-letter administration endpoints and frontend controls for retrying, cancelling, and inspecting failed deliveries.
-- Add the first email delivery provider shape, starting with either development outbox rows or SMTP settings after the question above is answered.
-- Decide whether worker execution remains manual-only or gets scheduled behind workspace settings.
-
-Done when:
-
-- A user can parse imports, review records, materialize them into project work, and inspect/retry failed automation deliveries without database access.
-
-### 2. Frontend Product Surface Depth
+### 1. Frontend Product Surface Depth
 
 Goal: make the browser console useful for manual product testing instead of only first-create flows.
 
 Planned work:
 
 - Add edit/archive/delete flows for custom fields, contexts, field configurations, screens, board columns, swimlanes, releases, roadmaps, automation rules/actions/conditions, webhooks, notification defaults, and import jobs.
-- Render board work item cards by column, then add swimlane grouping or drag/rank behavior after the question above is answered.
+- Render board work item cards by column, add swimlane grouping, then add drag/rank behavior after the edit/archive forms are in place.
 - Expand route tests to exercise the new configuration, planning, automation, import, selector, cookie/CSRF, and global-error surfaces.
 
 Done when:
 
-- A user can operate the configuration/planning/automation/import surfaces from the browser without falling back to JSON-only previews for common edits.
+- A user can operate the configuration/planning/automation/import surfaces from the browser without falling back to JSON-only previews for common edits, then test a real board surface with cards and swimlanes.
 
-### 3. Backend Reliability And Permission Hardening
+### 2. Backend Reliability And Permission Hardening
 
 Goal: keep the growing backend safe enough for a full manual product test.
 
@@ -84,6 +69,21 @@ Planned work:
 Done when:
 
 - A full backend test run gives useful confidence that core product, reporting, admin, integration, and agent flows still align with the spec.
+
+### 3. Import, Worker, And Email Production Hardening
+
+Goal: turn the first operational import/delivery slice into a production-ready integration surface.
+
+Planned work:
+
+- Add richer import mapping features after the question above is answered, including status/type translations, reusable value lookups, conflict handling, and idempotency coverage.
+- Replace the current Maildev-first development provider path with production SMTP configuration while keeping the Maildev removal/development-only decision explicit.
+- Add worker run history, health, and alerting metadata after the scheduled worker history question is answered.
+- Add permission, activity, audit, and dead-letter tests around import materialization, email delivery, scheduled workers, retry/cancel failures, and worker settings.
+
+Done when:
+
+- Admins can confidently operate imports and delivery workers without database access, and email delivery has a production configuration path rather than relying on Maildev defaults.
 
 ## Remaining Dashboard/Report APIs
 
@@ -100,7 +100,7 @@ The following work should be completed before the application is ready for a mea
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, and import parsing as more APIs are exposed.
 - Add provider-hosted API and hardened CLI-worker adapters behind the provider-neutral contract after the generic-worker protocol is exercised manually.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, import materialization, notification defaults, and external callback/delivery failures as those flows are added.
-- Add real email delivery plumbing and scheduled worker controls before exposing external automation broadly.
+- Add production SMTP configuration and remove or explicitly confine the Maildev provider before exposing external email automation broadly.
 
 ### Product Configuration Readiness
 
@@ -114,8 +114,8 @@ The following work should be completed before the application is ready for a mea
 - Add repository/query tests for high-use list screens and detail pages.
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, import materialization, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
-- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, and email delivery once an email provider exists.
-- Expand import tests from parser coverage into mapping/materialization conflict and idempotency coverage.
+- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, and Maildev/SMTP email delivery.
+- Expand import tests from parser/materialization coverage into mapping conflict, type/status translation, update-existing, and idempotency coverage.
 - Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, comments, activity events, audit entries, or API responses.

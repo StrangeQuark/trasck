@@ -71,9 +71,11 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 59. Frontend components should use feature-specific API services and hooks around the generated `TrasckApiClient`; the generated TypeScript client and `openapi.json` stay committed as the reviewed contract snapshot while the API is moving quickly. The Vite frontend uses route-based navigation rather than a single tabbed console shell.
 60. Notification preferences support both current-user self-service rows and workspace-admin default policy rows. Default policy rows use `notification_preferences.user_id = null`; user rows remain separate overrides.
 61. Automation rule execution creates queued jobs first. Admin worker endpoints process queued or retryable failed jobs, and webhook delivery worker endpoints process queued or retryable delivery rows with bounded attempts and `dead_letter` terminal state.
-62. Email automation actions are represented as queued execution logs until an email delivery provider is chosen.
-63. Import jobs support CSV, Jira JSON, and Rally JSON parsing into reviewable import records before work item materialization is added.
+62. Email automation actions create durable email delivery rows. The first provider is Maildev for local development and dry-run/manual testing; production SMTP configuration remains a follow-up before exposing external email automation broadly.
+63. Import jobs support CSV, Jira JSON, and Rally JSON parsing into reviewable import records. Import mapping templates can materialize parsed records into work items through the same service path as normal work item creation/update.
 64. Boards expose per-column work item card data from configured status mappings so the frontend can render real project board cards before drag/rank interactions exist.
+65. Manual worker endpoints remain available, and scheduled automation/webhook/email workers are enabled per workspace through `automation_worker_settings`; defaults keep all scheduled workers off.
+66. Webhook and email deliveries are operable rows: admins can inspect, retry, cancel, dry-run process, and dead-letter delivery attempts without direct database access.
 
 ## Full Work Hierarchy
 
@@ -255,9 +257,10 @@ Implemented endpoints:
 - `GET /api/v1/workspaces/{workspaceId}/personalization/recent-items`, `POST /api/v1/workspaces/{workspaceId}/personalization/recent-items`, and `DELETE /api/v1/personalization/recent-items/{recentItemId}` manage recently viewed items.
 - `GET /api/v1/workspaces/{workspaceId}/notifications`, `PATCH /api/v1/notifications/{notificationId}/read`, `GET /api/v1/workspaces/{workspaceId}/notification-preferences`, `POST /api/v1/workspaces/{workspaceId}/notification-preferences`, `PATCH /api/v1/notification-preferences/{preferenceId}`, and `DELETE /api/v1/notification-preferences/{preferenceId}` expose current-user notifications and notification preferences.
 - `GET /api/v1/workspaces/{workspaceId}/notification-defaults`, `POST /api/v1/workspaces/{workspaceId}/notification-defaults`, `PATCH /api/v1/notification-defaults/{preferenceId}`, and `DELETE /api/v1/notification-defaults/{preferenceId}` manage workspace-admin default notification policies.
-- `GET /api/v1/workspaces/{workspaceId}/automation-rules`, `POST /api/v1/workspaces/{workspaceId}/automation-rules`, `GET /api/v1/automation-rules/{ruleId}`, `PATCH /api/v1/automation-rules/{ruleId}`, `DELETE /api/v1/automation-rules/{ruleId}`, condition/action child routes, `POST /api/v1/automation-rules/{ruleId}/execute`, `GET /api/v1/automation-rules/{ruleId}/jobs`, `GET /api/v1/automation-jobs/{jobId}`, `POST /api/v1/automation-jobs/{jobId}/run`, and `POST /api/v1/workspaces/{workspaceId}/automation-jobs/run-queued` manage automation rules and queued worker execution.
-- `GET /api/v1/workspaces/{workspaceId}/webhooks`, `POST /api/v1/workspaces/{workspaceId}/webhooks`, `PATCH /api/v1/webhooks/{webhookId}`, `DELETE /api/v1/webhooks/{webhookId}`, `GET /api/v1/webhooks/{webhookId}/deliveries`, and `POST /api/v1/workspaces/{workspaceId}/webhook-deliveries/process` manage webhook configuration, queued delivery records, dry-run processing, retry, and dead-letter state.
-- `GET /api/v1/workspaces/{workspaceId}/import-jobs`, `POST /api/v1/workspaces/{workspaceId}/import-jobs`, `GET /api/v1/import-jobs/{importJobId}`, `POST /api/v1/import-jobs/{importJobId}/parse`, `POST /api/v1/import-jobs/{importJobId}/start`, `POST /api/v1/import-jobs/{importJobId}/complete`, `POST /api/v1/import-jobs/{importJobId}/fail`, `POST /api/v1/import-jobs/{importJobId}/cancel`, `GET /api/v1/import-jobs/{importJobId}/records`, and `POST /api/v1/import-jobs/{importJobId}/records` manage import lifecycle, CSV/Jira/Rally parsing, and per-source import records.
+- `GET /api/v1/workspaces/{workspaceId}/automation-rules`, `POST /api/v1/workspaces/{workspaceId}/automation-rules`, `GET /api/v1/automation-rules/{ruleId}`, `PATCH /api/v1/automation-rules/{ruleId}`, `DELETE /api/v1/automation-rules/{ruleId}`, condition/action child routes, `POST /api/v1/automation-rules/{ruleId}/execute`, `GET /api/v1/automation-rules/{ruleId}/jobs`, `GET /api/v1/automation-jobs/{jobId}`, `POST /api/v1/automation-jobs/{jobId}/run`, `POST /api/v1/workspaces/{workspaceId}/automation-jobs/run-queued`, `GET /api/v1/workspaces/{workspaceId}/automation-worker-settings`, and `PATCH /api/v1/workspaces/{workspaceId}/automation-worker-settings` manage automation rules, queued worker execution, and workspace-level scheduled worker settings.
+- `GET /api/v1/workspaces/{workspaceId}/webhooks`, `POST /api/v1/workspaces/{workspaceId}/webhooks`, `PATCH /api/v1/webhooks/{webhookId}`, `DELETE /api/v1/webhooks/{webhookId}`, `GET /api/v1/webhooks/{webhookId}/deliveries`, `GET /api/v1/webhook-deliveries/{deliveryId}`, `POST /api/v1/webhook-deliveries/{deliveryId}/retry`, `POST /api/v1/webhook-deliveries/{deliveryId}/cancel`, and `POST /api/v1/workspaces/{workspaceId}/webhook-deliveries/process` manage webhook configuration, queued delivery records, inspection, retry/cancel administration, dry-run or real HTTP processing, and dead-letter state.
+- `GET /api/v1/workspaces/{workspaceId}/email-deliveries`, `GET /api/v1/email-deliveries/{deliveryId}`, `POST /api/v1/email-deliveries/{deliveryId}/retry`, `POST /api/v1/email-deliveries/{deliveryId}/cancel`, and `POST /api/v1/workspaces/{workspaceId}/email-deliveries/process` manage Maildev-backed development email delivery rows, dry-run processing, retry/cancel administration, and dead-letter state.
+- `GET /api/v1/workspaces/{workspaceId}/import-jobs`, `POST /api/v1/workspaces/{workspaceId}/import-jobs`, `GET /api/v1/import-jobs/{importJobId}`, `POST /api/v1/import-jobs/{importJobId}/parse`, `POST /api/v1/import-jobs/{importJobId}/materialize`, `POST /api/v1/import-jobs/{importJobId}/start`, `POST /api/v1/import-jobs/{importJobId}/complete`, `POST /api/v1/import-jobs/{importJobId}/fail`, `POST /api/v1/import-jobs/{importJobId}/cancel`, `GET /api/v1/import-jobs/{importJobId}/records`, `POST /api/v1/import-jobs/{importJobId}/records`, `GET /api/v1/workspaces/{workspaceId}/import-mapping-templates`, `POST /api/v1/workspaces/{workspaceId}/import-mapping-templates`, `PATCH /api/v1/import-mapping-templates/{mappingTemplateId}`, and `DELETE /api/v1/import-mapping-templates/{mappingTemplateId}` manage import lifecycle, CSV/Jira/Rally parsing, per-source records, mapping templates, and work item materialization.
 - `GET /v3/api-docs` exposes generated OpenAPI JSON and `/swagger-ui.html` exposes Swagger UI for local/backend contract inspection.
 
 Implemented seed data:
@@ -290,8 +293,8 @@ Security state:
 - Field configuration reads require workspace `workspace.read`; field configuration create/update/delete requires workspace `workspace.admin`.
 - Saved view reads require visibility-aware access: private owner views use workspace read access, project views use project `report.read`, team views use workspace `report.read` plus active team membership, and workspace/public views use workspace read access. Project shared view writes require project `report.manage`; team/workspace/public shared view writes require workspace `report.manage`; private saved view owners can edit/delete their own views with workspace read access. Favorites and recent items are per-user and require workspace read access plus a target entity that belongs to that workspace.
 - Current-user notification and notification preference APIs require workspace `workspace.read` and only expose or mutate rows owned by the current user.
-- Automation rule, automation child configuration, manual execution, queued worker execution, webhook configuration, webhook delivery reads, and webhook delivery processing APIs require workspace `automation.admin`. Rule execution queues jobs first. Worker execution creates in-app notifications synchronously, records email actions as queued logs, and writes queued webhook delivery rows. Webhook delivery processing supports dry-run or real HTTP POST, bounded retries, and `dead_letter`.
-- Import job list/detail/lifecycle/parse/record APIs require workspace `workspace.admin`. CSV, Jira JSON, and Rally JSON parsers create reviewable import records; work item materialization is a future pass.
+- Automation rule, automation child configuration, manual execution, queued worker execution, scheduled worker settings, webhook configuration, webhook delivery reads/admin, email delivery reads/admin, and delivery processing APIs require workspace `automation.admin`. Rule execution queues jobs first. Worker execution creates in-app notifications synchronously, creates Maildev-backed email delivery rows, and writes queued webhook delivery rows. Webhook and email delivery processing support dry-run or real delivery, bounded retries, cancel/retry administration, and `dead_letter`.
+- Import job list/detail/lifecycle/parse/record/template/materialization APIs require workspace `workspace.admin`. CSV, Jira JSON, and Rally JSON parsers create reviewable import records; mapping templates can create or update work items through the existing work item service, preserving project permissions, sequence allocation, workflow defaults, screen/custom-field validation, history writes, and domain events.
 - Activity streams use service-layer permission checks for the requested workspace, project, or work item.
 - Audit log, audit retention, and domain event replay APIs are workspace-admin-only through method-level permission checks.
 - Agent management uses explicit service-layer permission checks. Workspace Admins and the seeded Agent Manager role can manage providers, credentials, profiles, assignments, tasks, and repository connections according to their role grants.
@@ -1644,8 +1647,10 @@ erDiagram
 | `automation_actions` | Rule actions. |
 | `automation_execution_jobs` | Queued async automation work for hybrid execution. |
 | `automation_execution_logs` | Per-job/per-action automation execution history. |
+| `automation_worker_settings` | Per-workspace switches and limits for scheduled automation, webhook, and email workers. |
 | `webhooks` | Outbound webhook definitions. |
 | `webhook_deliveries` | Webhook delivery attempts with retry and dead-letter state. |
+| `email_deliveries` | Maildev-first development email delivery attempts with retry and dead-letter state. |
 
 ### AI Agents
 
@@ -1670,6 +1675,7 @@ erDiagram
 | `external_identities` | Mapping between Trasck users and provider users. |
 | `external_references` | Mapping between Trasck entities and external objects. |
 | `import_jobs` | Jira/Rally/CSV import jobs. |
+| `import_mapping_templates` | Reusable path/default mappings from imported records into Trasck work item fields. |
 | `import_job_records` | Per-record import results. |
 | `export_jobs` | Data export jobs. |
 | `saved_filters` | Saved work item/report queries with private/team/project/workspace/public visibility. |
@@ -1788,7 +1794,9 @@ The ERDs show the main entities and the table catalog names every planned table.
 | `notifications` | `id`, `user_id`, `actor_id`, `workspace_id`, `type`, `title`, `body`, `target_type`, `target_id`, `read_at`, `created_at` |
 | `automation_execution_jobs` | `id`, `rule_id`, `workspace_id`, `source_entity_type`, `source_entity_id`, `status`, `payload`, `attempts`, `next_attempt_at`, `started_at`, `completed_at`, `failed_at`, `last_error`, `created_at` |
 | `automation_execution_logs` | `id`, `job_id`, `action_id`, `status`, `message`, `metadata`, `created_at` |
+| `automation_worker_settings` | `workspace_id`, `automation_jobs_enabled`, `webhook_deliveries_enabled`, `email_deliveries_enabled`, worker limits, max attempts, dry-run switches, `updated_at` |
 | `webhook_deliveries` | `id`, `webhook_id`, `event_type`, `payload`, `status`, `response_code`, `response_body`, `attempt_count`, `next_retry_at`, `created_at` |
+| `email_deliveries` | `id`, `workspace_id`, `automation_job_id`, `action_id`, `provider`, `from_email`, `recipient_email`, `subject`, `body`, `status`, `attempt_count`, `response_body`, `next_retry_at`, `created_at`, `sent_at` |
 
 ### AI Agent Columns
 
@@ -2263,7 +2271,7 @@ Integration model:
 - `external_integrations` stores provider-level configuration.
 - `external_identities` maps users.
 - `external_references` maps Trasck entities to external objects.
-- `import_jobs` and `import_job_records` provide observable import progress and error reporting.
+- `import_jobs`, `import_mapping_templates`, and `import_job_records` provide observable import progress, reusable source mappings, materialization output, and error reporting.
 - Imported items should retain external IDs and URLs.
 
 ## AI Agent Integration Strategy

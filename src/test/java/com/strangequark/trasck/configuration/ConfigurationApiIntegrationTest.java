@@ -194,6 +194,16 @@ class ConfigurationApiIntegrationTest {
                 .put("position", 1);
         webhookAction.set("config", webhookConfig);
         postJson("/api/v1/automation-rules/" + ruleId + "/actions", webhookAction);
+        ObjectNode emailConfig = objectMapper.createObjectNode()
+                .put("userId", actorId.toString())
+                .put("subject", "Automation email")
+                .put("body", "Maildev development delivery");
+        ObjectNode emailAction = objectMapper.createObjectNode()
+                .put("actionType", "email")
+                .put("executionMode", "async")
+                .put("position", 2);
+        emailAction.set("config", emailConfig);
+        postJson("/api/v1/automation-rules/" + ruleId + "/actions", emailAction);
         ObjectNode executionBody = objectMapper.createObjectNode()
                 .put("sourceEntityType", "work_item")
                 .put("sourceEntityId", storyId.toString());
@@ -204,13 +214,37 @@ class ConfigurationApiIntegrationTest {
                 .put("limit", 5));
         assertThat(workerRun.at("/processed").asInt()).isEqualTo(1);
         assertThat(workerRun.at("/succeeded").asInt()).isEqualTo(1);
-        assertThat(workerRun.at("/jobs/0/logs")).hasSize(2);
+        assertThat(workerRun.at("/jobs/0/logs")).hasSize(3);
         assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/notifications")).hasSize(1);
-        assertThat(getJson("/api/v1/webhooks/" + webhookId + "/deliveries")).hasSize(1);
+        JsonNode deliveries = getJson("/api/v1/webhooks/" + webhookId + "/deliveries");
+        assertThat(deliveries).hasSize(1);
+        UUID webhookDeliveryId = UUID.fromString(deliveries.at("/0/id").asText());
+        assertThat(getJson("/api/v1/webhook-deliveries/" + webhookDeliveryId).at("/status").asText()).isEqualTo("queued");
+        assertThat(postJson("/api/v1/webhook-deliveries/" + webhookDeliveryId + "/cancel", objectMapper.createObjectNode()).at("/status").asText()).isEqualTo("cancelled");
+        assertThat(postJson("/api/v1/webhook-deliveries/" + webhookDeliveryId + "/retry", objectMapper.createObjectNode()).at("/status").asText()).isEqualTo("queued");
         JsonNode webhookWorkerRun = postJson("/api/v1/workspaces/" + workspaceId + "/webhook-deliveries/process", objectMapper.createObjectNode()
                 .put("dryRun", true)
                 .put("maxAttempts", 2));
         assertThat(webhookWorkerRun.at("/delivered").asInt()).isEqualTo(1);
+        JsonNode emails = getJson("/api/v1/workspaces/" + workspaceId + "/email-deliveries");
+        assertThat(emails).hasSize(1);
+        UUID emailDeliveryId = UUID.fromString(emails.at("/0/id").asText());
+        assertThat(postJson("/api/v1/email-deliveries/" + emailDeliveryId + "/cancel", objectMapper.createObjectNode()).at("/status").asText()).isEqualTo("cancelled");
+        assertThat(postJson("/api/v1/email-deliveries/" + emailDeliveryId + "/retry", objectMapper.createObjectNode()).at("/status").asText()).isEqualTo("queued");
+        JsonNode emailWorkerRun = postJson("/api/v1/workspaces/" + workspaceId + "/email-deliveries/process", objectMapper.createObjectNode()
+                .put("dryRun", true)
+                .put("maxAttempts", 2));
+        assertThat(emailWorkerRun.at("/sent").asInt()).isEqualTo(1);
+        JsonNode workerSettings = patch("/api/v1/workspaces/" + workspaceId + "/automation-worker-settings", objectMapper.createObjectNode()
+                .put("automationJobsEnabled", true)
+                .put("webhookDeliveriesEnabled", true)
+                .put("emailDeliveriesEnabled", true)
+                .put("automationLimit", 5)
+                .put("webhookLimit", 5)
+                .put("emailLimit", 5)
+                .put("webhookDryRun", true)
+                .put("emailDryRun", true));
+        assertThat(workerSettings.at("/automationJobsEnabled").asBoolean()).isTrue();
 
         JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
                 .put("provider", "jira"));
@@ -229,7 +263,27 @@ class ConfigurationApiIntegrationTest {
         JsonNode parsedImport = postJson("/api/v1/import-jobs/" + importJobId + "/parse", parseBody);
         assertThat(parsedImport.at("/recordsParsed").asInt()).isEqualTo(1);
         assertThat(parsedImport.at("/records/0/sourceId").asText()).isEqualTo("JIRA-2");
-        postJson("/api/v1/import-jobs/" + importJobId + "/start", objectMapper.createObjectNode());
+        ObjectNode mappingBody = objectMapper.createObjectNode()
+                .put("name", "Jira story mapping")
+                .put("provider", "jira")
+                .put("sourceType", "issue")
+                .put("targetType", "work_item")
+                .put("projectId", projectId.toString())
+                .put("workItemTypeKey", "story")
+                .put("enabled", true);
+        mappingBody.set("fieldMapping", objectMapper.createObjectNode()
+                .put("title", "fields.summary")
+                .put("descriptionMarkdown", "fields.description"));
+        mappingBody.set("defaults", objectMapper.createObjectNode()
+                .put("descriptionMarkdown", "Imported Jira issue"));
+        JsonNode mapping = postJson("/api/v1/workspaces/" + workspaceId + "/import-mapping-templates", mappingBody);
+        JsonNode materialized = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
+                .put("mappingTemplateId", mapping.at("/id").asText())
+                .put("limit", 10)
+                .put("updateExisting", false));
+        assertThat(materialized.at("/created").asInt()).isEqualTo(1);
+        UUID importedWorkItemId = uuid(materialized, "/records/0/targetId");
+        assertThat(getJson("/api/v1/work-items/" + importedWorkItemId).at("/title").asText()).isEqualTo("Parsed story");
         JsonNode completedImportJob = postJson("/api/v1/import-jobs/" + importJobId + "/complete", objectMapper.createObjectNode());
         assertThat(completedImportJob.at("/status").asText()).isEqualTo("completed");
     }

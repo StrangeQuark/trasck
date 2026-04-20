@@ -13,6 +13,7 @@ docker compose up --build
 The compose file starts:
 
 - `trasck-db` on `localhost:5432`
+- `maildev` SMTP on `localhost:1025` and the Maildev web UI on `localhost:1080`
 - `trasck-service` on `localhost:6100`
 
 The Vite frontend runs on `localhost:8080` during local development and reads the backend URL from `VITE_TRASCK_API_BASE_URL`, then `VITE_API_URL`, then `http://localhost:6100`.
@@ -49,6 +50,10 @@ Core local variables:
 - `TRASCK_SECRETS_ENCRYPTION_KEY`: secret material used by the encrypted DB secret abstraction.
 - `SPRING_JPA_OPEN_IN_VIEW`: defaults to `false`.
 - `SPRING_JPA_HIBERNATE_DDL_AUTO`: defaults to `validate`; Flyway owns schema creation.
+- `SPRING_MAIL_HOST`: defaults to `localhost`; Docker Compose sets it to `maildev`.
+- `SPRING_MAIL_PORT`: defaults to `1025`.
+- `TRASCK_EMAIL_PROVIDER`: defaults to `maildev` for the current development email provider.
+- `TRASCK_EMAIL_FROM`: default sender address for automation email delivery rows.
 
 Agent callback private keys and provider credentials are stored encrypted in `agent_provider_credentials.encrypted_secret`. `TRASCK_SECRETS_ENCRYPTION_KEY` can be raw text, hex, standard Base64, or URL-safe Base64. A direct 16, 24, or 32 byte decoded key is used as AES key material; otherwise Trasck derives an AES-256 key with SHA-256.
 
@@ -69,3 +74,7 @@ Trasck accepts these API authentication shapes:
 - Generic worker token: worker protocol calls use `X-Trasck-Worker-Token`, matched against an active encrypted `worker_token` credential on a `generic_worker` provider.
 
 See `docs/http/trasck-api-examples.http` for runnable request examples.
+
+## Development Email
+
+Automation email actions create durable `email_deliveries` rows and can be processed manually or through workspace scheduled worker settings. In local development, Docker Compose provides Maildev. Keep worker email processing in dry-run mode unless you want the backend to send to the Maildev SMTP listener; Maildev messages are visible at `http://localhost:1080`.

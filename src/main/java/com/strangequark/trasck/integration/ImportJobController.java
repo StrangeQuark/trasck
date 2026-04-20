@@ -4,7 +4,9 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -32,6 +34,33 @@ public class ImportJobController {
             @RequestBody ImportJobRequest request
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createImportJob(workspaceId, request));
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/import-mapping-templates")
+    public List<ImportMappingTemplateResponse> listMappingTemplates(@PathVariable UUID workspaceId) {
+        return importJobService.listMappingTemplates(workspaceId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/import-mapping-templates")
+    public ResponseEntity<ImportMappingTemplateResponse> createMappingTemplate(
+            @PathVariable UUID workspaceId,
+            @RequestBody ImportMappingTemplateRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createMappingTemplate(workspaceId, request));
+    }
+
+    @PatchMapping("/import-mapping-templates/{mappingTemplateId}")
+    public ImportMappingTemplateResponse updateMappingTemplate(
+            @PathVariable UUID mappingTemplateId,
+            @RequestBody ImportMappingTemplateRequest request
+    ) {
+        return importJobService.updateMappingTemplate(mappingTemplateId, request);
+    }
+
+    @DeleteMapping("/import-mapping-templates/{mappingTemplateId}")
+    public ResponseEntity<Void> deleteMappingTemplate(@PathVariable UUID mappingTemplateId) {
+        importJobService.deleteMappingTemplate(mappingTemplateId);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/import-jobs/{importJobId}")
@@ -65,6 +94,14 @@ public class ImportJobController {
             @RequestBody ImportParseRequest request
     ) {
         return importJobService.parse(importJobId, request);
+    }
+
+    @PostMapping("/import-jobs/{importJobId}/materialize")
+    public ImportMaterializeResponse materializeImportJob(
+            @PathVariable UUID importJobId,
+            @RequestBody ImportMaterializeRequest request
+    ) {
+        return importJobService.materialize(importJobId, request);
     }
 
     @GetMapping("/import-jobs/{importJobId}/records")

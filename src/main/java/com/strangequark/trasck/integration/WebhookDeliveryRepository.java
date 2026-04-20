@@ -14,6 +14,18 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
             select wd.*
             from webhook_deliveries wd
             join webhooks w on w.id = wd.webhook_id
+            where wd.id = :deliveryId
+              and w.workspace_id = :workspaceId
+            """, nativeQuery = true)
+    java.util.Optional<WebhookDelivery> findByIdAndWorkspaceId(
+            @Param("deliveryId") UUID deliveryId,
+            @Param("workspaceId") UUID workspaceId
+    );
+
+    @Query(value = """
+            select wd.*
+            from webhook_deliveries wd
+            join webhooks w on w.id = wd.webhook_id
             where w.workspace_id = :workspaceId
               and w.enabled = true
               and (
