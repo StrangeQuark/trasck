@@ -98,6 +98,26 @@ public class SavedFilterExecutionService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public List<UUID> executeInlineWorkItemIds(UUID workspaceId, JsonNode query, Integer limit) {
+        UUID actorId = currentUserService.requireUserId();
+        JsonNode executableQuery = query == null || query.isNull() ? objectMapper.createObjectNode() : query;
+        if (!executableQuery.isObject()) {
+            throw badRequest("query must be a JSON object");
+        }
+        validateEntityType(executableQuery);
+        SavedFilter inlineFilter = new SavedFilter();
+        inlineFilter.setWorkspaceId(workspaceId);
+        inlineFilter.setQuery(executableQuery);
+        ExecutionScope scope = executionScope(inlineFilter, executableQuery);
+        requireWorkItemRead(actorId, workspaceId, scope);
+        SortSpec sort = sortSpec(executableQuery, scope);
+        SqlPredicate predicate = filterPredicate(executableQuery, workspaceId);
+        return executeQuery(workspaceId, scope, predicate, sort, null, normalizePageLimit(limit)).stream()
+                .map(WorkItem::getId)
+                .toList();
+    }
+
     private List<WorkItem> executeQuery(
             UUID workspaceId,
             ExecutionScope scope,

@@ -1,5 +1,6 @@
 package com.strangequark.trasck.workflow;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -19,6 +20,20 @@ public interface WorkflowTransitionRepository extends JpaRepository<WorkflowTran
     Optional<WorkflowTransition> findAllowedTransition(
             @Param("workflowId") UUID workflowId,
             @Param("key") String key,
+            @Param("fromStatusId") UUID fromStatusId
+    );
+
+    @Query("""
+            select wt
+            from WorkflowTransition wt
+            where wt.workflowId = :workflowId
+              and wt.toStatusId = :toStatusId
+              and (wt.fromStatusId = :fromStatusId or wt.globalTransition = true)
+            order by wt.sortOrder asc, wt.key asc
+            """)
+    List<WorkflowTransition> findAllowedTransitionsToStatus(
+            @Param("workflowId") UUID workflowId,
+            @Param("toStatusId") UUID toStatusId,
             @Param("fromStatusId") UUID fromStatusId
     );
 }

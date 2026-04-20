@@ -49,6 +49,38 @@ public class ImportJobController {
         return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createMappingTemplate(workspaceId, request));
     }
 
+    @GetMapping("/workspaces/{workspaceId}/import-transform-presets")
+    public List<ImportTransformPresetResponse> listTransformPresets(@PathVariable UUID workspaceId) {
+        return importJobService.listTransformPresets(workspaceId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/import-transform-presets")
+    public ResponseEntity<ImportTransformPresetResponse> createTransformPreset(
+            @PathVariable UUID workspaceId,
+            @RequestBody ImportTransformPresetRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createTransformPreset(workspaceId, request));
+    }
+
+    @GetMapping("/import-transform-presets/{presetId}")
+    public ImportTransformPresetResponse getTransformPreset(@PathVariable UUID presetId) {
+        return importJobService.getTransformPreset(presetId);
+    }
+
+    @PatchMapping("/import-transform-presets/{presetId}")
+    public ImportTransformPresetResponse updateTransformPreset(
+            @PathVariable UUID presetId,
+            @RequestBody ImportTransformPresetRequest request
+    ) {
+        return importJobService.updateTransformPreset(presetId, request);
+    }
+
+    @DeleteMapping("/import-transform-presets/{presetId}")
+    public ResponseEntity<Void> deleteTransformPreset(@PathVariable UUID presetId) {
+        importJobService.deleteTransformPreset(presetId);
+        return ResponseEntity.noContent().build();
+    }
+
     @PatchMapping("/import-mapping-templates/{mappingTemplateId}")
     public ImportMappingTemplateResponse updateMappingTemplate(
             @PathVariable UUID mappingTemplateId,

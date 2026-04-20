@@ -33,6 +33,7 @@ public class ImportJobService {
     private final ImportJobRepository importJobRepository;
     private final ImportJobRecordRepository importJobRecordRepository;
     private final ImportMappingTemplateRepository importMappingTemplateRepository;
+    private final ImportTransformPresetRepository importTransformPresetRepository;
     private final ImportMappingValueLookupRepository importMappingValueLookupRepository;
     private final ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository;
     private final ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository;
@@ -48,6 +49,7 @@ public class ImportJobService {
             ImportJobRepository importJobRepository,
             ImportJobRecordRepository importJobRecordRepository,
             ImportMappingTemplateRepository importMappingTemplateRepository,
+            ImportTransformPresetRepository importTransformPresetRepository,
             ImportMappingValueLookupRepository importMappingValueLookupRepository,
             ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository,
             ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository,
@@ -62,6 +64,7 @@ public class ImportJobService {
         this.importJobRepository = importJobRepository;
         this.importJobRecordRepository = importJobRecordRepository;
         this.importMappingTemplateRepository = importMappingTemplateRepository;
+        this.importTransformPresetRepository = importTransformPresetRepository;
         this.importMappingValueLookupRepository = importMappingValueLookupRepository;
         this.importMappingTypeTranslationRepository = importMappingTypeTranslationRepository;
         this.importMappingStatusTranslationRepository = importMappingStatusTranslationRepository;
@@ -116,6 +119,61 @@ public class ImportJobService {
         return importMappingTemplateRepository.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
                 .map(ImportMappingTemplateResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ImportTransformPresetResponse> listTransformPresets(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return importTransformPresetRepository.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
+                .map(ImportTransformPresetResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ImportTransformPresetResponse getTransformPreset(UUID presetId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportTransformPreset preset = transformPreset(presetId);
+        activeWorkspace(preset.getWorkspaceId());
+        permissionService.requireWorkspacePermission(actorId, preset.getWorkspaceId(), "workspace.admin");
+        return ImportTransformPresetResponse.from(preset);
+    }
+
+    @Transactional
+    public ImportTransformPresetResponse createTransformPreset(UUID workspaceId, ImportTransformPresetRequest request) {
+        ImportTransformPresetRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        ImportTransformPreset preset = new ImportTransformPreset();
+        preset.setWorkspaceId(workspaceId);
+        applyTransformPresetRequest(preset, createRequest, true);
+        ImportTransformPreset saved = importTransformPresetRepository.save(preset);
+        recordTransformPresetEvent(saved, "import_transform_preset.created", actorId);
+        return ImportTransformPresetResponse.from(saved);
+    }
+
+    @Transactional
+    public ImportTransformPresetResponse updateTransformPreset(UUID presetId, ImportTransformPresetRequest request) {
+        ImportTransformPresetRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportTransformPreset preset = transformPreset(presetId);
+        permissionService.requireWorkspacePermission(actorId, preset.getWorkspaceId(), "workspace.admin");
+        applyTransformPresetRequest(preset, updateRequest, false);
+        ImportTransformPreset saved = importTransformPresetRepository.save(preset);
+        recordTransformPresetEvent(saved, "import_transform_preset.updated", actorId);
+        return ImportTransformPresetResponse.from(saved);
+    }
+
+    @Transactional
+    public void deleteTransformPreset(UUID presetId) {
+        UUID actorId = currentUserService.requireUserId();
+        ImportTransformPreset preset = transformPreset(presetId);
+        permissionService.requireWorkspacePermission(actorId, preset.getWorkspaceId(), "workspace.admin");
+        preset.setEnabled(false);
+        importTransformPresetRepository.save(preset);
+        recordTransformPresetEvent(preset, "import_transform_preset.disabled", actorId);
     }
 
     @Transactional
@@ -523,6 +581,12 @@ public class ImportJobService {
         if (create || request.statusKey() != null) {
             template.setStatusKey(hasText(request.statusKey()) ? request.statusKey().trim() : null);
         }
+        if (Boolean.TRUE.equals(request.clearTransformPreset())) {
+            template.setTransformPresetId(null);
+        } else if (create || request.transformPresetId() != null) {
+            UUID presetId = request.transformPresetId();
+            template.setTransformPresetId(presetId == null ? null : activeTransformPresetInWorkspace(presetId, template.getWorkspaceId()).getId());
+        }
         if (create || request.fieldMapping() != null) {
             template.setFieldMapping(toJsonObject(request.fieldMapping()));
         }
@@ -536,6 +600,23 @@ public class ImportJobService {
             template.setEnabled(request.enabled());
         } else if (create) {
             template.setEnabled(true);
+        }
+    }
+
+    private void applyTransformPresetRequest(ImportTransformPreset preset, ImportTransformPresetRequest request, boolean create) {
+        if (create || hasText(request.name())) {
+            preset.setName(requiredText(request.name(), "name"));
+        }
+        if (create || request.description() != null) {
+            preset.setDescription(hasText(request.description()) ? request.description().trim() : null);
+        }
+        if (create || request.transformationConfig() != null) {
+            preset.setTransformationConfig(toJsonObject(request.transformationConfig()));
+        }
+        if (request.enabled() != null) {
+            preset.setEnabled(request.enabled());
+        } else if (create) {
+            preset.setEnabled(true);
         }
     }
 
@@ -603,7 +684,7 @@ public class ImportJobService {
         JsonNode rawPayload = record.getRawPayload() == null ? objectMapper.createObjectNode() : record.getRawPayload();
         JsonNode mapping = template.getFieldMapping() == null ? objectMapper.createObjectNode() : template.getFieldMapping();
         JsonNode defaults = template.getDefaults() == null ? objectMapper.createObjectNode() : template.getDefaults();
-        JsonNode transformations = template.getTransformationConfig() == null ? objectMapper.createObjectNode() : template.getTransformationConfig();
+        JsonNode transformations = transformationConfig(template);
         if (record.getTargetId() != null && updateExisting) {
             WorkItemUpdateRequest updateRequest = new WorkItemUpdateRequest(
                     null,
@@ -1045,6 +1126,10 @@ public class ImportJobService {
         return importMappingTemplateRepository.findById(mappingTemplateId).orElseThrow(() -> notFound("Import mapping template not found"));
     }
 
+    private ImportTransformPreset transformPreset(UUID presetId) {
+        return importTransformPresetRepository.findById(presetId).orElseThrow(() -> notFound("Import transform preset not found"));
+    }
+
     private ImportJob mutableImportJob(UUID importJobId) {
         ImportJob job = importJob(importJobId);
         if (List.of("completed", "failed", "cancelled").contains(job.getStatus())) {
@@ -1070,6 +1155,35 @@ public class ImportJobService {
             throw badRequest("Project not found in this workspace");
         }
         return project;
+    }
+
+    private ImportTransformPreset activeTransformPresetInWorkspace(UUID presetId, UUID workspaceId) {
+        ImportTransformPreset preset = importTransformPresetRepository.findByIdAndWorkspaceId(presetId, workspaceId)
+                .orElseThrow(() -> badRequest("Transform preset not found in this workspace"));
+        if (!Boolean.TRUE.equals(preset.getEnabled())) {
+            throw badRequest("Transform preset is disabled");
+        }
+        return preset;
+    }
+
+    private JsonNode transformationConfig(ImportMappingTemplate template) {
+        ObjectNode merged = objectMapper.createObjectNode();
+        if (template.getTransformPresetId() != null) {
+            ImportTransformPreset preset = activeTransformPresetInWorkspace(template.getTransformPresetId(), template.getWorkspaceId());
+            mergeTransformConfig(merged, preset.getTransformationConfig());
+        }
+        mergeTransformConfig(merged, template.getTransformationConfig());
+        return merged;
+    }
+
+    private void mergeTransformConfig(ObjectNode target, JsonNode source) {
+        if (source == null || source.isNull()) {
+            return;
+        }
+        if (!source.isObject()) {
+            throw badRequest("transformationConfig must be a JSON object");
+        }
+        source.fields().forEachRemaining(entry -> target.set(entry.getKey(), entry.getValue()));
     }
 
     private JsonNode toJsonNullable(Object value) {
@@ -1109,6 +1223,14 @@ public class ImportJobService {
                 .put("provider", template.getProvider())
                 .put("actorUserId", actorId.toString());
         domainEventService.record(template.getWorkspaceId(), "import_mapping_template", template.getId(), eventType, payload);
+    }
+
+    private void recordTransformPresetEvent(ImportTransformPreset preset, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("transformPresetId", preset.getId().toString())
+                .put("name", preset.getName())
+                .put("actorUserId", actorId.toString());
+        domainEventService.record(preset.getWorkspaceId(), "import_transform_preset", preset.getId(), eventType, payload);
     }
 
     private int normalizeMaterializeLimit(Integer limit) {

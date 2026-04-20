@@ -10,6 +10,8 @@ public record ImportMappingTemplateRequest(
         UUID projectId,
         String workItemTypeKey,
         String statusKey,
+        UUID transformPresetId,
+        Boolean clearTransformPreset,
         Object fieldMapping,
         Object defaults,
         Object transformationConfig,

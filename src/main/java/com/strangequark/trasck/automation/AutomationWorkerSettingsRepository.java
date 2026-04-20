@@ -13,6 +13,7 @@ public interface AutomationWorkerSettingsRepository extends JpaRepository<Automa
             where settings.automationJobsEnabled = true
                or settings.webhookDeliveriesEnabled = true
                or settings.emailDeliveriesEnabled = true
+               or settings.workerRunPruningAutomaticEnabled = true
             """)
     List<AutomationWorkerSettings> findEnabledSettings();
 }

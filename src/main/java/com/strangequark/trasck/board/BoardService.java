@@ -8,6 +8,7 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.search.SavedFilterExecutionService;
 import com.strangequark.trasck.team.ProjectTeamRepository;
 import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
@@ -19,7 +20,9 @@ import com.strangequark.trasck.workitem.WorkItemService;
 import com.strangequark.trasck.workitem.WorkItemTransitionRequest;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -38,6 +41,7 @@ public class BoardService {
     private final ProjectTeamRepository projectTeamRepository;
     private final WorkItemRepository workItemRepository;
     private final WorkItemService workItemService;
+    private final SavedFilterExecutionService savedFilterExecutionService;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
@@ -52,6 +56,7 @@ public class BoardService {
             ProjectTeamRepository projectTeamRepository,
             WorkItemRepository workItemRepository,
             WorkItemService workItemService,
+            SavedFilterExecutionService savedFilterExecutionService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService
@@ -65,6 +70,7 @@ public class BoardService {
         this.projectTeamRepository = projectTeamRepository;
         this.workItemRepository = workItemRepository;
         this.workItemService = workItemService;
+        this.savedFilterExecutionService = savedFilterExecutionService;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
@@ -217,7 +223,7 @@ public class BoardService {
                         swimlane.getId(),
                         swimlane.getName(),
                         swimlane.getSwimlaneType(),
-                        swimlaneColumns(swimlane, columns)
+                        swimlaneColumns(board, swimlane, columns, limit)
                 ))
                 .toList();
         return new BoardWorkItemsResponse(board.getId(), board.getProjectId(), limit, columns, swimlanes);
@@ -244,8 +250,12 @@ public class BoardService {
     public WorkItemResponse transitionBoardWorkItem(UUID boardId, UUID workItemId, BoardWorkItemTransitionRequest request) {
         BoardWorkItemTransitionRequest transitionRequest = required(request, "request");
         Board board = activeBoard(boardId);
-        requireWorkItemOnBoard(board, workItemId);
-        return workItemService.transition(workItemId, new WorkItemTransitionRequest(transitionRequest.transitionKey()));
+        WorkItem item = requireWorkItemOnBoard(board, workItemId);
+        if (hasText(transitionRequest.transitionKey())) {
+            return workItemService.transition(workItemId, new WorkItemTransitionRequest(transitionRequest.transitionKey()));
+        }
+        UUID targetStatusId = targetBoardStatusId(board, item, transitionRequest);
+        return workItemService.transitionToStatus(workItemId, targetStatusId);
     }
 
     @Transactional
@@ -444,65 +454,118 @@ public class BoardService {
         return ids;
     }
 
-    private List<BoardColumnWorkItemsResponse> swimlaneColumns(BoardSwimlane swimlane, List<BoardColumnWorkItemsResponse> columns) {
+    private UUID targetBoardStatusId(Board board, WorkItem item, BoardWorkItemTransitionRequest request) {
+        BoardColumn targetColumn = request.targetColumnId() == null
+                ? null
+                : boardColumnRepository.findByIdAndBoardId(request.targetColumnId(), board.getId())
+                        .orElseThrow(() -> badRequest("targetColumnId is not on this board"));
+        UUID requestedStatusId = request.targetStatusId();
+        if (targetColumn == null && requestedStatusId == null) {
+            throw badRequest("transitionKey, targetColumnId, or targetStatusId is required");
+        }
+        if (targetColumn != null) {
+            List<UUID> columnStatusIds = statusIds(targetColumn.getStatusIds());
+            if (columnStatusIds.isEmpty()) {
+                throw badRequest("Target board column has no mapped statuses");
+            }
+            if (requestedStatusId != null && !columnStatusIds.contains(requestedStatusId)) {
+                throw badRequest("targetStatusId is not mapped to the target column");
+            }
+            return requestedStatusId == null
+                    ? columnStatusIds.stream()
+                            .filter(statusId -> !statusId.equals(item.getStatusId()))
+                            .findFirst()
+                            .orElse(columnStatusIds.get(0))
+                    : requestedStatusId;
+        }
+        boolean statusMappedToBoard = boardColumnRepository.findByBoardIdOrderByPositionAsc(board.getId()).stream()
+                .map(BoardColumn::getStatusIds)
+                .map(this::statusIds)
+                .anyMatch(statusIds -> statusIds.contains(requestedStatusId));
+        if (!statusMappedToBoard) {
+            throw badRequest("targetStatusId is not mapped to this board");
+        }
+        return requestedStatusId;
+    }
+
+    private List<BoardColumnWorkItemsResponse> swimlaneColumns(
+            Board board,
+            BoardSwimlane swimlane,
+            List<BoardColumnWorkItemsResponse> columns,
+            int limitPerColumn
+    ) {
+        Set<UUID> matchingIds = new LinkedHashSet<>(savedFilterExecutionService.executeInlineWorkItemIds(
+                board.getWorkspaceId(),
+                swimlaneQuery(board, swimlane),
+                swimlaneQueryLimit(columns.size(), limitPerColumn)
+        ));
         return columns.stream()
                 .map(column -> new BoardColumnWorkItemsResponse(
                         column.columnId(),
                         column.columnName(),
                         column.statusIds(),
                         column.workItems().stream()
-                                .filter(item -> matchesSwimlane(swimlane, item))
+                                .filter(item -> matchingIds.contains(item.id()))
                                 .toList()
                 ))
                 .toList();
     }
 
-    private boolean matchesSwimlane(BoardSwimlane swimlane, WorkItemResponse item) {
+    private ObjectNode swimlaneQuery(Board board, BoardSwimlane swimlane) {
         JsonNode query = swimlane.getQuery();
         String swimlaneType = hasText(swimlane.getSwimlaneType()) ? swimlane.getSwimlaneType().trim().toLowerCase() : "query";
-        return switch (swimlaneType) {
-            case "team" -> matchesUuidQuery(query, item.teamId());
-            case "assignee" -> matchesUuidQuery(query, item.assigneeId());
-            case "reporter" -> matchesUuidQuery(query, item.reporterId());
-            case "type" -> matchesUuidQuery(query, item.typeId());
-            case "priority" -> matchesUuidQuery(query, item.priorityId());
-            case "query" -> matchesFieldQuery(query, item);
-            default -> matchesFieldQuery(query, item);
-        };
-    }
-
-    private boolean matchesFieldQuery(JsonNode query, WorkItemResponse item) {
-        String field = text(query, "field");
-        if (!hasText(field)) {
-            return true;
+        ObjectNode executable = "query".equals(swimlaneType)
+                ? querySwimlaneFilter(query)
+                : simpleSwimlaneFilter(swimlaneType, query);
+        executable.put("entityType", "work_item");
+        executable.put("projectId", board.getProjectId().toString());
+        executable.remove("projectIds");
+        if (!executable.has("sort")) {
+            executable.set("sort", objectMapper.createObjectNode()
+                    .put("field", "rank")
+                    .put("direction", "asc"));
         }
-        String normalized = field.trim();
-        return switch (normalized) {
-            case "teamId", "team" -> matchesUuidQuery(query, item.teamId());
-            case "assigneeId", "assignee" -> matchesUuidQuery(query, item.assigneeId());
-            case "reporterId", "reporter" -> matchesUuidQuery(query, item.reporterId());
-            case "typeId", "type" -> matchesUuidQuery(query, item.typeId());
-            case "priorityId", "priority" -> matchesUuidQuery(query, item.priorityId());
-            case "statusId", "status" -> matchesUuidQuery(query, item.statusId());
-            case "visibility" -> matchesTextQuery(query, item.visibility());
-            default -> true;
-        };
+        return executable;
     }
 
-    private boolean matchesUuidQuery(JsonNode query, UUID actual) {
+    private ObjectNode querySwimlaneFilter(JsonNode query) {
+        ObjectNode executable = query != null && query.isObject()
+                ? query.deepCopy()
+                : objectMapper.createObjectNode();
+        if (!executable.has("where") && !executable.has("filters") && hasText(text(executable, "field"))) {
+            ObjectNode predicate = executable.deepCopy();
+            executable.remove(List.of("field", "operator", "value", "valueTo", "values", "customFieldKey", "customFieldId"));
+            executable.set("where", predicate);
+        }
+        return executable;
+    }
+
+    private ObjectNode simpleSwimlaneFilter(String swimlaneType, JsonNode query) {
+        ObjectNode executable = objectMapper.createObjectNode();
+        String field = switch (swimlaneType) {
+            case "team" -> "teamId";
+            case "assignee" -> "assigneeId";
+            case "reporter" -> "reporterId";
+            case "type" -> "typeId";
+            case "priority" -> "priorityId";
+            default -> "id";
+        };
+        ObjectNode predicate = objectMapper.createObjectNode().put("field", field);
         String expected = firstText(text(query, "value"), text(query, "id"), text(query, "uuid"));
         if (!hasText(expected)) {
-            return actual != null;
+            predicate.put("operator", "is_not_null");
+        } else if ("unassigned".equalsIgnoreCase(expected) || "none".equalsIgnoreCase(expected) || "null".equalsIgnoreCase(expected)) {
+            predicate.put("operator", "is_null");
+        } else {
+            predicate.put("operator", "eq");
+            predicate.put("value", expected.trim());
         }
-        if ("unassigned".equalsIgnoreCase(expected) || "none".equalsIgnoreCase(expected) || "null".equalsIgnoreCase(expected)) {
-            return actual == null;
-        }
-        return actual != null && actual.toString().equalsIgnoreCase(expected.trim());
+        executable.set("where", predicate);
+        return executable;
     }
 
-    private boolean matchesTextQuery(JsonNode query, String actual) {
-        String expected = firstText(text(query, "value"), text(query, "text"));
-        return !hasText(expected) || (actual != null && actual.equalsIgnoreCase(expected.trim()));
+    private int swimlaneQueryLimit(int columnCount, int limitPerColumn) {
+        return Math.min(1000, Math.max(limitPerColumn, Math.max(1, columnCount) * limitPerColumn * 4));
     }
 
     private String text(JsonNode query, String fieldName) {
