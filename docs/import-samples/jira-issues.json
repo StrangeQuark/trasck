@@ -1,0 +1,34 @@
+{
+  "issues": [
+    {
+      "key": "JIRA-1",
+      "fields": {
+        "summary": "  Imported: Jira    story  ",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "To Do" },
+        "security": "Public",
+        "description": "  Jira story that should trim and collapse whitespace.  "
+      }
+    },
+    {
+      "key": "JIRA-2",
+      "fields": {
+        "summary": "Imported: Jira bug",
+        "issuetype": { "name": "Bug" },
+        "status": { "name": "In Progress" },
+        "security": "Private",
+        "description": "Jira bug for type and status translation."
+      }
+    },
+    {
+      "key": "JIRA-3",
+      "fields": {
+        "summary": "Imported: Jira accepted story",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "Done" },
+        "security": "Public",
+        "description": "Source item that should map to a done status."
+      }
+    }
+  ]
+}

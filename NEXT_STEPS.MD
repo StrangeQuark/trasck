@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should import record version history stay JSON snapshot-only for now, or should the UI add field-level diff summaries between adjacent versions?
-    - Answer: Add diff summaries in the UI
-2. Should bulk conflict resolution remain explicit selected-record-only, or should admins be able to resolve all currently filtered open conflicts server-side?
-    - Answer: Support both, but gate the “all filtered” path behind a preview/count and explicit confirmation
-3. Should transform pipeline controls stay limited to common work item target fields, or should the next pass allow arbitrary/custom target-field keys?
-    - Answer: Allow arbitrary/custom target-field keys
-4. Should completing an import with open conflicts keep using boolean acceptance, or require a typed confirmation/audit reason before completion?
-    - Answer: Require a typed confirmation/audit reason
+1. Should the sample import payloads become executable smoke-test fixtures/seed data, or remain documentation-only until the manual import flow stabilizes?
+    - Answer: Keep them documentation-only for one manual pass, then promote the stable parts into executable smoke fixtures once we confirm the expected CSV/Jira/Rally flows. Add notes to the NEXT_STEPS.MD file to confirm the expected CSV/Jira/Rally flows and implement the smoke-test fixtures/seed data
+2. Should import record diffs stay frontend-computed from snapshots, or should the backend expose normalized diff rows for API clients and audit exports?
+    - Answer: Expose backend normalized diff rows
+3. Should filtered bulk conflict resolution add batch/pagination safeguards before large imports, or is preview count plus exact confirmation enough for the first manual test?
+    - Answer: Add batch/pagination safeguards now
+4. Should open-conflict completion reasons become first-class audit/report fields, or remain domain-event payload metadata until audit reports are designed?
+    - Answer: Make them first-class audit/report fields
 
 ## Current State
 
@@ -25,31 +25,15 @@ The first work item API slices are implemented. Authenticated users with project
 
 Team, planning, board, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
 
-Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered by `status`, `conflictStatus`, and `sourceType`, and inspected through append-only version history rows covering parse, edit, materialization, conflict-opened, and conflict-resolved lifecycle changes. Import mapping templates can materialize records into work items through the normal work item service. Mapping templates support reusable workspace transform presets, immutable first-class transform preset version history, clone-from-version recovery into standalone presets, clone-and-retarget selected templates through separate preview/apply endpoints, template-local transformation overrides, legacy function names plus argument-based pipelines, reusable value lookups, type translations, and status translations. Each materialization creates an `import_materialization_runs` snapshot with the mapping template, mapping rules, transform preset, merged transformation config, counts, status, and actor/project metadata.
+Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered by `status`, `conflictStatus`, and `sourceType`, and inspected through append-only version history rows covering parse, edit, materialization, conflict-opened, and conflict-resolved lifecycle changes. The frontend computes adjacent field-level diff summaries from those snapshots. Import mapping templates can materialize records into work items through the normal work item service. Mapping templates support reusable workspace transform presets, immutable first-class transform preset version history, clone-from-version recovery into standalone presets, clone-and-retarget selected templates through separate preview/apply endpoints, template-local transformation overrides, legacy function names plus argument-based pipelines, custom target-field transform controls, reusable value lookups, type translations, and status translations. Each materialization creates an `import_materialization_runs` snapshot with the mapping template, mapping rules, transform preset, merged transformation config, counts, status, and actor/project metadata.
 
-Re-running materialization with `updateExisting=false` skips existing imported targets and opens first-class conflicts instead of duplicating work items. Open conflicts can be listed with source payload/target details and resolved individually or in selected bulk batches as `skip`, `update_existing`, or `create_new`; `update_existing` stages the record as pending for a later materialization/rerun, and unresolved `conflict` records are not processed. Snapshot reruns default to the source run's `updateExisting` flag but support an explicit admin override for modified reruns. Completing an import job with open conflicts is blocked unless the caller explicitly accepts open conflicts.
+Re-running materialization with `updateExisting=false` skips existing imported targets and opens first-class conflicts instead of duplicating work items. Open conflicts can be listed with source payload/target details and resolved individually, in selected bulk batches, or by current filters as `skip`, `update_existing`, or `create_new`; filtered bulk resolution is gated by a preview/count, exact `expectedCount`, and `RESOLVE FILTERED CONFLICTS` typed confirmation. `update_existing` stages the record as pending for a later materialization/rerun, and unresolved `conflict` records are not processed. Snapshot reruns default to the source run's `updateExisting` flag but support an explicit admin override for modified reruns. Completing an import job with open conflicts is blocked unless the caller sends `acceptOpenConflicts=true`, the `COMPLETE WITH OPEN CONFLICTS` phrase, and an audit reason.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent provider/profile/repository/task flows, selector-fed common IDs, detail routes for configuration/planning/automation/import entities, card-level board drag/drop and manual move controls, worker retention export/prune/automatic schedule controls, transform preset CRUD, transform preset version-history display, clone-from-version and clone-retarget controls, mapping-template preset selection, field-specific transform pipeline controls with JSON escape hatches, materialization run display, import record edit/version forms, import conflict detail review/resolve/bulk controls, exact/modified materialization rerun controls, and Vitest/Testing Library route/component coverage.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo now has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token creation/listing screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent provider/profile/repository/task flows, selector-fed common IDs, detail routes for configuration/planning/automation/import entities, card-level board drag/drop and manual move controls, worker retention export/prune/automatic schedule controls, transform preset CRUD, transform preset version-history display, clone-from-version and clone-retarget controls, mapping-template preset selection, custom target-field transform pipeline controls with JSON escape hatches, materialization run display, import record edit/version/diff forms, import conflict detail review/resolve/selected-bulk/filtered-bulk controls, exact/modified materialization rerun controls, typed open-conflict completion prompts, and Vitest/Testing Library route/component coverage.
 
 ## Primary Next Steps
 
-### 1. Import Manual Exercise And History Polish
-
-Goal: make the import surface ready for a serious manual pass with real CSV/Jira/Rally samples.
-
-Planned work:
-
-- Add or document representative sample import payloads for CSV, Jira, and Rally that exercise transforms, value lookups, type/status translations, conflicts, reruns, and open-conflict completion.
-- Improve import record history usability after deciding whether JSON snapshots are enough or field-level diffs are needed.
-- Expand bulk conflict behavior only after deciding whether server-side "all filtered" resolution is safe enough for admins.
-- Tighten transform pipeline controls after deciding whether arbitrary/custom target fields belong in the first UI pass.
-- Add focused activity/audit assertions around clone-retarget, bulk conflict resolution, record versions, and accepted open-conflict completion.
-
-Done when:
-
-- A workspace admin can run a realistic import from sample data, review changes and conflicts, rerun safely, complete with explicit conflict acceptance when needed, and understand the record history without database access.
-
-### 2. Backend Reliability Follow-Through
+### 1. Backend Reliability Follow-Through
 
 Goal: keep the growing backend safe enough for a full manual product test.
 
@@ -64,7 +48,7 @@ Done when:
 
 - A full backend test run gives useful confidence that core product, reporting, admin, integration, import, worker, and agent flows still align with the spec.
 
-### 3. Operations And Delivery Polish
+### 2. Operations And Delivery Polish
 
 Goal: finish operational polish after the import hardening pass.
 
@@ -95,7 +79,7 @@ The following work should be completed before the application is ready for a mea
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import record versions, import conflict resolution, clone-retarget, snapshot reruns, and external callback/delivery failures as those flows are added.
 - Review dedicated automatic worker-run pruning interval/window defaults after manual worker history grows enough to validate cadence.
 - Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials.
-- Manually test exact and modified import reruns against real CSV/Jira/Rally samples before expanding import update/delete semantics further.
+- Manually test exact and modified import reruns against `docs/import-samples/` CSV/Jira/Rally payloads before expanding import update/delete semantics further.
 
 ### Product Configuration Readiness
 
@@ -110,7 +94,7 @@ The following work should be completed before the application is ready for a mea
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization/conflicts/record editing/history, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
 - Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, manual and automatic worker run retention schedule/window/throttle behavior, SMTP provider settings, and Maildev/SMTP email delivery.
-- Expand import tests from parser/materialization coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, exact/modified rerun behavior, conflict update semantics, clone-and-retarget behavior, bulk conflict resolution, record history diffs, guarded completion, and deeper audit/activity assertions.
+- Expand import tests from parser/materialization coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, exact/modified rerun behavior, conflict update semantics, clone-and-retarget behavior, large filtered bulk conflict resolution, backend diff rows if chosen, guarded completion reporting, and deeper audit/activity assertions.
 - Expand agent adapter contract tests covering callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, comments, activity events, audit entries, or API responses.
@@ -125,4 +109,4 @@ The following work should be completed before the application is ready for a mea
 - Replace remaining raw JSON child editors with field-specific forms for common nested admin/import records.
 - Expand frontend route tests and replace remaining raw ID inputs only after corresponding list endpoints exist.
 - Keep board drag/drop card-level insertion covered in route/component tests as the board UI grows.
-- Add UI polish for import record version diffs, real sample-data flows, bulk conflict resolution scope, and transform pipeline custom fields after the open questions above are answered.
+- Add UI polish for import sample-data walkthroughs and any backend-provided import diff rows after the open questions above are answered.

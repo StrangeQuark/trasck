@@ -3,12 +3,11 @@ package com.strangequark.trasck.integration;
 import java.util.List;
 import java.util.UUID;
 
-public record ImportConflictBulkResolutionResponse(
+public record ImportConflictBulkResolutionPreviewResponse(
         UUID importJobId,
         String resolution,
         String scope,
-        Integer requested,
-        Integer resolved,
+        Integer matched,
         List<ImportJobRecordResponse> records
 ) {
 }

@@ -1,0 +1,4 @@
+id,title,type,status,visibility,description
+CSV-1,"  Imported: CSV    story  ",Story,To Do,Public,"  First CSV story imported through Trasck.  "
+CSV-2,"Imported: CSV bug",Bug,In Progress,Private,"Bug row that should map to a Trasck bug."
+CSV-3,"Imported: CSV done story",Story,Done,Public,"Completed source item for status translation checks."

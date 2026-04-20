@@ -5,6 +5,12 @@ import java.util.UUID;
 
 public record ImportConflictBulkResolutionRequest(
         List<UUID> recordIds,
-        String resolution
+        String resolution,
+        String scope,
+        String status,
+        String conflictStatus,
+        String sourceType,
+        Integer expectedCount,
+        String confirmation
 ) {
 }

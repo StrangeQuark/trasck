@@ -309,6 +309,14 @@ public class ImportJobController {
         return importJobService.resolveConflicts(importJobId, request);
     }
 
+    @PostMapping("/import-jobs/{importJobId}/conflicts/resolve-preview")
+    public ImportConflictBulkResolutionPreviewResponse previewResolveConflicts(
+            @PathVariable UUID importJobId,
+            @RequestBody ImportConflictBulkResolutionRequest request
+    ) {
+        return importJobService.previewResolveConflicts(importJobId, request);
+    }
+
     @PatchMapping("/import-job-records/{recordId}")
     public ImportJobRecordResponse updateRecord(
             @PathVariable UUID recordId,
