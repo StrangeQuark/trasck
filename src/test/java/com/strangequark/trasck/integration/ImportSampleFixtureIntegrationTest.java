@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -42,6 +43,9 @@ class ImportSampleFixtureIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     private String accessToken;
 
@@ -107,6 +111,8 @@ class ImportSampleFixtureIntegrationTest {
             exerciseSample(setup, workspaceId, projectId, sample);
         }
 
+        exerciseLargeConflictResolutionJobOperations(workspaceId);
+
         JsonNode projectSummary = getJson("/api/v1/reports/projects/" + projectId
                 + "/dashboard-summary?from=2020-01-01T00:00:00Z&to=2030-01-01T00:00:00Z");
         assertThat(projectSummary.at("/importCompletions/completedJobs").asLong()).isGreaterThanOrEqualTo(3);
@@ -120,6 +126,56 @@ class ImportSampleFixtureIntegrationTest {
                 + "/dashboard-summary?from=2020-01-01T00:00:00Z&to=2030-01-01T00:00:00Z");
         assertThat(workspaceSummary.at("/importCompletions/completedWithOpenConflicts").asLong()).isGreaterThanOrEqualTo(3);
         assertThat(widgetTypes(workspaceSummary.at("/widgets"))).contains("portfolio_import_completion_summary");
+    }
+
+    private void exerciseLargeConflictResolutionJobOperations(UUID workspaceId) throws Exception {
+        JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
+                .put("provider", "csv"));
+        UUID importJobId = uuid(importJob, "/id");
+        insertSyntheticOpenConflicts(importJobId, "large", 501);
+
+        JsonNode preview = postJson("/api/v1/import-jobs/" + importJobId + "/conflicts/resolve-preview", conflictResolutionBody("large", 501)
+                .put("pageSize", 25));
+        assertThat(preview.at("/matched").asInt()).isEqualTo(501);
+        assertThat(preview.at("/hasMore").asBoolean()).isTrue();
+        assertThat(post("/api/v1/import-jobs/" + importJobId + "/conflicts/resolve", conflictResolutionBody("large", 501)).statusCode()).isEqualTo(400);
+
+        JsonNode queued = postJson("/api/v1/import-jobs/" + importJobId + "/conflicts/resolve-async", conflictResolutionBody("large", 501));
+        UUID resolutionJobId = uuid(queued, "/id");
+        assertThat(queued.at("/status").asText()).isEqualTo("queued");
+
+        JsonNode cancelled = postJson("/api/v1/import-conflict-resolution-jobs/" + resolutionJobId + "/cancel", objectMapper.createObjectNode());
+        assertThat(cancelled.at("/status").asText()).isEqualTo("cancelled");
+        JsonNode skippedWorkerRun = postJson("/api/v1/workspaces/" + workspaceId + "/import-conflict-resolution-jobs/process?limit=5", objectMapper.createObjectNode());
+        assertThat(skippedWorkerRun.at("/processed").asInt()).isZero();
+
+        JsonNode retried = postJson("/api/v1/import-conflict-resolution-jobs/" + resolutionJobId + "/retry", objectMapper.createObjectNode());
+        assertThat(retried.at("/status").asText()).isEqualTo("queued");
+        insertSyntheticOpenConflict(importJobId, "large", "large-extra");
+        JsonNode failedWorkerRun = postJson("/api/v1/workspaces/" + workspaceId + "/import-conflict-resolution-jobs/process?limit=5", objectMapper.createObjectNode());
+        assertThat(failedWorkerRun.at("/processed").asInt()).isEqualTo(1);
+        assertThat(failedWorkerRun.at("/failed").asInt()).isEqualTo(1);
+        assertThat(getJson("/api/v1/import-conflict-resolution-jobs/" + resolutionJobId).at("/status").asText()).isEqualTo("failed");
+
+        jdbcTemplate.update("delete from import_job_records where import_job_id = ? and source_id = ?", importJobId, "large-extra");
+        JsonNode secondRetry = postJson("/api/v1/import-conflict-resolution-jobs/" + resolutionJobId + "/retry", objectMapper.createObjectNode());
+        assertThat(secondRetry.at("/status").asText()).isEqualTo("queued");
+        JsonNode completedWorkerRun = postJson("/api/v1/workspaces/" + workspaceId + "/import-conflict-resolution-jobs/process?limit=5", objectMapper.createObjectNode());
+        assertThat(completedWorkerRun.at("/processed").asInt()).isEqualTo(1);
+        assertThat(completedWorkerRun.at("/completed").asInt()).isEqualTo(1);
+        assertThat(completedWorkerRun.at("/jobs/0/resolvedCount").asInt()).isEqualTo(501);
+        assertThat(openConflictCount(importJobId)).isZero();
+
+        JsonNode workspaceJobs = getJson("/api/v1/workspaces/" + workspaceId + "/import-conflict-resolution-jobs?status=completed");
+        assertThat(workspaceJobs).isNotEmpty();
+
+        ObjectNode replayRequest = objectMapper.createObjectNode().put("includePublished", true);
+        replayRequest.set("consumerKeys", objectMapper.createArrayNode().add("activity-projection").add("audit-projection"));
+        JsonNode replay = postJson("/api/v1/workspaces/" + workspaceId + "/domain-events/replay", replayRequest);
+        assertThat(replay.at("/deliveriesReset").asInt()).isGreaterThan(0);
+        assertProjectedImportConflictResolutionJobEvent(workspaceId, "import_conflict_resolution_job.cancelled");
+        assertProjectedImportConflictResolutionJobEvent(workspaceId, "import_conflict_resolution_job.failed");
+        assertProjectedImportConflictResolutionJobEvent(workspaceId, "import_conflict_resolution_job.completed");
     }
 
     private void exerciseSample(JsonNode setup, UUID workspaceId, UUID projectId, SampleSpec sample) throws Exception {
@@ -172,6 +228,15 @@ class ImportSampleFixtureIntegrationTest {
         JsonNode jobDiffExport = getJson("/api/v1/import-jobs/" + importJobId + "/version-diffs/export");
         assertThat(uuid(jobDiffExport, "/importJob/id")).isEqualTo(importJobId);
         assertThat(jobDiffExport.at("/generatedAt").isMissingNode() || jobDiffExport.at("/generatedAt").isNull()).isFalse();
+        JsonNode exportJob = postJson("/api/v1/import-jobs/" + importJobId + "/version-diffs/export-jobs", objectMapper.createObjectNode());
+        assertThat(exportJob.at("/exportType").asText()).isEqualTo("import_job_version_diffs");
+        UUID exportJobId = uuid(exportJob, "/id");
+        JsonNode listedExportJobs = getJson("/api/v1/workspaces/" + workspaceId + "/export-jobs?exportType=import_job_version_diffs&limit=10");
+        assertThat(listedExportJobs.at("/items")).isNotEmpty();
+        HttpResponse<String> downloadedExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + exportJobId + "/download");
+        assertThat(downloadedExport.statusCode()).isEqualTo(200);
+        assertThat(downloadedExport.headers().firstValue("Content-Disposition")).hasValueSatisfying(value -> assertThat(value).contains("import-job-version-diffs-"));
+        assertThat(downloadedExport.body()).contains(importJobId.toString(), "diffs");
 
         JsonNode conflictRun = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
                 .put("mappingTemplateId", mapping.at("/id").asText())
@@ -299,6 +364,59 @@ class ImportSampleFixtureIntegrationTest {
                 .put("resolution", "update_existing")
                 .put("confirmation", "RESOLVE FILTERED CONFLICTS")
                 .put("expectedCount", expectedCount);
+    }
+
+    private void insertSyntheticOpenConflicts(UUID importJobId, String sourceType, int count) {
+        for (int index = 1; index <= count; index++) {
+            insertSyntheticOpenConflict(importJobId, sourceType, sourceType + "-" + index);
+        }
+    }
+
+    private void insertSyntheticOpenConflict(UUID importJobId, String sourceType, String sourceId) {
+        jdbcTemplate.update("""
+                insert into import_job_records (
+                    import_job_id,
+                    source_type,
+                    source_id,
+                    status,
+                    raw_payload,
+                    conflict_status,
+                    conflict_reason,
+                    conflict_detected_at
+                ) values (?, ?, ?, 'conflict', ?::jsonb, 'open', 'synthetic large conflict set', now())
+                """,
+                importJobId,
+                sourceType,
+                sourceId,
+                "{\"title\":\"Synthetic conflict " + sourceId + "\"}"
+        );
+    }
+
+    private int openConflictCount(UUID importJobId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from import_job_records where import_job_id = ? and conflict_status = 'open'",
+                Integer.class,
+                importJobId
+        );
+        return count == null ? 0 : count;
+    }
+
+    private void assertProjectedImportConflictResolutionJobEvent(UUID workspaceId, String eventType) {
+        Integer activityCount = jdbcTemplate.queryForObject("""
+                select count(*) from activity_events
+                where workspace_id = ?
+                  and entity_type = 'workspace'
+                  and entity_id = ?
+                  and event_type = ?
+                """, Integer.class, workspaceId, workspaceId, eventType);
+        Integer auditCount = jdbcTemplate.queryForObject("""
+                select count(*) from audit_log_entries
+                where workspace_id = ?
+                  and target_type = 'import_conflict_resolution_job'
+                  and action = ?
+                """, Integer.class, workspaceId, eventType);
+        assertThat(activityCount).isNotNull().isGreaterThan(0);
+        assertThat(auditCount).isNotNull().isGreaterThan(0);
     }
 
     private void createTypeTranslation(JsonNode mapping, String source, String target) throws Exception {

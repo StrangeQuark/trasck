@@ -225,12 +225,44 @@ public class ReportingService {
     }
 
     @Transactional(readOnly = true)
+    public ProjectReportSummaryResponse.ImportCompletionMetricsResponse projectImportCompletions(
+            UUID projectId,
+            String from,
+            String to,
+            UUID teamId,
+            UUID iterationId
+    ) {
+        Project project = reportableProject(projectId);
+        requireReportRead(project);
+        ReportWindow window = reportWindow(from, to);
+        ReportScope scope = reportScope(project, window, teamId, iterationId);
+        return importCompletionMetrics(scopedReportQuery(scope, window));
+    }
+
+    @Transactional(readOnly = true)
     public PortfolioReportSummaryResponse workspaceDashboardSummary(UUID workspaceId, String from, String to, List<UUID> projectIds) {
         Workspace workspace = reportableWorkspace(workspaceId);
         requireWorkspaceReportRead(workspace.getId());
         ReportWindow window = reportWindow(from, to);
         List<UUID> scopedProjectIds = validatedProjectIds(workspace.getId(), projectIds);
         return portfolioSummary(new PortfolioReportScope(workspace.getId(), "workspace", null, scopedProjectIds), window);
+    }
+
+    @Transactional(readOnly = true)
+    public ProjectReportSummaryResponse.ImportCompletionMetricsResponse workspaceImportCompletions(
+            UUID workspaceId,
+            String from,
+            String to,
+            List<UUID> projectIds
+    ) {
+        Workspace workspace = reportableWorkspace(workspaceId);
+        requireWorkspaceReportRead(workspace.getId());
+        ReportWindow window = reportWindow(from, to);
+        List<UUID> scopedProjectIds = validatedProjectIds(workspace.getId(), projectIds);
+        return importCompletionMetrics(portfolioScopedReportQuery(
+                new PortfolioReportScope(workspace.getId(), "workspace", null, scopedProjectIds),
+                window
+        ));
     }
 
     @Transactional(readOnly = true)

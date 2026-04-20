@@ -322,6 +322,14 @@ public class ImportJobController {
         return importJobService.listConflictResolutionJobs(importJobId);
     }
 
+    @GetMapping("/workspaces/{workspaceId}/import-conflict-resolution-jobs")
+    public List<ImportConflictResolutionJobResponse> listWorkspaceConflictResolutionJobs(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String status
+    ) {
+        return importJobService.listWorkspaceConflictResolutionJobs(workspaceId, status);
+    }
+
     @PostMapping("/import-jobs/{importJobId}/conflicts/resolve-async")
     public ResponseEntity<ImportConflictResolutionJobResponse> createConflictResolutionJob(
             @PathVariable UUID importJobId,
@@ -338,6 +346,24 @@ public class ImportJobController {
     @PostMapping("/import-conflict-resolution-jobs/{jobId}/run")
     public ImportConflictResolutionJobResponse runConflictResolutionJob(@PathVariable UUID jobId) {
         return importJobService.runConflictResolutionJob(jobId);
+    }
+
+    @PostMapping("/import-conflict-resolution-jobs/{jobId}/cancel")
+    public ImportConflictResolutionJobResponse cancelConflictResolutionJob(@PathVariable UUID jobId) {
+        return importJobService.cancelConflictResolutionJob(jobId);
+    }
+
+    @PostMapping("/import-conflict-resolution-jobs/{jobId}/retry")
+    public ImportConflictResolutionJobResponse retryConflictResolutionJob(@PathVariable UUID jobId) {
+        return importJobService.retryConflictResolutionJob(jobId);
+    }
+
+    @PostMapping("/workspaces/{workspaceId}/import-conflict-resolution-jobs/process")
+    public ImportConflictResolutionWorkerResponse processConflictResolutionJobs(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return importJobService.processConflictResolutionJobs(workspaceId, limit);
     }
 
     @PatchMapping("/import-job-records/{recordId}")
@@ -366,6 +392,11 @@ public class ImportJobController {
     @GetMapping("/import-jobs/{importJobId}/version-diffs/export")
     public ImportJobVersionDiffExportResponse exportJobVersionDiffs(@PathVariable UUID importJobId) {
         return importJobService.exportJobVersionDiffs(importJobId);
+    }
+
+    @PostMapping("/import-jobs/{importJobId}/version-diffs/export-jobs")
+    public ResponseEntity<ExportJobResponse> createJobVersionDiffExportJob(@PathVariable UUID importJobId) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createJobVersionDiffExportJob(importJobId));
     }
 
     @PostMapping("/import-jobs/{importJobId}/records")

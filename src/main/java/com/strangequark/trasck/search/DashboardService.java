@@ -303,6 +303,7 @@ public class DashboardService {
             case "estimate_time_summary" -> summary.estimateAndTime();
             case "aging_wip" -> summary.aging();
             case "cycle_time_inputs" -> summary.cycleTime();
+            case "import_completion_summary" -> summary.importCompletions();
             case "work_by_status" -> summary.byStatus();
             case "work_by_type" -> summary.byType();
             case "work_by_priority" -> summary.byPriority();
@@ -316,6 +317,7 @@ public class DashboardService {
             case "throughput", "portfolio_throughput" -> summary.throughput();
             case "estimate_time_summary", "portfolio_estimate_time_summary" -> summary.estimateAndTime();
             case "cycle_time_inputs", "portfolio_cycle_time_inputs" -> summary.cycleTime();
+            case "import_completion_summary", "portfolio_import_completion_summary" -> summary.importCompletions();
             case "work_by_project" -> summary.byProject();
             case "work_by_team" -> summary.byTeam();
             case "work_by_type" -> summary.byType();
