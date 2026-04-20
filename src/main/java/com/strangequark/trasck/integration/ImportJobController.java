@@ -274,6 +274,14 @@ public class ImportJobController {
         return importJobService.resolveConflict(recordId, request);
     }
 
+    @PatchMapping("/import-job-records/{recordId}")
+    public ImportJobRecordResponse updateRecord(
+            @PathVariable UUID recordId,
+            @RequestBody ImportJobRecordRequest request
+    ) {
+        return importJobService.updateRecord(recordId, request);
+    }
+
     @PostMapping("/import-jobs/{importJobId}/records")
     public ResponseEntity<ImportJobRecordResponse> createRecord(
             @PathVariable UUID importJobId,

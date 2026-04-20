@@ -491,6 +491,21 @@ public class ImportJobService {
     }
 
     @Transactional
+    public ImportJobRecordResponse updateRecord(UUID recordId, ImportJobRecordRequest request) {
+        ImportJobRecordRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        ImportJobRecord record = importJobRecordRepository.findById(recordId)
+                .orElseThrow(() -> notFound("Import job record not found"));
+        ImportJob job = mutableImportJob(record.getImportJobId());
+        permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        applyRecordRequest(record, updateRequest, false);
+        clearConflict(record);
+        ImportJobRecord saved = importJobRecordRepository.save(record);
+        recordJobEvent(job, "import_job.record_updated", actorId);
+        return ImportJobRecordResponse.from(saved);
+    }
+
+    @Transactional
     public ImportParseResponse parse(UUID importJobId, ImportParseRequest request) {
         ImportParseRequest parseRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();
@@ -563,7 +578,7 @@ public class ImportJobService {
 
     @Transactional
     public ImportMaterializeResponse rerunMaterialization(UUID materializationRunId, ImportMaterializationRerunRequest request) {
-        ImportMaterializationRerunRequest rerunRequest = request == null ? new ImportMaterializationRerunRequest(null) : request;
+        ImportMaterializationRerunRequest rerunRequest = request == null ? new ImportMaterializationRerunRequest(null, null) : request;
         UUID actorId = currentUserService.requireUserId();
         ImportMaterializationRun sourceRun = importMaterializationRunRepository.findById(materializationRunId)
                 .orElseThrow(() -> notFound("Import materialization run not found"));
@@ -578,14 +593,17 @@ public class ImportJobService {
         JsonNode transformations = sourceRun.getTransformationConfigSnapshot() == null
                 ? objectMapper.createObjectNode()
                 : sourceRun.getTransformationConfigSnapshot().deepCopy();
-        ImportMaterializationRun rerun = startMaterializationRerun(job, sourceRun, actorId);
+        boolean updateExisting = rerunRequest.updateExisting() == null
+                ? Boolean.TRUE.equals(sourceRun.getUpdateExisting())
+                : rerunRequest.updateExisting();
+        ImportMaterializationRun rerun = startMaterializationRerun(job, sourceRun, actorId, updateExisting);
         return processMaterialization(
                 job,
                 template,
                 rules,
                 project,
                 rerun,
-                Boolean.TRUE.equals(sourceRun.getUpdateExisting()),
+                updateExisting,
                 transformations,
                 normalizeMaterializeLimit(rerunRequest.limit()),
                 actorId
@@ -660,7 +678,7 @@ public class ImportJobService {
             UUID actorId
     ) {
         List<ImportJobRecord> candidates = importJobRecordRepository
-                .findByImportJobIdAndStatusInOrderBySourceTypeAscSourceIdAsc(job.getId(), List.of("pending", "failed", "imported", "conflict"));
+                .findByImportJobIdAndStatusInOrderBySourceTypeAscSourceIdAsc(job.getId(), List.of("pending", "failed", "imported"));
         List<ImportJobRecordResponse> responses = new ArrayList<>();
         int created = 0;
         int updated = 0;
@@ -733,6 +751,10 @@ public class ImportJobService {
         }
         if (request.targetId() != null) {
             record.setTargetId(request.targetId());
+        }
+        if (Boolean.TRUE.equals(request.clearTarget())) {
+            record.setTargetType(null);
+            record.setTargetId(null);
         }
         if (create || hasText(request.status())) {
             record.setStatus(hasText(request.status()) ? request.status().trim().toLowerCase() : "pending");
@@ -1428,7 +1450,8 @@ public class ImportJobService {
     private ImportMaterializationRun startMaterializationRerun(
             ImportJob job,
             ImportMaterializationRun sourceRun,
-            UUID actorId
+            UUID actorId,
+            boolean updateExisting
     ) {
         ImportMaterializationRun run = new ImportMaterializationRun();
         run.setWorkspaceId(job.getWorkspaceId());
@@ -1438,7 +1461,7 @@ public class ImportJobService {
         run.setTransformPresetVersion(sourceRun.getTransformPresetVersion());
         run.setProjectId(sourceRun.getProjectId());
         run.setRequestedById(actorId);
-        run.setUpdateExisting(Boolean.TRUE.equals(sourceRun.getUpdateExisting()));
+        run.setUpdateExisting(updateExisting);
         run.setMappingTemplateSnapshot(sourceRun.getMappingTemplateSnapshot() == null ? objectMapper.createObjectNode() : sourceRun.getMappingTemplateSnapshot().deepCopy());
         run.setTransformPresetSnapshot(sourceRun.getTransformPresetSnapshot() == null ? null : sourceRun.getTransformPresetSnapshot().deepCopy());
         run.setTransformationConfigSnapshot(sourceRun.getTransformationConfigSnapshot() == null ? objectMapper.createObjectNode() : sourceRun.getTransformationConfigSnapshot().deepCopy());
