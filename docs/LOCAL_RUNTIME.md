@@ -54,7 +54,7 @@ Core local variables:
 - `SPRING_MAIL_PORT`: defaults to `1025`.
 - `TRASCK_EMAIL_PROVIDER`: defaults to `maildev` for the current development email provider.
 - `TRASCK_EMAIL_FROM`: default sender address for automation email delivery rows.
-- `TRASCK_IMPORT_SAMPLE_JOBS_ENABLED`: defaults to `false`. Local/default profiles can still use admin sample import endpoints; production-like `prod`, `production`, `staging`, and `hosted` profiles require this to be `true` before sample jobs can be created.
+- `TRASCK_IMPORT_SAMPLE_JOBS_ENABLED`: defaults to `false`. Local/default profiles can use admin sample import endpoints when the workspace import setting is enabled. Production-like `prod`, `production`, `staging`, and `hosted` profiles require this variable to be `true` and the workspace `sampleJobsEnabled` setting to be enabled before sample jobs can be created.
 
 Agent callback private keys and provider credentials are stored encrypted in `agent_provider_credentials.encrypted_secret`. `TRASCK_SECRETS_ENCRYPTION_KEY` can be raw text, hex, standard Base64, or URL-safe Base64. A direct 16, 24, or 32 byte decoded key is used as AES key material; otherwise Trasck derives an AES-256 key with SHA-256.
 

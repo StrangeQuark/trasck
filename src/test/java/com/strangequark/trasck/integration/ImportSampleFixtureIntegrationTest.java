@@ -65,6 +65,17 @@ class ImportSampleFixtureIntegrationTest {
         UUID projectId = uuid(setup, "/project/id");
         accessToken = login(setup);
 
+        JsonNode initialImportSettings = getJson("/api/v1/workspaces/" + workspaceId + "/import-settings");
+        assertThat(initialImportSettings.at("/sampleJobsEnabled").asBoolean()).isTrue();
+        assertThat(initialImportSettings.at("/sampleJobsAvailable").asBoolean()).isTrue();
+        JsonNode disabledImportSettings = patch("/api/v1/workspaces/" + workspaceId + "/import-settings", objectMapper.createObjectNode()
+                .put("sampleJobsEnabled", false));
+        assertThat(disabledImportSettings.at("/sampleJobsAvailable").asBoolean()).isFalse();
+        assertThat(get("/api/v1/workspaces/" + workspaceId + "/import-samples").statusCode()).isEqualTo(403);
+        JsonNode enabledImportSettings = patch("/api/v1/workspaces/" + workspaceId + "/import-settings", objectMapper.createObjectNode()
+                .put("sampleJobsEnabled", true));
+        assertThat(enabledImportSettings.at("/sampleJobsAvailable").asBoolean()).isTrue();
+
         JsonNode sampleCatalog = getJson("/api/v1/workspaces/" + workspaceId + "/import-samples");
         assertThat(sampleKeys(sampleCatalog)).contains("csv", "jira", "rally");
         JsonNode sampleJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-samples/csv/jobs", objectMapper.createObjectNode()
@@ -186,8 +197,14 @@ class ImportSampleFixtureIntegrationTest {
         JsonNode workerRuns = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs");
         assertThat(hasWorkerRun(workerRuns, "import_conflict_resolution", "succeeded")).isTrue();
         assertThat(hasWorkerRun(workerRuns, "import_conflict_resolution", "failed")).isTrue();
+        JsonNode filteredWorkerRuns = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-runs?workerType=import_conflict_resolution");
+        assertThat(filteredWorkerRuns).isNotEmpty();
+        assertThat(allWorkerRunsHaveType(filteredWorkerRuns, "import_conflict_resolution")).isTrue();
         JsonNode workerHealth = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-health");
         assertThat(hasWorkerHealth(workerHealth, "import_conflict_resolution", "succeeded")).isTrue();
+        JsonNode filteredWorkerHealth = getJson("/api/v1/workspaces/" + workspaceId + "/automation-worker-health?workerType=import_conflict_resolution");
+        assertThat(filteredWorkerHealth).isNotEmpty();
+        assertThat(allWorkerHealthRowsHaveType(filteredWorkerHealth, "import_conflict_resolution")).isTrue();
 
         JsonNode workspaceJobs = getJson("/api/v1/workspaces/" + workspaceId + "/import-conflict-resolution-jobs?status=completed");
         assertThat(workspaceJobs).isNotEmpty();
@@ -254,12 +271,22 @@ class ImportSampleFixtureIntegrationTest {
         JsonNode exportJob = postJson("/api/v1/import-jobs/" + importJobId + "/version-diffs/export-jobs", objectMapper.createObjectNode());
         assertThat(exportJob.at("/exportType").asText()).isEqualTo("import_job_version_diffs");
         UUID exportJobId = uuid(exportJob, "/id");
+        JsonNode csvExportJob = postJson("/api/v1/import-jobs/" + importJobId + "/version-diffs/export-jobs", objectMapper.createObjectNode()
+                .put("format", "csv")
+                .put("filterColumn", "path")
+                .put("filter", sample.titlePath()));
+        assertThat(csvExportJob.at("/filename").asText()).endsWith(".csv");
+        UUID csvExportJobId = uuid(csvExportJob, "/id");
         JsonNode listedExportJobs = getJson("/api/v1/workspaces/" + workspaceId + "/export-jobs?exportType=import_job_version_diffs&limit=10");
         assertThat(listedExportJobs.at("/items")).isNotEmpty();
         HttpResponse<String> downloadedExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + exportJobId + "/download");
         assertThat(downloadedExport.statusCode()).isEqualTo(200);
         assertThat(downloadedExport.headers().firstValue("Content-Disposition")).hasValueSatisfying(value -> assertThat(value).contains("import-job-version-diffs-"));
         assertThat(downloadedExport.body()).contains(importJobId.toString(), "diffs");
+        HttpResponse<String> downloadedCsvExport = get("/api/v1/workspaces/" + workspaceId + "/export-jobs/" + csvExportJobId + "/download");
+        assertThat(downloadedCsvExport.statusCode()).isEqualTo(200);
+        assertThat(downloadedCsvExport.headers().firstValue("Content-Type")).hasValueSatisfying(value -> assertThat(value).contains("text/csv"));
+        assertThat(downloadedCsvExport.body()).contains("Source,Status,Version,Change,Field,Previous,Current", sample.titlePath());
 
         JsonNode conflictRun = postJson("/api/v1/import-jobs/" + importJobId + "/materialize", objectMapper.createObjectNode()
                 .put("mappingTemplateId", mapping.at("/id").asText())
@@ -458,6 +485,24 @@ class ImportSampleFixtureIntegrationTest {
             }
         }
         return false;
+    }
+
+    private boolean allWorkerRunsHaveType(JsonNode runs, String workerType) {
+        for (JsonNode run : runs) {
+            if (!workerType.equals(run.at("/workerType").asText())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean allWorkerHealthRowsHaveType(JsonNode healthRows, String workerType) {
+        for (JsonNode health : healthRows) {
+            if (!workerType.equals(health.at("/workerType").asText())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void createTypeTranslation(JsonNode mapping, String source, String target) throws Exception {

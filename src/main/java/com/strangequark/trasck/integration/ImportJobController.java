@@ -37,6 +37,19 @@ public class ImportJobController {
         return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createImportJob(workspaceId, request));
     }
 
+    @GetMapping("/workspaces/{workspaceId}/import-settings")
+    public ImportWorkspaceSettingsResponse getImportSettings(@PathVariable UUID workspaceId) {
+        return importJobService.getImportWorkspaceSettings(workspaceId);
+    }
+
+    @PatchMapping("/workspaces/{workspaceId}/import-settings")
+    public ImportWorkspaceSettingsResponse updateImportSettings(
+            @PathVariable UUID workspaceId,
+            @RequestBody ImportWorkspaceSettingsRequest request
+    ) {
+        return importJobService.updateImportWorkspaceSettings(workspaceId, request);
+    }
+
     @GetMapping("/workspaces/{workspaceId}/import-samples")
     public List<ImportSampleResponse> listImportSamples(@PathVariable UUID workspaceId) {
         return importJobService.listImportSamples(workspaceId);
@@ -409,8 +422,11 @@ public class ImportJobController {
     }
 
     @PostMapping("/import-jobs/{importJobId}/version-diffs/export-jobs")
-    public ResponseEntity<ExportJobResponse> createJobVersionDiffExportJob(@PathVariable UUID importJobId) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createJobVersionDiffExportJob(importJobId));
+    public ResponseEntity<ExportJobResponse> createJobVersionDiffExportJob(
+            @PathVariable UUID importJobId,
+            @RequestBody(required = false) ImportJobVersionDiffExportJobRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(importJobService.createJobVersionDiffExportJob(importJobId, request));
     }
 
     @PostMapping("/import-jobs/{importJobId}/records")

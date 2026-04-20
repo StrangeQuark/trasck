@@ -150,13 +150,19 @@ public class AutomationController {
     }
 
     @GetMapping("/workspaces/{workspaceId}/automation-worker-runs")
-    public List<AutomationWorkerRunHistoryResponse> listWorkerRuns(@PathVariable UUID workspaceId) {
-        return automationService.listWorkerRuns(workspaceId);
+    public List<AutomationWorkerRunHistoryResponse> listWorkerRuns(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String workerType
+    ) {
+        return automationService.listWorkerRuns(workspaceId, workerType);
     }
 
     @GetMapping("/workspaces/{workspaceId}/automation-worker-health")
-    public List<AutomationWorkerHealthResponse> listWorkerHealth(@PathVariable UUID workspaceId) {
-        return automationService.listWorkerHealth(workspaceId);
+    public List<AutomationWorkerHealthResponse> listWorkerHealth(
+            @PathVariable UUID workspaceId,
+            @RequestParam(required = false) String workerType
+    ) {
+        return automationService.listWorkerHealth(workspaceId, workerType);
     }
 
     @PostMapping("/workspaces/{workspaceId}/automation-worker-runs/export")

@@ -23,29 +23,28 @@ public class ClaudeCodeAgentProviderAdapter implements AgentProviderAdapter {
         if (!providerType().equals(provider.getProviderType())) {
             throw new IllegalArgumentException("Unsupported Claude Code provider type");
         }
+        ExternalAgentRuntimeConfig.from(objectMapper, providerType(), provider).validate();
     }
 
     @Override
     public AgentDispatchResult dispatch(AgentTask task, AgentProvider provider, AgentProfile profile) {
-        return result(task, "dispatched");
+        return result(task, provider, profile, "dispatched");
     }
 
     @Override
     public AgentDispatchResult retry(AgentTask task, AgentProvider provider, AgentProfile profile) {
-        return result(task, "retried");
+        return result(task, provider, profile, "retried");
     }
 
     @Override
     public void cancel(AgentTask task, AgentProvider provider, AgentProfile profile) {
-        // External Claude Code cancellation is provider-specific future work.
+        ExternalAgentRuntimeConfig.from(objectMapper, providerType(), provider).validate();
     }
 
-    private AgentDispatchResult result(AgentTask task, String action) {
-        ObjectNode payload = objectMapper.createObjectNode()
-                .put("adapter", providerType())
-                .put("action", action)
-                .put("externalDispatch", false)
-                .put("agentTaskId", task.getId().toString());
-        return new AgentDispatchResult("claude-code-" + task.getId(), payload);
+    private AgentDispatchResult result(AgentTask task, AgentProvider provider, AgentProfile profile, String action) {
+        ExternalAgentRuntimeConfig runtime = ExternalAgentRuntimeConfig.from(objectMapper, providerType(), provider);
+        runtime.validate();
+        ObjectNode payload = runtime.dispatchPayload(task, provider, profile, action);
+        return new AgentDispatchResult(runtime.externalTaskId(task), payload);
     }
 }

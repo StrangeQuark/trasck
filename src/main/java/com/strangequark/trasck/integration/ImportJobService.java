@@ -28,6 +28,7 @@ import com.strangequark.trasck.workitem.WorkItemService;
 import com.strangequark.trasck.workitem.WorkItemUpdateRequest;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
+import java.nio.charset.StandardCharsets;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.OffsetDateTime;
@@ -193,6 +194,7 @@ public class ImportJobService {
     private final ImportMappingValueLookupRepository importMappingValueLookupRepository;
     private final ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository;
     private final ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository;
+    private final ImportWorkspaceSettingsRepository importWorkspaceSettingsRepository;
     private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
     private final AttachmentRepository attachmentRepository;
     private final AttachmentStorageService attachmentStorageService;
@@ -221,6 +223,7 @@ public class ImportJobService {
             ImportMappingValueLookupRepository importMappingValueLookupRepository,
             ImportMappingTypeTranslationRepository importMappingTypeTranslationRepository,
             ImportMappingStatusTranslationRepository importMappingStatusTranslationRepository,
+            ImportWorkspaceSettingsRepository importWorkspaceSettingsRepository,
             AttachmentStorageConfigRepository attachmentStorageConfigRepository,
             AttachmentRepository attachmentRepository,
             AttachmentStorageService attachmentStorageService,
@@ -248,6 +251,7 @@ public class ImportJobService {
         this.importMappingValueLookupRepository = importMappingValueLookupRepository;
         this.importMappingTypeTranslationRepository = importMappingTypeTranslationRepository;
         this.importMappingStatusTranslationRepository = importMappingStatusTranslationRepository;
+        this.importWorkspaceSettingsRepository = importWorkspaceSettingsRepository;
         this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
         this.attachmentRepository = attachmentRepository;
         this.attachmentStorageService = attachmentStorageService;
@@ -300,11 +304,43 @@ public class ImportJobService {
     }
 
     @Transactional(readOnly = true)
+    public ImportWorkspaceSettingsResponse getImportWorkspaceSettings(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        return importWorkspaceSettingsResponse(workspaceId);
+    }
+
+    @Transactional
+    public ImportWorkspaceSettingsResponse updateImportWorkspaceSettings(UUID workspaceId, ImportWorkspaceSettingsRequest request) {
+        ImportWorkspaceSettingsRequest updateRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        ImportWorkspaceSettings settings = importWorkspaceSettingsRepository.findByWorkspaceId(workspaceId)
+                .orElseGet(() -> {
+                    ImportWorkspaceSettings created = new ImportWorkspaceSettings();
+                    created.setWorkspaceId(workspaceId);
+                    created.setSampleJobsEnabled(defaultSampleJobsEnabled());
+                    return created;
+                });
+        if (updateRequest.sampleJobsEnabled() != null) {
+            settings.setSampleJobsEnabled(updateRequest.sampleJobsEnabled());
+        }
+        ImportWorkspaceSettings saved = importWorkspaceSettingsRepository.save(settings);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("sampleJobsEnabled", Boolean.TRUE.equals(saved.getSampleJobsEnabled()))
+                .put("deploymentSampleJobsEnabled", deploymentSampleJobsEnabled());
+        recordWorkspaceEvent(workspaceId, "import_workspace_settings", workspaceId, "import_workspace_settings.updated", actorId, payload);
+        return importWorkspaceSettingsResponse(workspaceId, saved);
+    }
+
+    @Transactional(readOnly = true)
     public List<ImportSampleResponse> listImportSamples(UUID workspaceId) {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
-        requireSampleJobsEnabled();
+        requireSampleJobsEnabled(workspaceId);
         return IMPORT_SAMPLES.stream()
                 .map(ImportSampleDefinition::response)
                 .toList();
@@ -317,7 +353,7 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
-        requireSampleJobsEnabled();
+        requireSampleJobsEnabled(workspaceId);
         UUID projectId = sampleRequest.projectId();
         boolean createMappingTemplate = Boolean.TRUE.equals(sampleRequest.createMappingTemplate())
                 || (sampleRequest.createMappingTemplate() == null && projectId != null);
@@ -1573,10 +1609,14 @@ public class ImportJobService {
     }
 
     @Transactional
-    public ExportJobResponse createJobVersionDiffExportJob(UUID importJobId) {
+    public ExportJobResponse createJobVersionDiffExportJob(UUID importJobId, ImportJobVersionDiffExportJobRequest request) {
         UUID actorId = currentUserService.requireUserId();
         ImportJob job = importJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
+        ImportJobVersionDiffExportJobRequest exportRequest = request == null
+                ? new ImportJobVersionDiffExportJobRequest("json", null, null)
+                : request;
+        String format = normalizeExportFormat(exportRequest.format());
         ImportJobVersionDiffExportResponse export = new ImportJobVersionDiffExportResponse(
                 OffsetDateTime.now(ZoneOffset.UTC),
                 response(job),
@@ -1585,15 +1625,19 @@ public class ImportJobService {
         AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(job.getWorkspaceId())
                 .orElseThrow(() -> badRequest("Default attachment storage config not found"));
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        String extension = "csv".equals(format) ? ".csv" : ".json";
+        String contentType = "csv".equals(format) ? "text/csv" : "application/json";
         String filename = "import-job-version-diffs-"
                 + importJobId
                 + "-"
                 + now.format(EXPORT_FILENAME_TIME)
-                + ".json";
-        byte[] content = jsonBytes(export);
+                + extension;
+        byte[] content = "csv".equals(format)
+                ? jobVersionDiffCsvBytes(export.diffs(), exportRequest.filterColumn(), exportRequest.filter())
+                : jsonBytes(export);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
-                new AttachmentUpload(filename, "application/json", content, null)
+                new AttachmentUpload(filename, contentType, content, null)
         );
         try {
             Attachment attachment = new Attachment();
@@ -1601,7 +1645,7 @@ public class ImportJobService {
             attachment.setStorageConfigId(storageConfig.getId());
             attachment.setUploaderId(actorId);
             attachment.setFilename(filename);
-            attachment.setContentType("application/json");
+            attachment.setContentType(contentType);
             attachment.setStorageKey(stored.storageKey());
             attachment.setSizeBytes(stored.sizeBytes());
             attachment.setChecksum(stored.checksum());
@@ -2757,14 +2801,45 @@ public class ImportJobService {
                 .orElseThrow(() -> notFound("Import sample not found"));
     }
 
-    private void requireSampleJobsEnabled() {
-        if (sampleJobsEnabled || isLocalSampleRuntime()) {
+    private void requireSampleJobsEnabled(UUID workspaceId) {
+        ImportWorkspaceSettingsResponse settings = importWorkspaceSettingsResponse(workspaceId);
+        if (Boolean.TRUE.equals(settings.sampleJobsAvailable())) {
             return;
+        }
+        if (!Boolean.TRUE.equals(settings.deploymentSampleJobsEnabled())) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Import sample demo endpoints are disabled for this deployment"
+            );
         }
         throw new ResponseStatusException(
                 HttpStatus.FORBIDDEN,
-                "Import sample demo endpoints are disabled for this deployment"
+                "Import sample demo endpoints are disabled for this workspace"
         );
+    }
+
+    private ImportWorkspaceSettingsResponse importWorkspaceSettingsResponse(UUID workspaceId) {
+        return importWorkspaceSettingsResponse(
+                workspaceId,
+                importWorkspaceSettingsRepository.findByWorkspaceId(workspaceId).orElse(null)
+        );
+    }
+
+    private ImportWorkspaceSettingsResponse importWorkspaceSettingsResponse(UUID workspaceId, ImportWorkspaceSettings settings) {
+        return ImportWorkspaceSettingsResponse.from(
+                workspaceId,
+                settings,
+                defaultSampleJobsEnabled(),
+                deploymentSampleJobsEnabled()
+        );
+    }
+
+    private boolean defaultSampleJobsEnabled() {
+        return isLocalSampleRuntime();
+    }
+
+    private boolean deploymentSampleJobsEnabled() {
+        return sampleJobsEnabled || isLocalSampleRuntime();
     }
 
     private boolean isLocalSampleRuntime() {
@@ -2835,6 +2910,16 @@ public class ImportJobService {
             additionalPayload.fields().forEachRemaining(entry -> payload.set(entry.getKey(), entry.getValue()));
         }
         domainEventService.record(job.getWorkspaceId(), "import_job", job.getId(), eventType, payload);
+    }
+
+    private void recordWorkspaceEvent(UUID workspaceId, String aggregateType, UUID aggregateId, String eventType, UUID actorId, ObjectNode additionalPayload) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("workspaceId", workspaceId.toString())
+                .put("actorUserId", actorId.toString());
+        if (additionalPayload != null) {
+            additionalPayload.fields().forEachRemaining(entry -> payload.set(entry.getKey(), entry.getValue()));
+        }
+        domainEventService.record(workspaceId, aggregateType, aggregateId, eventType, payload);
     }
 
     private void recordSampleJobEvent(
@@ -3046,6 +3131,111 @@ public class ImportJobService {
         return fields;
     }
 
+    private byte[] jobVersionDiffCsvBytes(ImportJobVersionDiffResponse diffs, String filterColumn, String filter) {
+        List<JobVersionDiffCsvRow> rows = jobVersionDiffCsvRows(diffs, filterColumn, filter);
+        StringBuilder csv = new StringBuilder();
+        csv.append("Source,Status,Version,Change,Field,Previous,Current\n");
+        for (JobVersionDiffCsvRow row : rows) {
+            csv.append(csvCell(row.source())).append(',')
+                    .append(csvCell(row.status())).append(',')
+                    .append(csvCell(row.version())).append(',')
+                    .append(csvCell(row.change())).append(',')
+                    .append(csvCell(row.field())).append(',')
+                    .append(csvCell(row.previous())).append(',')
+                    .append(csvCell(row.current()))
+                    .append('\n');
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private List<JobVersionDiffCsvRow> jobVersionDiffCsvRows(ImportJobVersionDiffResponse diffs, String filterColumn, String filter) {
+        List<JobVersionDiffCsvRow> rows = new ArrayList<>();
+        List<ImportJobRecordVersionDiffGroupResponse> records = diffs == null || diffs.records() == null ? List.of() : diffs.records();
+        for (ImportJobRecordVersionDiffGroupResponse record : records) {
+            List<String> sourceParts = new ArrayList<>();
+            if (hasText(record.sourceType())) {
+                sourceParts.add(record.sourceType());
+            }
+            if (hasText(record.sourceId())) {
+                sourceParts.add(record.sourceId());
+            }
+            String source = String.join(" / ", sourceParts);
+            String status = hasText(record.conflictStatus()) ? record.conflictStatus() : record.status();
+            for (ImportJobRecordVersionDiffResponse diff : record.diffs() == null ? List.<ImportJobRecordVersionDiffResponse>of() : record.diffs()) {
+                String version = diff.comparedToVersion() == null
+                        ? String.valueOf(diff.version())
+                        : diff.comparedToVersion() + " -> " + diff.version();
+                for (ImportJobRecordFieldDiffResponse field : diff.fields() == null ? List.<ImportJobRecordFieldDiffResponse>of() : diff.fields()) {
+                    JobVersionDiffCsvRow row = new JobVersionDiffCsvRow(
+                            source,
+                            status,
+                            version,
+                            hasText(field.changeType()) ? field.changeType() : diff.changeType(),
+                            field.path(),
+                            exportCellValue(field.previousValue()),
+                            exportCellValue(field.value())
+                    );
+                    if (matchesJobVersionDiffFilter(row, filterColumn, filter)) {
+                        rows.add(row);
+                    }
+                }
+            }
+        }
+        return rows;
+    }
+
+    private boolean matchesJobVersionDiffFilter(JobVersionDiffCsvRow row, String filterColumn, String filter) {
+        if (!hasText(filter)) {
+            return true;
+        }
+        String normalizedFilter = filter.trim().toLowerCase(Locale.ROOT);
+        return switch (normalizeFilterColumn(filterColumn)) {
+            case "source" -> containsFilter(row.source(), normalizedFilter);
+            case "statusLabel" -> containsFilter(row.status(), normalizedFilter);
+            case "versionLabel" -> containsFilter(row.version(), normalizedFilter);
+            case "changeType" -> containsFilter(row.change(), normalizedFilter);
+            case "path" -> containsFilter(row.field(), normalizedFilter);
+            case "previousValue" -> containsFilter(row.previous(), normalizedFilter);
+            case "value" -> containsFilter(row.current(), normalizedFilter);
+            default -> containsFilter(row.source(), normalizedFilter)
+                    || containsFilter(row.status(), normalizedFilter)
+                    || containsFilter(row.version(), normalizedFilter)
+                    || containsFilter(row.change(), normalizedFilter)
+                    || containsFilter(row.field(), normalizedFilter)
+                    || containsFilter(row.previous(), normalizedFilter)
+                    || containsFilter(row.current(), normalizedFilter);
+        };
+    }
+
+    private String normalizeFilterColumn(String filterColumn) {
+        return hasText(filterColumn) ? filterColumn.trim() : "all";
+    }
+
+    private boolean containsFilter(String value, String normalizedFilter) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(normalizedFilter);
+    }
+
+    private String exportCellValue(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        if (value instanceof JsonNode jsonNode) {
+            return jsonNode.isTextual() ? jsonNode.asText() : jsonNode.toString();
+        }
+        if (value instanceof Map<?, ?> || value instanceof List<?>) {
+            return objectMapper.valueToTree(value).toString();
+        }
+        return String.valueOf(value);
+    }
+
+    private String csvCell(String value) {
+        String text = value == null ? "" : value;
+        if (text.contains(",") || text.contains("\"") || text.contains("\n") || text.contains("\r")) {
+            return "\"" + text.replace("\"", "\"\"") + "\"";
+        }
+        return text;
+    }
+
     private byte[] jsonBytes(Object value) {
         try {
             return objectMapper.writeValueAsBytes(value);
@@ -3152,6 +3342,14 @@ public class ImportJobService {
         return hasText(value) ? value.trim().toLowerCase(Locale.ROOT) : null;
     }
 
+    private String normalizeExportFormat(String format) {
+        String normalized = hasText(format) ? format.trim().toLowerCase(Locale.ROOT) : "json";
+        if (!List.of("json", "csv").contains(normalized)) {
+            throw badRequest("Export format must be json or csv");
+        }
+        return normalized;
+    }
+
     private <T> T required(T value, String fieldName) {
         if (value == null) {
             throw badRequest(fieldName + " is required");
@@ -3180,6 +3378,17 @@ public class ImportJobService {
 
     private ResponseStatusException badRequest(String message) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private record JobVersionDiffCsvRow(
+            String source,
+            String status,
+            String version,
+            String change,
+            String field,
+            String previous,
+            String current
+    ) {
     }
 
     private record ParsedImportRecord(String sourceType, String sourceId, JsonNode rawPayload) {

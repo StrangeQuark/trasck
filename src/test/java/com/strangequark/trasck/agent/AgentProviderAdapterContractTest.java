@@ -37,6 +37,12 @@ class AgentProviderAdapterContractTest {
             assertThat(dispatch.dispatchPayload().path("adapter").asText()).isEqualTo(adapter.providerType());
             assertThat(dispatch.dispatchPayload().path("action").asText()).isEqualTo("dispatched");
             assertThat(dispatch.dispatchPayload().path("agentTaskId").asText()).isEqualTo(task.getId().toString());
+            assertThat(dispatch.dispatchPayload().path("requiresCallbackJwt").asBoolean()).isTrue();
+            assertThat(dispatch.dispatchPayload().path("idempotencyKey").asText()).contains(task.getId().toString());
+            assertThat(dispatch.dispatchPayload().path("retrySupported").asBoolean()).isTrue();
+            assertThat(dispatch.dispatchPayload().path("cancelSupported").asBoolean()).isTrue();
+            assertThat(dispatch.dispatchPayload().path("requestChangesSupported").asBoolean()).isTrue();
+            assertThat(dispatch.dispatchPayload().path("artifactCallbackSupported").asBoolean()).isTrue();
             assertThat(retry.externalTaskId()).isNotBlank();
             assertThat(retry.dispatchPayload().path("action").asText()).isEqualTo("retried");
             assertThat(retry.dispatchPayload().path("agentTaskId").asText()).isEqualTo(task.getId().toString());
@@ -44,8 +50,79 @@ class AgentProviderAdapterContractTest {
                 assertThat(dispatch.dispatchPayload().path("protocolVersion").asText()).isEqualTo("trasck.worker.v1");
                 assertThat(dispatch.dispatchPayload().path("webhookPushSupported").asBoolean()).isTrue();
                 assertThat(dispatch.dispatchPayload().path("pollingSupported").asBoolean()).isTrue();
+            } else {
+                assertThat(dispatch.dispatchPayload().path("protocolVersion").asText()).isEqualTo("trasck.agent-runtime.v1");
             }
         }
+    }
+
+    @Test
+    void codexAndClaudeAdaptersExposeHostedApiAndCliWorkerBoundariesWithoutInvokingThem() {
+        List<AgentProviderAdapter> adapters = List.of(
+                new CodexAgentProviderAdapter(objectMapper),
+                new ClaudeCodeAgentProviderAdapter(objectMapper)
+        );
+
+        for (AgentProviderAdapter adapter : adapters) {
+            AgentProvider hosted = provider(adapter.providerType());
+            ObjectNode hostedRuntime = objectMapper.createObjectNode()
+                    .put("mode", "hosted_api")
+                    .put("externalExecutionEnabled", true);
+            hostedRuntime.set("hostedApi", objectMapper.createObjectNode()
+                    .put("baseUrl", "https://agents.example.test")
+                    .put("dispatchPath", "/dispatch"));
+            hosted.setConfig(objectMapper.createObjectNode().set("runtime", hostedRuntime));
+            AgentProfile hostedProfile = profile(hosted);
+            AgentTask hostedTask = task(hosted, hostedProfile);
+
+            adapter.validateProvider(hosted);
+            AgentDispatchResult hostedDispatch = adapter.dispatch(hostedTask, hosted, hostedProfile);
+            assertThat(hostedDispatch.dispatchPayload().path("providerRuntime").asText()).isEqualTo("hosted_api");
+            assertThat(hostedDispatch.dispatchPayload().path("transport").asText()).isEqualTo("provider_hosted_api");
+            assertThat(hostedDispatch.dispatchPayload().path("externalDispatch").asBoolean()).isTrue();
+            assertThat(hostedDispatch.dispatchPayload().path("hostedApi").path("baseUrl").asText()).isEqualTo("https://agents.example.test");
+
+            AgentProvider cli = provider(adapter.providerType());
+            ObjectNode cliRuntime = objectMapper.createObjectNode()
+                    .put("mode", "cli_worker")
+                    .put("externalExecutionEnabled", true);
+            cliRuntime.set("cliWorker", objectMapper.createObjectNode()
+                    .put("commandProfile", adapter.providerType() + "-default")
+                    .put("queueName", "local-agent"));
+            cli.setConfig(objectMapper.createObjectNode().set("runtime", cliRuntime));
+            AgentProfile cliProfile = profile(cli);
+            AgentTask cliTask = task(cli, cliProfile);
+
+            adapter.validateProvider(cli);
+            AgentDispatchResult cliDispatch = adapter.dispatch(cliTask, cli, cliProfile);
+            assertThat(cliDispatch.dispatchPayload().path("providerRuntime").asText()).isEqualTo("cli_worker");
+            assertThat(cliDispatch.dispatchPayload().path("transport").asText()).isEqualTo("backend_cli_worker");
+            assertThat(cliDispatch.dispatchPayload().path("externalDispatch").asBoolean()).isTrue();
+            assertThat(cliDispatch.dispatchPayload().path("cliWorker").path("commandProfile").asText()).contains("default");
+        }
+    }
+
+    @Test
+    void realRuntimeModesRequireExplicitEnablementAndAllowlistedCliProfiles() {
+        AgentProvider hostedWithoutOptIn = provider("codex");
+        hostedWithoutOptIn.setConfig(objectMapper.createObjectNode().set("runtime", objectMapper.createObjectNode()
+                .put("mode", "hosted_api")
+                .set("hostedApi", objectMapper.createObjectNode().put("baseUrl", "https://agents.example.test"))));
+        assertThatThrownBy(() -> new CodexAgentProviderAdapter(objectMapper).validateProvider(hostedWithoutOptIn))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("explicitly enabled");
+
+        AgentProvider rawCommand = provider("claude_code");
+        ObjectNode cliRuntime = objectMapper.createObjectNode()
+                .put("mode", "cli_worker")
+                .put("externalExecutionEnabled", true);
+        cliRuntime.set("cliWorker", objectMapper.createObjectNode()
+                .put("commandProfile", "claude-default")
+                .put("command", "claude --dangerously-run-this"));
+        rawCommand.setConfig(objectMapper.createObjectNode().set("runtime", cliRuntime));
+        assertThatThrownBy(() -> new ClaudeCodeAgentProviderAdapter(objectMapper).validateProvider(rawCommand))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allowlisted commandProfile");
     }
 
     @Test
