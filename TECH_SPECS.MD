@@ -76,6 +76,7 @@ This is not an MVP spec. The goal is to design the backend foundation for the co
 64. Boards expose per-column work item card data from configured status mappings plus configured backend swimlane groupings backed by the saved-filter/query-builder predicate engine. Swimlanes may reference saved filter IDs directly or store inline query JSON. Board-scoped rank, transition, and combined move commands validate board membership before using the normal work item command paths; transition/move commands can use explicit `transitionKey` or derive an allowed workflow transition from `targetColumnId` and/or `targetStatusId`. Drag/drop uses card-level insertion by sending `previousWorkItemId`/`nextWorkItemId` relative to the target column.
 65. Manual worker endpoints remain available, and scheduled automation, webhook, email, and import conflict-resolution workers are enabled per workspace through `automation_worker_settings`; defaults keep all scheduled workers off. Worker executions write dedicated run-history and health rows for automation, webhook, email, and import conflict-resolution workers. Worker run/health APIs accept an optional `workerType` filter for operations screens. Worker run retention settings, manual retention export, manual retention pruning, optional `workerType` filters on manual export/prune, and optional automatic scheduled pruning are implemented. Manual worker-run pruning bypasses automatic schedule/window/throttle controls; automatic worker-run pruning has a dedicated fixed-delay scheduler, per-workspace interval throttle, optional workspace-timezone execution window, and last-start/last-finish metadata.
 66. Webhook and email deliveries are operable rows: admins can inspect, retry, cancel, dry-run process, and dead-letter delivery attempts without direct database access.
+67. A full production-minded security audit and hardening pass is required before manual end-to-end product testing. The sweep must inspect every backend and frontend file, generated artifacts, migrations, tests, Docker/nginx/build config, docs, and sample data; then review whole-system risks across auth, tenancy, public reads, imports, exports, attachments, automation, webhooks, email, reporting, audit/activity, and AI agent worker/callback flows. Production secrets must be injected through environment variables or local `.env` files that are not committed; checked-in config may contain only safe local examples.
 
 ## Full Work Hierarchy
 
@@ -275,6 +276,7 @@ Implemented seed data:
 
 Security state:
 
+- Before the product is treated as manually testable for production readiness, the backend and frontend require a full security sweep covering every file and every cross-system data path. Findings must be fixed or explicitly risk-accepted with mitigation, and critical/high issues must be closed before manual end-to-end testing begins.
 - Setup, auth login/register/OAuth/login/logout, health, and public project reads are explicitly permitted.
 - OpenAPI docs and Swagger UI are read-only and permitted without authentication for local contract discovery.
 - Other API routes require a valid JWT from the `Authorization: Bearer` header, `trasck_access_token` HTTP-only cookie, or a revocable API token sent as `Authorization: Bearer`.
@@ -2727,6 +2729,9 @@ Required backend tests:
 
 High-risk cases to test early:
 
+- Verifying no deployable secret, production credential, private key, token, SMTP password, OAuth secret, database password, object-storage secret, webhook secret, or agent credential is hard-coded in checked-in backend/frontend files, docs, config, Docker/nginx/build files, generated artifacts, tests, or sample data.
+- Verifying `.env`/environment-variable driven configuration for all production secrets, with checked-in examples clearly limited to local non-production use.
+- Verifying tenant isolation and permission denial across every workspace/project/team scoped API and frontend route.
 - Preventing parent cycles.
 - Maintaining correct `work_item_closure` rows when parents change.
 - Rejecting invalid parent-child work item type pairs.

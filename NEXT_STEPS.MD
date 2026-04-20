@@ -37,7 +37,39 @@ Local runtime and contract polish is in place. The backend has checked-in HTTP e
 
 ## Primary Next Steps
 
-### 1. Manual End-To-End Product Test Pass
+### 1. Full Codebase Security Audit And Threat Model
+
+Goal: inspect the entire Trasck backend and frontend before manual product testing, with a production security mindset.
+
+Planned work:
+
+- Review every backend file, every frontend file, generated client artifacts, Docker/nginx/build config, local runtime docs, checked-in HTTP examples, migrations, tests, and sample data for secrets, unsafe defaults, information disclosure, insecure auth flows, missing authorization, injection risks, path traversal, unsafe file handling, SSRF/open redirect risk, logging leaks, dependency risk, and data exposure.
+- Build a system-level threat model after the file-by-file pass, covering authentication, OAuth, API tokens, service tokens, cookie/CSRF behavior, CORS, public project reads, workspace/project/team scoping, attachments, imports, exports, audit/activity logs, notifications, automation, webhooks, email, reporting, dashboards, generated OpenAPI/client behavior, and AI agent dispatch/callback/worker flows.
+- Verify all secret-bearing configuration is environment-driven for deployable runtimes. No production credential, token, key, password, SMTP secret, OAuth client secret, database credential, object-storage secret, agent credential, callback private key, webhook secret, or JWT signing secret should be hard-coded or required from checked-in config.
+- Produce a written security findings list with severity, affected files/endpoints, exploit path, user-data impact, recommended fix, and regression-test plan.
+
+Done when:
+
+- We have a complete security audit record for both repos, including file-level findings and cross-system risks, and no high-risk area has been skipped or assumed safe without inspection.
+
+### 2. Production Security Hardening And Regression Coverage
+
+Goal: close the security findings before manual end-to-end testing so manual testing starts from a hardened baseline.
+
+Planned work:
+
+- Move unsafe deployable defaults and secret-bearing configuration behind `.env`/environment variables, document required variables, and ensure local examples remain clearly non-production.
+- Tighten backend security where findings require it: cookie flags, CSRF boundaries, CORS, OAuth callback validation, JWT/key handling, token scope enforcement, permission checks, tenant scoping, public-read gates, request validation, upload/download safety, export/download authorization, redaction, audit logging, rate/size limits where practical, and secure error responses.
+- Tighten integration and worker surfaces: webhook validation, email/SMTP secret handling, import payload limits and parser safety, export artifact access, automation execution boundaries, AI agent runtime/callback/worker credential handling, and prevention of secrets leaking into task context, dispatch attempts, activity, audit, comments, exports, or frontend JSON previews.
+- Tighten frontend security where findings require it: no browser access-token persistence, CSRF handling, API-base configuration safety, route/data exposure checks, dangerous rendering review, generated-client usage, admin-only screen assumptions, and accidental display of secret-bearing payloads.
+- Add targeted backend/frontend tests for every fixed class of issue, including authorization denial, cross-workspace/project isolation, redaction, secret config, attachment/export access, callback/token validation, and frontend no-secret/no-token persistence checks.
+- Run dependency and build verification for both repos, including Maven tests, frontend tests, frontend build, dependency audit where available, and any static checks added during the hardening pass.
+
+Done when:
+
+- All critical/high security findings are fixed, medium findings are fixed or explicitly documented with a production-safe mitigation plan, no real-user data leak paths remain known, and both repos pass the security regression suite.
+
+### 3. Manual End-To-End Product Test Pass
 
 Goal: validate the now-operable automation, webhook, email, import, board, dashboard, and agent surfaces against realistic local data before public testing.
 
@@ -51,7 +83,7 @@ Done when:
 
 - A local tester can operate delivery workers, inspect failures, retry/cancel jobs, export/prune worker history, create guarded sample imports, review/import conflict outcomes, and inspect agent task dispatch attempts without touching the database.
 
-### 2. Queued Operations Worker Consolidation
+### 4. Queued Operations Worker Consolidation
 
 Goal: reduce manual-only admin processing paths before broader user testing.
 
@@ -76,11 +108,12 @@ The following work should be completed before the application is ready for a mea
 
 ### Backend Readiness
 
+- Complete the full codebase security audit and production hardening pass before manual product testing begins.
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization/record editing/history/conflict resolution, and worker history as more APIs are exposed.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import review export jobs, import record versions, clone-retarget, snapshot reruns, and external callback/delivery failures as those flows are added.
 - Review dedicated automatic worker-run pruning interval/window defaults after manual worker history grows enough to validate cadence.
-- Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials.
+- Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials, and ensure all secret-bearing deployment configuration comes from environment variables rather than checked-in files.
 - Manually test a larger real-world import set through the UI, including field diff tables, backend-generated review CSV export artifacts, export artifact downloads, scheduled conflict pickup, and guarded sample job creation, before expanding import update/delete semantics further.
 
 ### Product Configuration Readiness
@@ -91,6 +124,7 @@ The following work should be completed before the application is ready for a mea
 
 ### Test Readiness
 
+- Add a dedicated security regression suite for tenant isolation, permission denial, public-read boundaries, token/callback validation, CSRF/cookie behavior, CORS expectations, redaction, attachment/export access, and frontend token/secret persistence.
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for high-use list screens and detail pages.
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization/conflicts/record editing/history, agent dispatch attempts, and attachment byte APIs.
