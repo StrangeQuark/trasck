@@ -90,6 +90,24 @@ Frontend dependency scanning should continue to use:
 npm audit --audit-level=high
 ```
 
+## Full-Stack Playwright Tests
+
+The separate `../trasck-test` repository contains Java Playwright tests for backend API behavior and frontend browser workflows.
+
+Start the backend and frontend first, then from `../trasck-test` run:
+
+```bash
+mvn test
+```
+
+The test repo defaults to:
+
+- Backend: `http://localhost:6100`
+- Frontend: `http://localhost:8080`
+- Browser: `chromium`
+
+Override these with `TRASCK_BACKEND_BASE_URL`, `TRASCK_FRONTEND_BASE_URL`, `TRASCK_E2E_BROWSER`, `TRASCK_E2E_HEADLESS`, and `TRASCK_E2E_TIMEOUT_MS`. The test repo also supports `docker compose run --rm trasck-test` for running the Java Playwright suite from its container against services on the host.
+
 ## Health Check
 
 ```bash

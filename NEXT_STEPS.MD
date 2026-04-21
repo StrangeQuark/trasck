@@ -41,12 +41,71 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/security-policy screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
+The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, Docker support, API smoke tests for backend health and CSRF metadata, and a browser smoke test for the frontend shell. The next testing work should expand that repo into the primary full-stack regression suite instead of relying on ad hoc manual browser passes.
+
 The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, supports database-backed or Redis-backed auth throttling while keeping durable auth-failure telemetry, rate-limits callback/worker auth failures, enforces workspace-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, deciding whether Redis must be mandatory for production-like deployments, system-admin step-up safeguards, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Human Manual Test And Bug-Fix Loop
+### 1. Playwright Automation Harness Expansion
+
+Goal: turn the new Java Playwright repository into the stable automation harness used before every manual product pass.
+
+Planned work:
+
+- Add reusable fixtures for setup, login, CSRF, cookie-authenticated browser sessions, Bearer-token API sessions, unique test data generation, and failure diagnostics.
+- Add deterministic test environment guidance for running backend, frontend, PostgreSQL, Maildev, Redis, and `trasck-test` together locally and in CI.
+- Add artifact capture for traces, screenshots, API response snippets, console errors, and test result reports without leaking secrets.
+- Add a top-level smoke suite that verifies backend health, frontend shell, setup readiness, login/current-user behavior, CSRF/cookie behavior, and OpenAPI availability under local profiles.
+
+Done when:
+
+- `trasck-test` can be run with one documented Maven or Docker command against a local Trasck stack and gives clear diagnostics when any service is down or misconfigured.
+
+### 2. Playwright Backend API Coverage
+
+Goal: build API-level Playwright coverage for every backend surface that is already implemented.
+
+Planned work:
+
+- Cover auth, setup, system-admin, workspace security policy, users/tokens, projects, work items, collaboration, attachments, teams, planning, boards, releases, roadmaps, configuration, custom fields/screens, saved filters/views, dashboards, reports, notifications, automation, webhooks, email, imports, exports, audit/activity, domain-event administration, and AI agent endpoints.
+- Validate both success paths and important denial paths, including tenant boundaries, project/workspace permissions, token scopes, public read behavior, redaction, upload/export limits, worker authentication, and agent callback authentication.
+- Keep API tests data-driven and isolated so they can create fresh data without depending on direct database access.
+
+Done when:
+
+- Every implemented backend route has at least one Playwright API test for its expected local/manual-test behavior and a focused set of negative/security checks.
+
+### 3. Playwright Frontend Workflow Coverage
+
+Goal: cover the implemented Vite React screens through browser workflows, not only API calls.
+
+Planned work:
+
+- Cover setup, login/logout/current user, project/work item CRUD, collaboration panels, team/planning/board flows, dashboards/reports/saved filters/views, configuration screens, notification preferences/defaults, automation/webhook/email operations, import review/export flows, system-admin/security-policy screens, token screens, and AI agent provider/profile/task/dispatch-attempt screens.
+- Prefer stable role/text/test-id selectors and add frontend test IDs only where accessible selectors are not stable enough.
+- Exercise realistic cross-screen flows such as creating data through setup, navigating to admin screens, creating work, moving board cards, running workers, creating import artifacts, and inspecting results through the UI.
+
+Done when:
+
+- The major implemented frontend routes have smoke and core-workflow browser tests that fail on broken navigation, broken forms, missing critical data, or visible runtime errors.
+
+### 4. Playwright Full-Stack Security And Regression Coverage
+
+Goal: encode the security audit and production-readiness risks as executable full-stack regression tests.
+
+Planned work:
+
+- Add tests for tenant isolation, authorization denial, CSRF/cookie behavior, token scope enforcement, service-token behavior, system-admin gates, public-read boundaries, redacted API errors, frontend secret masking, attachment/import/export limits, outbound/worker callback authentication surfaces, and no browser access-token local storage.
+- Add regression scenarios for import materialization/conflict resolution, queued export artifacts, worker run retention, agent dispatch attempts, dashboard/report rollups, and automation/webhook/email workers.
+- Keep long-running scenarios tagged separately from fast smoke checks so CI can run quick gates and scheduled full coverage differently.
+
+Done when:
+
+- The `trasck-test` suite can replace the current manual checklist for broad regression confidence while still leaving exploratory testing for usability issues.
+
+### 5. Human Manual Test And Bug-Fix Loop
 
 Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
@@ -54,13 +113,13 @@ Planned work:
 
 - Create fresh local data through setup and the UI, then exercise auth, system admin controls, workspace security policy, configuration, work items, planning/boards, dashboards, automation, webhooks, email, imports, export artifacts, audit/export history, and agent dispatch-attempt screens without direct database access.
 - Record the exact bugs or missing ergonomics found during the pass, then add focused backend/frontend regression tests for each fixed issue.
-- Decide from the new question list whether this pass should become Playwright automation immediately or stay human-run until the UI settles.
+- Backfill any issue found in this pass into the Java Playwright suite before considering it fixed.
 
 Done when:
 
 - A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, and agent task inspection without touching the database.
 
-### 2. External Worker And Provider Readiness
+### 6. External Worker And Provider Readiness
 
 Goal: prepare the provider-neutral worker boundary for the first non-stub external agent execution without weakening normal Jira/Rally-style product behavior.
 
@@ -75,7 +134,7 @@ Done when:
 
 - Admins can preview runtime payloads, rotate/revoke credentials, inspect dispatch attempts, and test a local worker without enabling paid or unmanaged external execution.
 
-### 3. Production Security Packaging Follow-Ups
+### 7. Production Security Packaging Follow-Ups
 
 Goal: turn the hardened local/manual-test baseline into deployable production controls.
 
@@ -118,6 +177,7 @@ The following work should be completed before the application is ready for a mea
 
 ### Test Readiness
 
+- Use the Java Playwright `trasck-test` repository as the full-stack automation home for backend API, frontend browser, and cross-system regression coverage.
 - Add a dedicated security regression suite mapped to `SECURITY_AUDIT.MD` for tenant isolation, permission denial, public-read boundaries, token/callback validation, production secret/config validation, Swagger/OpenAPI gating, CSRF/cookie behavior, CORS expectations, outbound URL denial, redaction, attachment/export access, and frontend token/secret persistence.
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for high-use list screens and detail pages.
