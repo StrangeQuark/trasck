@@ -155,6 +155,22 @@ class AuthIntegrationTest {
                 .put("password", "correct-horse-battery-staple"), null);
         assertThat(openRegister.statusCode()).isEqualTo(400);
 
+        JsonNode revokedInvitation = read(post("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
+                .put("email", "revoked-invite@example.com"), admin.accessToken()));
+        assertThat(delete("/api/v1/workspaces/" + workspaceId + "/invitations/" + uuid(revokedInvitation, "/id"), admin.accessToken()).statusCode()).isEqualTo(204);
+        assertThat(jdbcTemplate.queryForObject(
+                "select status from user_invitations where id = ?",
+                String.class,
+                uuid(revokedInvitation, "/id")
+        )).isEqualTo("revoked");
+        HttpResponse<String> revokedRegister = post("/api/v1/auth/register", objectMapper.createObjectNode()
+                .put("email", "revoked-invite@example.com")
+                .put("username", "revoked-invite")
+                .put("displayName", "Revoked Invite")
+                .put("password", "correct-horse-battery-staple")
+                .put("invitationToken", revokedInvitation.at("/token").asText()), null);
+        assertThat(revokedRegister.statusCode()).isEqualTo(403);
+
         JsonNode invitation = read(post("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
                 .put("email", "invited@example.com"), admin.accessToken()));
         assertThat(invitation.at("/token").asText()).isNotBlank();
@@ -192,6 +208,24 @@ class AuthIntegrationTest {
 
         AuthSession viewerSession = login("viewer@example.com", "correct-horse-battery-staple");
         assertThat(get("/api/v1/projects/" + projectId + "/work-items", viewerSession.accessToken()).statusCode()).isEqualTo(200);
+        assertThat(delete("/api/v1/workspaces/" + workspaceId + "/users/" + adminUserId, admin.accessToken()).statusCode()).isEqualTo(409);
+        JsonNode removableUser = read(post("/api/v1/workspaces/" + workspaceId + "/users", objectMapper.createObjectNode()
+                .put("email", "removable@example.com")
+                .put("username", "removable-user")
+                .put("displayName", "Removable User")
+                .put("password", "correct-horse-battery-staple")
+                .put("roleId", viewerRoleId.toString()), admin.accessToken()));
+        assertThat(delete("/api/v1/workspaces/" + workspaceId + "/users/" + uuid(removableUser, "/id"), admin.accessToken()).statusCode()).isEqualTo(204);
+        assertThat(jdbcTemplate.queryForObject(
+                "select status from workspace_memberships where workspace_id = ? and user_id = ?",
+                String.class,
+                workspaceId,
+                uuid(removableUser, "/id")
+        )).isEqualTo("removed");
+        HttpResponse<String> removedLogin = post("/api/v1/auth/login", objectMapper.createObjectNode()
+                .put("identifier", "removable@example.com")
+                .put("password", "correct-horse-battery-staple"), null);
+        assertThat(removedLogin.statusCode()).isEqualTo(401);
         HttpResponse<String> forbiddenCreate = post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
                 .put("typeKey", "story")
                 .put("title", "Viewer should not create"), viewerSession.accessToken());

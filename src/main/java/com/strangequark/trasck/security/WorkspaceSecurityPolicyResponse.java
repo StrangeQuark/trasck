@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public record WorkspaceSecurityPolicyResponse(
         UUID workspaceId,
+        Boolean anonymousReadEnabled,
         Long attachmentMaxUploadBytes,
         Long attachmentMaxDownloadBytes,
         String attachmentAllowedContentTypes,

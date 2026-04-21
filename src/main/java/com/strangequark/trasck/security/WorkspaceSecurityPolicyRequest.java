@@ -1,6 +1,8 @@
 package com.strangequark.trasck.security;
 
 public record WorkspaceSecurityPolicyRequest(
+        Boolean anonymousReadEnabled,
+        String visibility,
         Long attachmentMaxUploadBytes,
         Long attachmentMaxDownloadBytes,
         String attachmentAllowedContentTypes,

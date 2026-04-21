@@ -6,4 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface UserInvitationRepository extends JpaRepository<UserInvitation, UUID> {
     Optional<UserInvitation> findByTokenHash(String tokenHash);
+
+    Optional<UserInvitation> findByIdAndWorkspaceId(UUID id, UUID workspaceId);
 }
