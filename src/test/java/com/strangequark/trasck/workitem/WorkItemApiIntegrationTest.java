@@ -80,6 +80,7 @@ class WorkItemApiIntegrationTest {
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
         registry.add("trasck.attachments.local-root", ATTACHMENT_ROOT::toString);
+        registry.add("trasck.attachments.max-upload-bytes", () -> "64");
     }
 
     @BeforeEach
@@ -856,6 +857,18 @@ class WorkItemApiIntegrationTest {
                 .put("storageKey", "test/bad.txt")
                 .put("sizeBytes", -1));
         assertThat(invalidAttachment.statusCode()).isEqualTo(400);
+        HttpResponse<String> oversizedAttachment = post("/api/v1/work-items/" + storyId + "/attachments", objectMapper.createObjectNode()
+                .put("filename", "too-large.txt")
+                .put("contentType", "text/plain")
+                .put("storageKey", "test/too-large.txt")
+                .put("sizeBytes", 65));
+        assertThat(oversizedAttachment.statusCode()).isEqualTo(413);
+        HttpResponse<String> unsupportedAttachment = post("/api/v1/work-items/" + storyId + "/attachments", objectMapper.createObjectNode()
+                .put("filename", "page.html")
+                .put("contentType", "text/html")
+                .put("storageKey", "test/page.html")
+                .put("sizeBytes", 32));
+        assertThat(unsupportedAttachment.statusCode()).isEqualTo(415);
 
         byte[] attachmentBytes = "Implementation notes\n".getBytes(StandardCharsets.UTF_8);
         JsonNode uploadedAttachment = uploadAttachmentFile(storyId, "implementation-notes.txt", "text/plain", attachmentBytes);
@@ -870,6 +883,8 @@ class WorkItemApiIntegrationTest {
         assertThat(downloadResponse.body()).isEqualTo(attachmentBytes);
         assertThat(downloadResponse.headers().firstValue("Content-Disposition"))
                 .hasValueSatisfying(value -> assertThat(value).contains("implementation-notes.txt"));
+        assertThat(uploadAttachmentFileResponse(storyId, "oversized.txt", "text/plain", "x".repeat(65).getBytes(StandardCharsets.UTF_8)).statusCode()).isEqualTo(413);
+        assertThat(uploadAttachmentFileResponse(storyId, "page.html", "text/html", "<html></html>".getBytes(StandardCharsets.UTF_8)).statusCode()).isEqualTo(415);
 
         assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + uploadedAttachmentId).statusCode()).isEqualTo(204);
         assertThat(Files.exists(ATTACHMENT_ROOT.resolve(uploadedStorageKey))).isFalse();
@@ -1150,15 +1165,19 @@ class WorkItemApiIntegrationTest {
     }
 
     private JsonNode uploadAttachmentFile(UUID workItemId, String filename, String contentType, byte[] content) throws Exception {
+        HttpResponse<String> response = uploadAttachmentFileResponse(workItemId, filename, contentType, content);
+        assertThat(response.statusCode()).isEqualTo(201);
+        return objectMapper.readTree(response.body());
+    }
+
+    private HttpResponse<String> uploadAttachmentFileResponse(UUID workItemId, String filename, String contentType, byte[] content) throws Exception {
         String boundary = "----trasck-" + UUID.randomUUID();
         byte[] body = multipartBody(boundary, filename, contentType, content);
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri("/api/v1/work-items/" + workItemId + "/attachments/files"))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body));
         authorize(builder);
-        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).isEqualTo(201);
-        return objectMapper.readTree(response.body());
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private byte[] multipartBody(String boundary, String filename, String contentType, byte[] content) {

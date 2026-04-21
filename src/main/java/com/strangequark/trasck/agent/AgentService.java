@@ -27,6 +27,7 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.event.EventConsumerConfig;
 import com.strangequark.trasck.event.EventConsumerConfigRepository;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.identity.LoginAttemptService;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
 import com.strangequark.trasck.integration.ExportJob;
@@ -38,6 +39,7 @@ import com.strangequark.trasck.reporting.WorkItemAssignmentHistory;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistoryRepository;
 import com.strangequark.trasck.reporting.WorkItemStatusHistory;
 import com.strangequark.trasck.reporting.WorkItemStatusHistoryRepository;
+import com.strangequark.trasck.security.ContentLimitPolicy;
 import com.strangequark.trasck.security.OutboundUrlPolicy;
 import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
@@ -116,6 +118,8 @@ public class AgentService {
     private final AgentCallbackJwtService callbackJwtService;
     private final SecretCipherService secretCipherService;
     private final OutboundUrlPolicy outboundUrlPolicy;
+    private final LoginAttemptService loginAttemptService;
+    private final ContentLimitPolicy contentLimitPolicy;
     private final List<AgentProviderAdapter> adapters;
 
     public AgentService(
@@ -156,6 +160,8 @@ public class AgentService {
             AgentCallbackJwtService callbackJwtService,
             SecretCipherService secretCipherService,
             OutboundUrlPolicy outboundUrlPolicy,
+            LoginAttemptService loginAttemptService,
+            ContentLimitPolicy contentLimitPolicy,
             List<AgentProviderAdapter> adapters
     ) {
         this.objectMapper = objectMapper;
@@ -195,6 +201,8 @@ public class AgentService {
         this.callbackJwtService = callbackJwtService;
         this.secretCipherService = secretCipherService;
         this.outboundUrlPolicy = outboundUrlPolicy;
+        this.loginAttemptService = loginAttemptService;
+        this.contentLimitPolicy = contentLimitPolicy;
         this.adapters = adapters;
     }
 
@@ -1002,7 +1010,22 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentTaskResponse handleCallback(String providerKey, String assertion, AgentTaskCallbackRequest request) {
+    public AgentTaskResponse handleCallback(String providerKey, String assertion, AgentTaskCallbackRequest request, String remoteAddress) {
+        String identifier = normalizeKey(providerKey);
+        loginAttemptService.assertAllowed("agent_callback", identifier, remoteAddress);
+        try {
+            AgentTaskResponse response = handleCallbackInternal(providerKey, assertion, request);
+            loginAttemptService.recordSuccess("agent_callback", identifier, remoteAddress);
+            return response;
+        } catch (ResponseStatusException ex) {
+            if (isAuthenticationFailure(ex)) {
+                loginAttemptService.recordFailure("agent_callback", identifier, remoteAddress, "agent.callback.auth_failed", ex.getReason());
+            }
+            throw ex;
+        }
+    }
+
+    private AgentTaskResponse handleCallbackInternal(String providerKey, String assertion, AgentTaskCallbackRequest request) {
         AgentTaskCallbackRequest callback = required(request, "request");
         AgentCallbackJwtService.AgentCallbackClaims untrustedClaims = callbackJwtService.peek(assertion);
         if (!normalizeKey(providerKey).equals(untrustedClaims.providerKey())) {
@@ -1053,8 +1076,8 @@ public class AgentService {
     }
 
     @Transactional
-    public Optional<AgentWorkerTaskResponse> claimWorkerTask(UUID workspaceId, String providerKey, String workerToken, AgentWorkerClaimRequest request) {
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, request == null ? null : request.workerId());
+    public Optional<AgentWorkerTaskResponse> claimWorkerTask(UUID workspaceId, String providerKey, String workerToken, AgentWorkerClaimRequest request, String remoteAddress) {
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, request == null ? null : request.workerId(), remoteAddress);
         AgentProvider provider = worker.provider();
         Optional<AgentTask> task = agentTaskRepository.findFirstByWorkspaceIdAndProviderIdAndStatusInOrderByQueuedAtAsc(
                 workspaceId,
@@ -1085,9 +1108,9 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentTaskResponse workerHeartbeat(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerHeartbeatRequest request) {
+    public AgentTaskResponse workerHeartbeat(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerHeartbeatRequest request, String remoteAddress) {
         AgentWorkerHeartbeatRequest heartbeat = required(request, "request");
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, heartbeat.workerId());
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, heartbeat.workerId(), remoteAddress);
         AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         if (hasText(heartbeat.status())) {
@@ -1106,9 +1129,9 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentTaskResponse workerLog(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request) {
+    public AgentTaskResponse workerLog(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request, String remoteAddress) {
         AgentWorkerEventRequest eventRequest = required(request, "request");
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId());
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId(), remoteAddress);
         AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         appendTaskEvent(
@@ -1122,8 +1145,8 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentTaskResponse workerMessage(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentTaskCallbackMessageRequest request) {
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, null);
+    public AgentTaskResponse workerMessage(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentTaskCallbackMessageRequest request, String remoteAddress) {
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, null, remoteAddress);
         AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         AgentProfile profile = activeProfile(task.getWorkspaceId(), task.getAgentProfileId());
@@ -1134,8 +1157,8 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentTaskResponse workerArtifact(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentTaskCallbackArtifactRequest request) {
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, null);
+    public AgentTaskResponse workerArtifact(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentTaskCallbackArtifactRequest request, String remoteAddress) {
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, null, remoteAddress);
         AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         saveArtifact(task, required(request, "request"));
@@ -1144,9 +1167,9 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentTaskResponse workerCancel(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request) {
+    public AgentTaskResponse workerCancel(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request, String remoteAddress) {
         AgentWorkerEventRequest eventRequest = request == null ? new AgentWorkerEventRequest(null, null, null, null, null) : request;
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId());
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId(), remoteAddress);
         AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         if (!isTerminal(task.getStatus())) {
@@ -1162,9 +1185,9 @@ public class AgentService {
     }
 
     @Transactional
-    public AgentWorkerTaskResponse workerRetry(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request) {
+    public AgentWorkerTaskResponse workerRetry(UUID workspaceId, String providerKey, UUID taskId, String workerToken, AgentWorkerEventRequest request, String remoteAddress) {
         AgentWorkerEventRequest eventRequest = request == null ? new AgentWorkerEventRequest(null, null, null, null, null) : request;
-        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId());
+        AuthenticatedWorker worker = authenticatedWorker(workspaceId, providerKey, workerToken, eventRequest.workerId(), remoteAddress);
         AgentProvider provider = worker.provider();
         AgentTask task = workerTask(provider, taskId);
         if (List.of("failed", "canceled").contains(task.getStatus())) {
@@ -1319,6 +1342,7 @@ public class AgentService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         byte[] content = dispatchAttemptExportContent(workspaceId, actorId, filter, retentionCutoff, attempts, now);
         String filename = "agent-dispatch-attempts-" + workspaceId + dispatchAttemptExportFilenameSuffix(filter) + "-" + now.format(EXPORT_FILENAME_TIME) + ".json";
+        contentLimitPolicy.validateGeneratedExport(filename, "application/json", content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "application/json", content, null)
@@ -1810,7 +1834,22 @@ public class AgentService {
         return provider;
     }
 
-    private AuthenticatedWorker authenticatedWorker(UUID workspaceId, String providerKey, String workerToken, String providedWorkerId) {
+    private AuthenticatedWorker authenticatedWorker(UUID workspaceId, String providerKey, String workerToken, String providedWorkerId, String remoteAddress) {
+        String identifier = workerRateLimitIdentifier(workspaceId, providerKey, providedWorkerId);
+        loginAttemptService.assertAllowed("agent_worker", identifier, remoteAddress);
+        try {
+            AuthenticatedWorker worker = authenticatedWorkerInternal(workspaceId, providerKey, workerToken, providedWorkerId);
+            loginAttemptService.recordSuccess("agent_worker", identifier, remoteAddress);
+            return worker;
+        } catch (ResponseStatusException ex) {
+            if (isAuthenticationFailure(ex)) {
+                loginAttemptService.recordFailure("agent_worker", identifier, remoteAddress, "agent.worker.auth_failed", ex.getReason());
+            }
+            throw ex;
+        }
+    }
+
+    private AuthenticatedWorker authenticatedWorkerInternal(UUID workspaceId, String providerKey, String workerToken, String providedWorkerId) {
         AgentProvider provider = agentProviderRepository.findByWorkspaceIdAndProviderKey(workspaceId, normalizeKey(providerKey))
                 .orElseThrow(() -> notFound("Agent provider not found"));
         if (!Boolean.TRUE.equals(provider.getEnabled())) {
@@ -1839,6 +1878,15 @@ public class AgentService {
             return new AuthenticatedWorker(provider, credentialWorkerId);
         }
         throw unauthorized("Invalid worker token");
+    }
+
+    private String workerRateLimitIdentifier(UUID workspaceId, String providerKey, String providedWorkerId) {
+        return workspaceId + ":" + normalizeKey(providerKey) + ":" + firstText(providedWorkerId, "unknown");
+    }
+
+    private boolean isAuthenticationFailure(ResponseStatusException ex) {
+        int status = ex.getStatusCode().value();
+        return status == HttpStatus.UNAUTHORIZED.value() || status == HttpStatus.FORBIDDEN.value();
     }
 
     private record AuthenticatedWorker(AgentProvider provider, String workerId) {

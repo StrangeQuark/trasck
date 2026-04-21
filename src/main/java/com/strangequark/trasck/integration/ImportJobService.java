@@ -22,6 +22,7 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.security.ContentLimitPolicy;
 import com.strangequark.trasck.workitem.WorkItemCreateRequest;
 import com.strangequark.trasck.workitem.WorkItemResponse;
 import com.strangequark.trasck.workitem.WorkItemService;
@@ -213,6 +214,7 @@ public class ImportJobService {
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+    private final ContentLimitPolicy contentLimitPolicy;
     private final Environment environment;
     private final boolean sampleJobsEnabled;
 
@@ -243,6 +245,7 @@ public class ImportJobService {
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService,
+            ContentLimitPolicy contentLimitPolicy,
             Environment environment,
             @Value("${trasck.imports.sample-jobs.enabled:false}") boolean sampleJobsEnabled
     ) {
@@ -272,6 +275,7 @@ public class ImportJobService {
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
+        this.contentLimitPolicy = contentLimitPolicy;
         this.environment = environment;
         this.sampleJobsEnabled = sampleJobsEnabled;
     }
@@ -378,7 +382,7 @@ public class ImportJobService {
         }
 
         ImportJobResponse importJob = createImportJob(workspaceId, new ImportJobRequest(sample.provider(), config));
-        ImportParseResponse parse = parse(importJob.id(), new ImportParseRequest(sample.content(), null, sample.sourceType()));
+        ImportParseResponse parse = parse(importJob.id(), new ImportParseRequest(sample.content(), null, sample.sourceType(), null));
 
         ImportTransformPresetResponse transformPreset = null;
         ImportMappingTemplateResponse mappingTemplate = null;
@@ -943,6 +947,7 @@ public class ImportJobService {
         ImportJob job = mutableImportJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
         String content = requiredText(parseRequest.content(), "content");
+        contentLimitPolicy.validateImportParse(job.getProvider(), parseRequest.sourceType(), parseRequest.contentType(), content);
         List<ParsedImportRecord> parsed = parseRecords(job.getProvider(), parseRequest.sourceType(), content);
         List<ImportJobRecordResponse> responses = new ArrayList<>();
         for (ParsedImportRecord parsedRecord : parsed) {
@@ -1722,6 +1727,7 @@ public class ImportJobService {
         byte[] content = "csv".equals(format)
                 ? jobVersionDiffCsvBytes(export.diffs(), exportRequest.filterColumn(), exportRequest.filter())
                 : jsonBytes(export);
+        contentLimitPolicy.validateGeneratedExport(filename, contentType, content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, contentType, content, null)
@@ -3417,6 +3423,7 @@ public class ImportJobService {
                 + "-"
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".csv";
+        contentLimitPolicy.validateGeneratedExport(filename, "text/csv", content.bytes());
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "text/csv", content.bytes(), null)

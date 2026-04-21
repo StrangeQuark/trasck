@@ -98,6 +98,16 @@ class AuthIntegrationTest {
             assertThat(loginWithForwardedFor(throttledIdentifier, "wrong-password", "198.51.100." + i).statusCode()).isEqualTo(401);
         }
         assertThat(loginWithForwardedFor(throttledIdentifier, "wrong-password", "198.51.100.250").statusCode()).isEqualTo(429);
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from security_rate_limit_attempts where realm = 'login' and identifier = ?",
+                Long.class,
+                throttledIdentifier.toLowerCase()
+        )).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from security_auth_failure_events where realm = 'login' and identifier = ?",
+                Long.class,
+                throttledIdentifier.toLowerCase()
+        )).isEqualTo(5);
 
         AuthSession admin = login(setup.at("/adminUser/email").asText(), "correct-horse-battery-staple");
         assertThat(admin.accessToken()).isNotBlank();

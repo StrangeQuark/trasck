@@ -41,6 +41,7 @@ import com.strangequark.trasck.notification.Notification;
 import com.strangequark.trasck.notification.NotificationRepository;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.security.ContentLimitPolicy;
 import com.strangequark.trasck.security.OutboundUrlPolicy;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
@@ -107,6 +108,7 @@ public class AutomationService {
     private final DomainEventService domainEventService;
     private final SecretCipherService secretCipherService;
     private final OutboundUrlPolicy outboundUrlPolicy;
+    private final ContentLimitPolicy contentLimitPolicy;
     private final ObjectProvider<JavaMailSender> mailSenderProvider;
     private final Environment environment;
     private final String emailProvider;
@@ -143,6 +145,7 @@ public class AutomationService {
             DomainEventService domainEventService,
             SecretCipherService secretCipherService,
             OutboundUrlPolicy outboundUrlPolicy,
+            ContentLimitPolicy contentLimitPolicy,
             ObjectProvider<JavaMailSender> mailSenderProvider,
             Environment environment,
             @Value("${trasck.email.provider:maildev}") String emailProvider,
@@ -175,6 +178,7 @@ public class AutomationService {
         this.domainEventService = domainEventService;
         this.secretCipherService = secretCipherService;
         this.outboundUrlPolicy = outboundUrlPolicy;
+        this.contentLimitPolicy = contentLimitPolicy;
         this.mailSenderProvider = mailSenderProvider;
         this.environment = environment;
         this.emailProvider = emailProvider;
@@ -1347,6 +1351,7 @@ public class AutomationService {
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".json";
         byte[] content = workerRunRetentionExportContent(workspaceId, actorId, snapshot, now);
+        contentLimitPolicy.validateGeneratedExport(filename, "application/json", content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "application/json", content, null)

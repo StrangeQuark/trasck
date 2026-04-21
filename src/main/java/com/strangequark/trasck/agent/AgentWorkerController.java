@@ -1,5 +1,7 @@
 package com.strangequark.trasck.agent;
 
+import com.strangequark.trasck.security.ClientIpAddressResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,19 +18,22 @@ public class AgentWorkerController {
     public static final String WORKER_TOKEN_HEADER = "X-Trasck-Worker-Token";
 
     private final AgentService agentService;
+    private final ClientIpAddressResolver clientIpAddressResolver;
 
-    public AgentWorkerController(AgentService agentService) {
+    public AgentWorkerController(AgentService agentService, ClientIpAddressResolver clientIpAddressResolver) {
         this.agentService = agentService;
+        this.clientIpAddressResolver = clientIpAddressResolver;
     }
 
     @PostMapping("/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/claim")
     public ResponseEntity<AgentWorkerTaskResponse> claimTask(
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody(required = false) AgentWorkerClaimRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody(required = false) AgentWorkerClaimRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.claimWorkerTask(workspaceId, providerKey, workerToken, request)
+        return agentService.claimWorkerTask(workspaceId, providerKey, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest))
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
@@ -38,10 +43,11 @@ public class AgentWorkerController {
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
             @PathVariable UUID taskId,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody AgentWorkerHeartbeatRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody AgentWorkerHeartbeatRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.workerHeartbeat(workspaceId, providerKey, taskId, workerToken, request);
+        return agentService.workerHeartbeat(workspaceId, providerKey, taskId, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 
     @PostMapping("/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/logs")
@@ -49,10 +55,11 @@ public class AgentWorkerController {
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
             @PathVariable UUID taskId,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody AgentWorkerEventRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody AgentWorkerEventRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.workerLog(workspaceId, providerKey, taskId, workerToken, request);
+        return agentService.workerLog(workspaceId, providerKey, taskId, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 
     @PostMapping("/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/messages")
@@ -60,10 +67,11 @@ public class AgentWorkerController {
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
             @PathVariable UUID taskId,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody AgentTaskCallbackMessageRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody AgentTaskCallbackMessageRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.workerMessage(workspaceId, providerKey, taskId, workerToken, request);
+        return agentService.workerMessage(workspaceId, providerKey, taskId, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 
     @PostMapping("/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/artifacts")
@@ -71,10 +79,11 @@ public class AgentWorkerController {
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
             @PathVariable UUID taskId,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody AgentTaskCallbackArtifactRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody AgentTaskCallbackArtifactRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.workerArtifact(workspaceId, providerKey, taskId, workerToken, request);
+        return agentService.workerArtifact(workspaceId, providerKey, taskId, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 
     @PostMapping("/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/cancel")
@@ -82,10 +91,11 @@ public class AgentWorkerController {
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
             @PathVariable UUID taskId,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody(required = false) AgentWorkerEventRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody(required = false) AgentWorkerEventRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.workerCancel(workspaceId, providerKey, taskId, workerToken, request);
+        return agentService.workerCancel(workspaceId, providerKey, taskId, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 
     @PostMapping("/workspaces/{workspaceId}/agent-workers/{providerKey}/tasks/{taskId}/retry")
@@ -93,9 +103,10 @@ public class AgentWorkerController {
             @PathVariable UUID workspaceId,
             @PathVariable String providerKey,
             @PathVariable UUID taskId,
-            @RequestHeader(WORKER_TOKEN_HEADER) String workerToken,
-            @RequestBody(required = false) AgentWorkerEventRequest request
+            @RequestHeader(value = WORKER_TOKEN_HEADER, required = false) String workerToken,
+            @RequestBody(required = false) AgentWorkerEventRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.workerRetry(workspaceId, providerKey, taskId, workerToken, request);
+        return agentService.workerRetry(workspaceId, providerKey, taskId, workerToken, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 }

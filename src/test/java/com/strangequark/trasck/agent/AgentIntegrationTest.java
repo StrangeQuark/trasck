@@ -434,6 +434,10 @@ class AgentIntegrationTest {
                 .put("workerId", "worker-2"), "worker-secret").statusCode()).isEqualTo(401);
         assertThat(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
                 .put("workerId", "worker-expired"), "expired-worker-secret").statusCode()).isEqualTo(401);
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from security_auth_failure_events where realm = 'agent_worker'",
+                Long.class
+        )).isGreaterThanOrEqualTo(3);
         JsonNode claimedTask = read(postWorker("/api/v1/workspaces/" + workspaceId + "/agent-workers/worker-main/tasks/claim", objectMapper.createObjectNode()
                 .put("workerId", "worker-1"), "worker-secret"));
         assertThat(uuid(claimedTask, "/taskId")).isEqualTo(workerTaskId);
@@ -476,6 +480,10 @@ class AgentIntegrationTest {
                 .put("status", "completed")
                 .put("message", "bad"), "bad-token");
         assertThat(invalidCallback.statusCode()).isEqualTo(401);
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from security_auth_failure_events where realm = 'agent_callback'",
+                Long.class
+        )).isGreaterThanOrEqualTo(1);
 
         ObjectNode callback = objectMapper.createObjectNode()
                 .put("status", "completed")

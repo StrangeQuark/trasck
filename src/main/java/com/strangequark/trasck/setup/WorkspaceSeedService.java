@@ -556,9 +556,13 @@ public class WorkspaceSeedService {
         if (permissionKeys == null) {
             return;
         }
-        Collection<Permission> rolePermissions = permissionKeys.contains("*") ? permissions.values() : permissionKeys.stream()
-                .map(permissions::get)
-                .toList();
+        Collection<Permission> rolePermissions = permissionKeys.contains("*")
+                ? permissions.values().stream()
+                        .filter(permission -> !"system".equalsIgnoreCase(permission.getCategory()))
+                        .toList()
+                : permissionKeys.stream()
+                        .map(permissions::get)
+                        .toList();
         List<RolePermission> joins = rolePermissions.stream()
                 .map(permission -> {
                     RolePermission rolePermission = new RolePermission();

@@ -25,6 +25,7 @@ import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
+import com.strangequark.trasck.security.ContentLimitPolicy;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -53,6 +54,7 @@ public class WorkItemCollaborationService {
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
+    private final ContentLimitPolicy contentLimitPolicy;
 
     public WorkItemCollaborationService(
             ObjectMapper objectMapper,
@@ -70,7 +72,8 @@ public class WorkItemCollaborationService {
             AttachmentStorageService attachmentStorageService,
             CurrentUserService currentUserService,
             PermissionService permissionService,
-            DomainEventService domainEventService
+            DomainEventService domainEventService,
+            ContentLimitPolicy contentLimitPolicy
     ) {
         this.objectMapper = objectMapper;
         this.workItemRepository = workItemRepository;
@@ -88,6 +91,7 @@ public class WorkItemCollaborationService {
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
+        this.contentLimitPolicy = contentLimitPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -389,9 +393,7 @@ public class WorkItemCollaborationService {
         attachment.setContentType(metadata.contentType());
         attachment.setStorageKey(requiredText(metadata.storageKey(), "storageKey"));
         Long sizeBytes = required(metadata.sizeBytes(), "sizeBytes");
-        if (sizeBytes < 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sizeBytes must be greater than or equal to 0");
-        }
+        contentLimitPolicy.validateAttachmentMetadata(attachment.getFilename(), metadata.contentType(), sizeBytes);
         attachment.setSizeBytes(sizeBytes);
         attachment.setChecksum(metadata.checksum());
         attachment.setVisibility(normalizeAttachmentVisibility(metadata.visibility()));
@@ -415,17 +417,20 @@ public class WorkItemCollaborationService {
     ) {
         WorkItem item = readableWorkItem(workItemId);
         UUID actorId = requireProjectPermission(item, "work_item.update");
+        String normalizedFilename = requiredText(filename, "filename");
+        byte[] attachmentContent = required(content, "file");
+        contentLimitPolicy.validateAttachmentUpload(normalizedFilename, contentType, attachmentContent);
         AttachmentStorageConfig storageConfig = resolveActiveStorageConfig(item.getWorkspaceId(), storageConfigId);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
-                new AttachmentUpload(requiredText(filename, "filename"), blankToNull(contentType), required(content, "file"), checksum)
+                new AttachmentUpload(normalizedFilename, blankToNull(contentType), attachmentContent, checksum)
         );
         try {
             Attachment attachment = new Attachment();
             attachment.setWorkspaceId(item.getWorkspaceId());
             attachment.setStorageConfigId(storageConfig.getId());
             attachment.setUploaderId(actorId);
-            attachment.setFilename(requiredText(filename, "filename"));
+            attachment.setFilename(normalizedFilename);
             attachment.setContentType(blankToNull(contentType));
             attachment.setStorageKey(stored.storageKey());
             attachment.setSizeBytes(stored.sizeBytes());
@@ -448,8 +453,10 @@ public class WorkItemCollaborationService {
         WorkItem item = readableWorkItem(workItemId);
         requireProjectPermission(item, "work_item.read");
         Attachment attachment = attachmentForWorkItem(workItemId, attachmentId);
+        contentLimitPolicy.validateAttachmentDownload(attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
         AttachmentStorageConfig storageConfig = resolveExistingStorageConfig(item.getWorkspaceId(), attachment.getStorageConfigId());
         byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
+        contentLimitPolicy.validateAttachmentDownload(attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
         return new AttachmentFileResponse(attachment.getFilename(), attachment.getContentType(), bytes);
     }
 

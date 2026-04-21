@@ -18,17 +18,20 @@ public class PermissionService {
     private final WorkspaceMembershipRepository workspaceMembershipRepository;
     private final ProjectMembershipRepository projectMembershipRepository;
     private final RolePermissionRepository rolePermissionRepository;
+    private final SystemAdminRepository systemAdminRepository;
 
     public PermissionService(
             ProjectRepository projectRepository,
             WorkspaceMembershipRepository workspaceMembershipRepository,
             ProjectMembershipRepository projectMembershipRepository,
-            RolePermissionRepository rolePermissionRepository
+            RolePermissionRepository rolePermissionRepository,
+            SystemAdminRepository systemAdminRepository
     ) {
         this.projectRepository = projectRepository;
         this.workspaceMembershipRepository = workspaceMembershipRepository;
         this.projectMembershipRepository = projectMembershipRepository;
         this.rolePermissionRepository = rolePermissionRepository;
+        this.systemAdminRepository = systemAdminRepository;
     }
 
     @Transactional(readOnly = true)
@@ -50,9 +53,8 @@ public class PermissionService {
     @Transactional(readOnly = true)
     public boolean canAccessOpenApiDocs(Authentication authentication) {
         return principal(authentication)
-                .filter(principal -> principal.allowsScope("workspace.admin"))
-                .map(principal -> workspaceMembershipRepository.findByUserIdAndStatusIgnoreCase(principal.userId(), "active").stream()
-                        .anyMatch(membership -> rolePermissionRepository.roleHasPermission(membership.getRoleId(), "workspace.admin")))
+                .filter(principal -> principal.allowsScope("system.admin"))
+                .map(principal -> systemAdminRepository.existsByUserIdAndActiveTrue(principal.userId()))
                 .orElse(false);
     }
 

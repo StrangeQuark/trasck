@@ -25,7 +25,7 @@ Commands and inspections used during this pass:
 - URL, webhook, storage, and file scans for outbound HTTP, URI construction, local path handling, multipart uploads, attachment storage, and delete/read/write operations.
 - Port scan for `6100` and `6101`; no non-documentation `6101` runtime/config references were found.
 - `npm audit --json` in the frontend returned zero reported vulnerabilities.
-- `sh mvnw dependency:tree -DskipTests` completed successfully; no Java CVE scanner is currently wired into the repo.
+- Java dependency vulnerability automation is wired through the OWASP Dependency Check Maven profile and backend CI workflow.
 - Follow-up hardening verification ran the targeted security/auth tests, the full backend Maven test suite, frontend Vitest suite, frontend production build, frontend `npm audit`, `.env` inventory, `6101` config scan, whitespace checks, and local listener/container checks.
 
 ## Threat Model
@@ -69,17 +69,19 @@ Highest-risk entry points:
 - Generic worker endpoints require active encrypted worker-token credentials with `metadata.workerId`.
 - Activity/audit payload redaction covers token, password, secret, credential, authorization, cookie, hash, and private-key shaped fields.
 - Production-like profiles fail startup when known development secrets, weak database passwords, insecure auth-cookie flags, local OAuth success redirects, or local/wildcard CORS origins are active.
-- OpenAPI and Swagger stay public for local/non-production contract work, but production-like profiles require authenticated workspace-admin access.
+- OpenAPI and Swagger stay public for local/non-production contract work, but production-like profiles require authenticated dedicated system-admin access.
 - CORS is explicitly allowlist-based through `CORS_ALLOWED_ORIGINS`.
-- Configured outbound HTTP targets are protected by a shared default-deny URL policy for localhost, private, link-local, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts are allowlisted.
-- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
+- Configured outbound HTTP targets are protected by a shared default-deny URL policy for localhost, private, link-local, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts, wildcard hosts, or CIDR ranges are allowlisted.
+- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address using database-backed counters, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
+- Login, agent callback, and generic worker authentication failures write durable security telemetry rows.
+- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce configured byte limits and allowlisted content types.
 - Saved-filter/query-builder SQL uses whitelisted fields/operators and bind parameters. Raw SQL-shaped keys are rejected in user-configurable report/filter/dashboard paths.
 - Local filesystem attachment storage normalizes paths and rejects storage keys that escape the configured root.
 - The frontend does not persist access tokens in local storage. Current local storage is limited to API base URL and selected UI/entity IDs.
 - No `dangerouslySetInnerHTML`, `eval`, `new Function`, or direct `document.cookie` usage was found in current frontend source.
 - No `6101` backend or frontend config references were found; current backend defaults remain on `6100`.
 - Only `.env.example` files remain in the two repos; real `.env` files are ignored.
-- Frontend container builds use `npm ci` and nginx now sends baseline security headers.
+- Frontend container builds use `npm ci`; nginx now sends baseline security headers and uses runtime-templated CSP directives.
 
 ## Findings
 
@@ -150,7 +152,7 @@ Regression tests/checks:
 
 Severity: High before public hosting
 
-Status: Resolved for the current decision to keep production docs behind authenticated admin access.
+Status: Resolved for the current decision to keep production docs behind dedicated system-admin access.
 
 Affected file:
 
@@ -159,7 +161,7 @@ Affected file:
 Current state:
 
 - `GET /v3/api-docs/**`, `/swagger-ui.html`, and `/swagger-ui/**` remain public only in non-production-like profiles.
-- Production-like profiles require an authenticated principal with `workspace.admin` scope and at least one active workspace membership whose role grants `workspace.admin`.
+- Production-like profiles require an authenticated principal with `system.admin` scope and an active `system_admins` row.
 
 Impact:
 
@@ -167,11 +169,11 @@ Impact:
 
 Recommended fix:
 
-- Before hosted multi-tenant deployments, decide whether workspace-admin access is enough or whether docs need a dedicated system-admin/global permission.
+- Add system-admin management APIs/screens before hosted multi-tenant deployment so this access is not managed manually in the database.
 
 Regression tests/checks:
 
-- Add security tests proving docs are public in local/test only and denied or disabled under production-like profiles.
+- Add security tests proving docs are public in local/test only and require active system-admin access under production-like profiles.
 
 ### SEC-004: CORS configuration property is defined but not enforced
 
@@ -206,7 +208,7 @@ Regression tests/checks:
 
 Severity: High before public hosting
 
-Status: Partially resolved; durable/distributed throttling and auth-failure audit events remain future work.
+Status: Resolved for a single-node/shared-database deployment baseline; Redis-backed counters remain a horizontal-scaling decision.
 
 Affected files:
 
@@ -215,9 +217,10 @@ Affected files:
 
 Current state:
 
-- Login failures are throttled by identifier plus remote address using configurable in-memory counters, failure window, and lockout duration.
+- Login failures are throttled by identifier plus remote address using configurable database-backed counters, failure window, and lockout duration.
 - Spoofable `X-Forwarded-For` values are ignored by default and only used when `TRASCK_TRUST_FORWARDED_FOR=true` is set behind a trusted reverse proxy.
 - New human passwords are validated for configured minimum length and common development password rejection during setup, invitation registration, and workspace-admin direct user creation.
+- Auth failure events are persisted for login failures, agent callback failures, and generic worker token failures.
 
 Impact:
 
@@ -225,18 +228,18 @@ Impact:
 
 Recommended fix:
 
-- Move throttling to database/Redis-backed counters before shared deployments if multiple app instances are expected.
-- Add auth-failure audit events and consider stronger entropy checks once password reset/change flows exist.
+- Decide whether Redis-backed counters are needed before horizontally scaled deployments.
+- Consider stronger entropy checks once password reset/change flows exist.
 
 Regression tests/checks:
 
-- Add tests for weak password rejection, login throttling/lockout boundaries, and trusted-proxy forwarding behavior.
+- Keep tests for weak password rejection, login throttling/lockout boundaries, DB failure telemetry, and trusted-proxy forwarding behavior.
 
 ### SEC-006: Outbound HTTP targets need SSRF and egress controls
 
 Severity: High before public hosting
 
-Status: Resolved as a baseline default-deny policy with exact host/host:port allowlisting.
+Status: Resolved as a baseline default-deny policy with exact host, host:port, wildcard host, wildcard host:port, and CIDR allowlisting.
 
 Affected files:
 
@@ -248,7 +251,7 @@ Affected files:
 Current state:
 
 - A shared outbound URL policy validates webhooks, agent worker callback URLs, OAuth verified-email side-fetch URLs, and S3-compatible endpoints.
-- The policy default-denies localhost, private networks, link-local ranges, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts are explicitly allowlisted.
+- The policy default-denies localhost, private networks, link-local ranges, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts, wildcard hosts, or CIDR ranges are explicitly allowlisted.
 - Outbound webhook, agent-worker, OAuth side-fetch, and S3-compatible calls now use bounded connect/request timeouts.
 
 Impact:
@@ -257,11 +260,11 @@ Impact:
 
 Recommended fix:
 
-- Decide whether self-hosted deployments need CIDR or wildcard allowlisting, or whether exact host/host:port entries stay sufficient for the first manual test.
+- Keep allowlists narrow and deployment-owned; review whether workspace-admin-managed egress allowlists are ever needed.
 
 Regression tests/checks:
 
-- Add validation tests for denied localhost/private/link-local URLs and allowed external HTTPS URLs.
+- Keep validation tests for denied localhost/private/link-local URLs, wildcard host allowlists, CIDR allowlists, and allowed external HTTPS URLs.
 
 ### SEC-007: Auth cookies and OAuth redirects need production guardrails
 
@@ -300,6 +303,8 @@ Regression tests/checks:
 
 Severity: Medium-high
 
+Status: Resolved for the current provider-neutral callback/worker baseline; keep expanding negative tests before external execution is enabled.
+
 Affected files:
 
 - `src/main/java/com/strangequark/trasck/config/SecurityConfig.java`
@@ -311,6 +316,8 @@ Current state:
 
 - `/api/v1/agent-callbacks/**` and `/api/v1/workspaces/*/agent-workers/**` are open at the HTTP security layer.
 - Callback and worker authentication happens in agent services through signed callback JWTs and worker-token credentials.
+- Repeated callback and generic worker authentication failures are rate-limited through the same durable security counter path used by login throttling.
+- Callback and worker auth failures write durable security telemetry events.
 
 Impact:
 
@@ -319,8 +326,8 @@ Impact:
 Recommended fix:
 
 - Keep these routes open only if service-layer validation remains exhaustive.
-- Add focused negative tests for missing, expired, wrong-provider, wrong-workspace, wrong-profile, wrong-task, and revoked token assertions.
-- Add rate limiting and audit logging for repeated callback/worker auth failures.
+- Keep focused negative tests for missing, expired, wrong-provider, wrong-workspace, wrong-profile, wrong-task, and revoked token assertions.
+- Add broader denial tests as new callback/worker actions are exposed.
 
 Regression tests/checks:
 
@@ -329,6 +336,8 @@ Regression tests/checks:
 ### SEC-009: Attachment and import payload limits are not fully explicit
 
 Severity: Medium
+
+Status: Resolved for configured byte/content-type limits; antivirus/content scanning remains a future provider boundary.
 
 Affected files:
 
@@ -341,21 +350,21 @@ Current state:
 
 - Attachment storage validates checksum and storage path.
 - Local path traversal is handled.
-- Upload/download and import parsing paths still need explicit product-level size, content-type, and parser-safety limits.
+- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce configured size and content-type limits.
+- Multipart request sizes are environment-configurable.
 
 Impact:
 
-- Large or hostile uploads/imports can create memory pressure, slow parsing, or store unwanted content.
+- Large or hostile uploads/imports are rejected before normal processing when they exceed configured limits or content-type policy.
 
 Recommended fix:
 
-- Add maximum attachment size, allowed content-type policy, and import payload size limits.
 - Add antivirus/content scanning hooks as a future provider boundary.
-- Ensure generated export artifacts respect size limits and authorization.
+- Review whether content-type/size policies should become workspace-admin configurable or remain deployment-level environment configuration.
 
 Regression tests/checks:
 
-- Add oversized upload/import rejection tests and content-type validation tests.
+- Keep oversized upload/import/export rejection tests and content-type validation tests.
 
 ### SEC-010: Secret management is database-encrypted but not production-grade yet
 
@@ -391,6 +400,8 @@ Regression tests/checks:
 
 Severity: Medium
 
+Status: Resolved for the current admin/manual-test UI baseline.
+
 Affected files:
 
 - `../trasck-frontend/src/pages/TokenAdminPage.jsx`
@@ -400,22 +411,21 @@ Affected files:
 Current state:
 
 - The frontend does not store access tokens in local storage.
-- Created API tokens are displayed once through JSON preview.
-- Webhook secret inputs use normal text fields instead of masked secret inputs.
+- Created API tokens are displayed through a dedicated one-time reveal component with copy and clear actions.
+- Generic JSON previews recursively redact secret-shaped fields.
+- Webhook secret inputs use password fields.
 
 Impact:
 
-- Local shoulder-surfing or screen recording can expose secrets more easily.
+- Local shoulder-surfing or screen recording risk is reduced for current secret-bearing frontend paths.
 
 Recommended fix:
 
-- Add dedicated one-time token reveal UI with clear warnings and quick clear action.
-- Mask webhook secret fields.
-- Avoid rendering secret-shaped response fields in generic JSON previews.
+- Continue replacing raw JSON escape hatches with field-specific secret-aware forms as admin screens mature.
 
 Regression tests/checks:
 
-- Add frontend tests proving access tokens are not persisted and secret fields are masked.
+- Add broader frontend tests proving access tokens are not persisted and secret fields/previews are masked.
 
 ### SEC-012: Frontend container and nginx security headers are minimal
 
@@ -426,12 +436,12 @@ Status: Resolved as a baseline container/static-server hardening pass.
 Affected files:
 
 - `../trasck-frontend/Dockerfile`
-- `../trasck-frontend/nginx.conf`
+- `../trasck-frontend/nginx.conf.template`
 
 Current state:
 
 - Docker build uses `npm ci`.
-- Nginx sends `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and a conservative CSP.
+- Nginx sends `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and a runtime-templated conservative CSP.
 
 Impact:
 
@@ -439,7 +449,7 @@ Impact:
 
 Recommended fix:
 
-- Parameterize production CSP/connect-src when deployment hostnames are finalized.
+- Keep deployed CSP values environment-driven and review them with production origins.
 
 Regression tests/checks:
 
@@ -448,6 +458,8 @@ Regression tests/checks:
 ### SEC-013: Dependency vulnerability automation is incomplete
 
 Severity: Medium
+
+Status: Resolved for baseline CI wiring; scanner cache/API-key strategy remains production CI work.
 
 Affected files:
 
@@ -459,15 +471,16 @@ Current state:
 
 - Frontend `npm audit --json` currently reports zero vulnerabilities.
 - Maven dependency tree resolves successfully.
-- There is no checked-in Java CVE scanner or automated dependency security gate.
+- OWASP Dependency Check is wired through the backend `security-audit` Maven profile and GitHub Actions workflow.
+- The Maven wrapper is executable so CI can invoke `./mvnw`.
 
 Impact:
 
-- Java CVEs may not be caught during normal verification.
+- Java CVEs are now checked by the CI profile, subject to scanner data availability and runtime.
 
 Recommended fix:
 
-- Add OWASP Dependency Check, Snyk, Dependabot, GitHub dependency review, or another Java-compatible dependency scanner to CI.
+- Decide whether the dependency-check job is advisory or mandatory before an NVD API key/cache strategy is configured.
 - Keep `npm audit` or equivalent in frontend CI.
 
 Regression tests/checks:
@@ -528,31 +541,38 @@ Regression tests/checks:
 
 ## Production Hardening Priority
 
-The next primary step should close the remaining findings in this order:
+The next production-packaging hardening work should focus on:
 
-1. Add upload/import size and content controls.
-2. Add frontend secret-display hardening and one-time token reveal cleanup.
-3. Add callback/worker authentication failure rate limiting and audit events.
-4. Add Java dependency vulnerability scanning and keep frontend audit in CI.
-5. Add broader redaction, authorization denial, tenant-isolation, and outbound URL regression coverage.
-6. Decide whether production docs access needs a system-admin/global permission.
-7. Decide whether exact outbound allowlisting is enough or self-hosted deployments need CIDR/wildcard support.
+1. Add system-admin management APIs/screens before hosted deployment.
+2. Decide whether PostgreSQL-backed security throttling is enough through first deployment or whether Redis-backed counters are needed for horizontal scale.
+3. Decide whether OWASP Dependency Check is a hard CI gate immediately or advisory until NVD API key/cache configuration exists.
+4. Centralize production error/log redaction for outbound HTTP, OAuth, SMTP, agent provider, import, export, and worker failures.
+5. Add broader redaction, authorization denial, tenant-isolation, outbound URL, attachment/export authorization, and frontend secret persistence regression coverage.
+6. Plan the shared external secret-management abstraction for SMTP, S3-compatible storage, and non-stub agent credentials.
 
 ## Review Notes
 
-- The operational changes made in the same implementation pass were reviewed for obvious authorization and tenant-boundary regressions. Scheduled import review exports use existing queued export jobs and worker run/health rows; scheduled agent dispatch-attempt pruning uses workspace worker settings and existing export-before-prune retention behavior.
+- The operational and security changes made in this implementation pass were reviewed for obvious authorization, tenant-boundary, data-exposure, and local-runtime regressions.
 - No hard-coded production credentials were found in source code. Real `.env` files have been removed from the repos and ignored; committed examples remain local-only.
 - Development defaults are now rejected under production-like profiles.
+- OpenAPI/Swagger production access now requires active system-admin status instead of workspace-admin role membership.
+- `system.admin` is not seeded into workspace/project role permissions, including wildcard workspace-owner roles.
+- Outbound allowlisting now supports exact hosts, host:port entries, wildcard hosts, wildcard host:port entries, and CIDR ranges.
+- Login/callback/worker auth failures now use durable database counters and telemetry rows.
+- Attachment/import/export content limits and frontend secret-display hardening are implemented.
 - No non-documentation `6101` config references were found.
 
 ## Verification Run
 
-- Targeted backend security/auth run passed: `DOCKER_HOST=unix:///var/run/docker.sock sh mvnw -Dtest=LoginAttemptServiceTest,ProductionSecurityStartupValidatorTest,OutboundUrlPolicyTest,S3CompatibleAttachmentStorageProviderTest,AuthIntegrationTest,ProductionSecurityIntegrationTest,AgentIntegrationTest test` passed with 12 tests.
-- Backend `DOCKER_HOST=unix:///var/run/docker.sock sh mvnw test` passed with 27 tests.
+- Backend compile passed: `./mvnw -q -DskipTests compile`.
+- Targeted backend security/persistence rerun passed: `./mvnw -q -Dtest=ProductionSecurityIntegrationTest,JpaPersistenceTest test`.
+- Full backend `./mvnw -q test` passed with 31 tests, 0 failures, 0 errors, and 0 skipped.
 - Frontend `npm test -- --run` passed with 2 files and 10 tests.
 - Frontend `npm run build` passed; generated `dist/` output was removed afterward.
 - Frontend `npm audit --json` reported zero vulnerabilities.
+- Backend Java dependency-check is wired through `./mvnw -Psecurity-audit -DskipTests dependency-check:check`, but the local run was stopped after it produced no output while updating scanner data; configure NVD API key/cache before making it a hard local/CI gate.
 - Only `.env.example` files remain in the two repos.
 - `git diff --check` passed in both repos.
-- No listeners were found on ports `6100`, `6101`, or `55432` after verification.
+- No listeners were found on ports `6100` or `6101` after verification.
+- No containers were exposing `6100`, `6101`, `5432`, or `55432` after verification.
 - No non-documentation `6101` runtime/config references were found.

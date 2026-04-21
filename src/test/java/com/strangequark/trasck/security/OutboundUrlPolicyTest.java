@@ -30,4 +30,17 @@ class OutboundUrlPolicyTest {
         assertThatCode(() -> new OutboundUrlPolicy("127.0.0.1").validateHttpUrl("http://127.0.0.1:8080/hook", "url"))
                 .doesNotThrowAnyException();
     }
+
+    @Test
+    void permitsAllowlistedWildcardHostsAndCidrs() {
+        OutboundUrlPolicy policy = new OutboundUrlPolicy("*.trusted.example,10.42.0.0/16");
+
+        assertThatCode(() -> policy.validateHttpUrl("https://worker.trusted.example/hook", "url"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> policy.validateHttpUrl("http://10.42.7.15/hook", "url"))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> policy.validateHttpUrl("http://10.43.7.15/hook", "url"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("blocked private or local network");
+    }
 }

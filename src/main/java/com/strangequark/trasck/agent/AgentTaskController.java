@@ -1,5 +1,7 @@
 package com.strangequark.trasck.agent;
 
+import com.strangequark.trasck.security.ClientIpAddressResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,9 +18,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AgentTaskController {
 
     private final AgentService agentService;
+    private final ClientIpAddressResolver clientIpAddressResolver;
 
-    public AgentTaskController(AgentService agentService) {
+    public AgentTaskController(AgentService agentService, ClientIpAddressResolver clientIpAddressResolver) {
         this.agentService = agentService;
+        this.clientIpAddressResolver = clientIpAddressResolver;
     }
 
     @PostMapping("/work-items/{workItemId}/assign-agent")
@@ -73,9 +77,10 @@ public class AgentTaskController {
     @PostMapping("/agent-callbacks/{providerKey}")
     public AgentTaskResponse callback(
             @PathVariable String providerKey,
-            @RequestHeader(AgentCallbackJwtService.CALLBACK_HEADER) String assertion,
-            @RequestBody AgentTaskCallbackRequest request
+            @RequestHeader(value = AgentCallbackJwtService.CALLBACK_HEADER, required = false) String assertion,
+            @RequestBody AgentTaskCallbackRequest request,
+            HttpServletRequest httpRequest
     ) {
-        return agentService.handleCallback(providerKey, assertion, request);
+        return agentService.handleCallback(providerKey, assertion, request, clientIpAddressResolver.remoteAddress(httpRequest));
     }
 }
