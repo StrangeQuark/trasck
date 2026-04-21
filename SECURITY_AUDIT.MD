@@ -74,7 +74,7 @@ Highest-risk entry points:
 - Configured outbound HTTP targets are protected by a shared default-deny URL policy for localhost, private, link-local, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts, wildcard hosts, or CIDR ranges are allowlisted.
 - Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address using database-backed counters by default or Redis-backed counters when enabled, production-like profiles require Redis-backed throttling and ping Redis on startup, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
 - Login, agent callback, and generic worker authentication failures write durable security telemetry rows.
-- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce effective deployment/workspace/project byte limits and allowlisted content types.
+- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce effective deployment/workspace/project byte limits and allowlisted content types. Anonymous public attachment downloads use short-lived app-signed backend URLs and re-check public visibility plus download policy before streaming bytes.
 - API error bodies and production server-error logs pass through centralized redaction for token/password/secret/authorization/private-key shaped text.
 - Saved-filter/query-builder SQL uses whitelisted fields/operators and bind parameters. Raw SQL-shaped keys are rejected in user-configurable report/filter/dashboard paths.
 - Local filesystem attachment storage normalizes paths and rejects storage keys that escape the configured root.
@@ -352,7 +352,7 @@ Current state:
 
 - Attachment storage validates checksum and storage path.
 - Local path traversal is handled.
-- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce effective deployment/workspace/project size and content-type limits. Workspace admins can override deployment defaults through the workspace security policy API/UI, and project admins can apply inherited project overrides through the project security policy API/UI.
+- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce effective deployment/workspace/project size and content-type limits. Workspace admins can override deployment defaults through the workspace security policy API/UI, and project admins can apply inherited project overrides through the project security policy API/UI. Anonymous public attachment downloads are routed through short-lived app-signed backend URLs that are bound to project/work-item/attachment IDs and expiry.
 - Multipart request sizes are environment-configurable.
 
 Impact:
