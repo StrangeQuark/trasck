@@ -57,6 +57,7 @@ import com.strangequark.trasck.organization.Organization;
 import com.strangequark.trasck.organization.OrganizationRepository;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.security.ProjectSecurityPolicyRepository;
 import com.strangequark.trasck.workflow.Workflow;
 import com.strangequark.trasck.workflow.WorkflowRepository;
 import com.strangequark.trasck.workflow.WorkflowStatus;
@@ -199,6 +200,9 @@ class JpaPersistenceTest {
     @Autowired
     private ImportWorkspaceSettingsRepository importWorkspaceSettingsRepository;
 
+    @Autowired
+    private ProjectSecurityPolicyRepository projectSecurityPolicyRepository;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -217,12 +221,13 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(135);
+        assertThat(tableCount).isEqualTo(136);
         assertThat(permissionCount).isEqualTo(32);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(132);
-        assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(133);
+        assertThat(repositories).hasSizeGreaterThanOrEqualTo(106);
         assertThat(tableExists("system_admins")).isTrue();
         assertThat(tableExists("workspace_security_policies")).isTrue();
+        assertThat(tableExists("project_security_policies")).isTrue();
         assertThat(tableExists("security_rate_limit_attempts")).isTrue();
         assertThat(tableExists("security_auth_failure_events")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();

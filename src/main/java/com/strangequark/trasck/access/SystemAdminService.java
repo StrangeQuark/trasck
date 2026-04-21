@@ -3,6 +3,8 @@ package com.strangequark.trasck.access;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
+import com.strangequark.trasck.config.RuntimeSecurityProfile;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Comparator;
@@ -10,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,17 +25,23 @@ public class SystemAdminService {
     private final UserRepository userRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
+    private final RuntimeSecurityProfile runtimeSecurityProfile;
+    private final Duration stepUpWindow;
 
     public SystemAdminService(
             SystemAdminRepository systemAdminRepository,
             UserRepository userRepository,
             CurrentUserService currentUserService,
-            PermissionService permissionService
+            PermissionService permissionService,
+            RuntimeSecurityProfile runtimeSecurityProfile,
+            @Value("${trasck.security.system-admin.step-up-window:PT15M}") String stepUpWindow
     ) {
         this.systemAdminRepository = systemAdminRepository;
         this.userRepository = userRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
+        this.runtimeSecurityProfile = runtimeSecurityProfile;
+        this.stepUpWindow = Duration.parse(stepUpWindow);
     }
 
     @Transactional(readOnly = true)
@@ -54,6 +63,7 @@ public class SystemAdminService {
     public SystemAdminResponse grantSystemAdmin(SystemAdminRequest request) {
         UUID actorId = currentUserService.requireUserId();
         permissionService.requireSystemAdmin(actorId);
+        requireRecentAuthentication(actorId);
         UUID userId = required(request == null ? null : request.userId(), "userId");
         User user = activeUser(userId);
         SystemAdmin admin = systemAdminRepository.findByUserId(userId).orElseGet(SystemAdmin::new);
@@ -71,6 +81,7 @@ public class SystemAdminService {
     public SystemAdminResponse revokeSystemAdmin(UUID userId) {
         UUID actorId = currentUserService.requireUserId();
         permissionService.requireSystemAdmin(actorId);
+        requireRecentAuthentication(actorId);
         UUID targetUserId = required(userId, "userId");
         SystemAdmin admin = systemAdminRepository.findByUserId(targetUserId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "System admin not found"));
@@ -81,6 +92,18 @@ public class SystemAdminService {
         admin.setRevokedAt(OffsetDateTime.now(ZoneOffset.UTC));
         User user = userRepository.findById(targetUserId).orElse(null);
         return SystemAdminResponse.from(systemAdminRepository.save(admin), user);
+    }
+
+    private void requireRecentAuthentication(UUID actorId) {
+        if (!runtimeSecurityProfile.isProductionLike()) {
+            return;
+        }
+        User actor = activeUser(actorId);
+        OffsetDateTime lastLoginAt = actor.getLastLoginAt();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        if (lastLoginAt == null || lastLoginAt.plus(stepUpWindow).isBefore(now)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Recent authentication is required for system-admin changes");
+        }
     }
 
     private User activeUser(UUID userId) {

@@ -20,19 +20,31 @@ public class ContentLimitPolicy {
     }
 
     public void validateAttachmentMetadata(UUID workspaceId, String filename, String contentType, long sizeBytes) {
-        ContentLimits limits = policyService.limits(workspaceId);
+        validateAttachmentMetadata(workspaceId, null, filename, contentType, sizeBytes);
+    }
+
+    public void validateAttachmentMetadata(UUID workspaceId, UUID projectId, String filename, String contentType, long sizeBytes) {
+        ContentLimits limits = policyService.limits(workspaceId, projectId);
         validateSize("attachment sizeBytes", sizeBytes, limits.attachmentMaxUploadBytes());
         validateContentType("attachment contentType", csvSet(limits.attachmentAllowedContentTypes()), fallbackContentType(filename, contentType));
     }
 
     public void validateAttachmentUpload(UUID workspaceId, String filename, String contentType, byte[] content) {
-        ContentLimits limits = policyService.limits(workspaceId);
+        validateAttachmentUpload(workspaceId, null, filename, contentType, content);
+    }
+
+    public void validateAttachmentUpload(UUID workspaceId, UUID projectId, String filename, String contentType, byte[] content) {
+        ContentLimits limits = policyService.limits(workspaceId, projectId);
         validateSize("attachment file", content == null ? 0 : content.length, limits.attachmentMaxUploadBytes());
         validateContentType("attachment contentType", csvSet(limits.attachmentAllowedContentTypes()), fallbackContentType(filename, contentType));
     }
 
     public void validateAttachmentDownload(UUID workspaceId, String filename, String contentType, Long sizeBytes) {
-        ContentLimits limits = policyService.limits(workspaceId);
+        validateAttachmentDownload(workspaceId, null, filename, contentType, sizeBytes);
+    }
+
+    public void validateAttachmentDownload(UUID workspaceId, UUID projectId, String filename, String contentType, Long sizeBytes) {
+        ContentLimits limits = policyService.limits(workspaceId, projectId);
         if (sizeBytes != null) {
             validateSize("attachment download", sizeBytes, limits.attachmentMaxDownloadBytes());
         }
@@ -40,13 +52,21 @@ public class ContentLimitPolicy {
     }
 
     public void validateGeneratedExport(UUID workspaceId, String filename, String contentType, byte[] content) {
-        ContentLimits limits = policyService.limits(workspaceId);
+        validateGeneratedExport(workspaceId, null, filename, contentType, content);
+    }
+
+    public void validateGeneratedExport(UUID workspaceId, UUID projectId, String filename, String contentType, byte[] content) {
+        ContentLimits limits = policyService.limits(workspaceId, projectId);
         validateSize("export artifact", content == null ? 0 : content.length, limits.exportMaxArtifactBytes());
         validateContentType("export contentType", csvSet(limits.exportAllowedContentTypes()), fallbackContentType(filename, contentType));
     }
 
     public void validateExportDownload(UUID workspaceId, String filename, String contentType, Long sizeBytes) {
-        ContentLimits limits = policyService.limits(workspaceId);
+        validateExportDownload(workspaceId, null, filename, contentType, sizeBytes);
+    }
+
+    public void validateExportDownload(UUID workspaceId, UUID projectId, String filename, String contentType, Long sizeBytes) {
+        ContentLimits limits = policyService.limits(workspaceId, projectId);
         if (sizeBytes != null) {
             validateSize("export download", sizeBytes, limits.exportMaxArtifactBytes());
         }
@@ -54,7 +74,11 @@ public class ContentLimitPolicy {
     }
 
     public void validateImportParse(UUID workspaceId, String provider, String sourceType, String contentType, String content) {
-        ContentLimits limits = policyService.limits(workspaceId);
+        validateImportParse(workspaceId, null, provider, sourceType, contentType, content);
+    }
+
+    public void validateImportParse(UUID workspaceId, UUID projectId, String provider, String sourceType, String contentType, String content) {
+        ContentLimits limits = policyService.limits(workspaceId, projectId);
         validateSize("import content", content == null ? 0 : content.getBytes(StandardCharsets.UTF_8).length, limits.importMaxParseBytes());
         validateContentType("import contentType", csvSet(limits.importAllowedContentTypes()), fallbackImportContentType(provider, sourceType, contentType));
     }

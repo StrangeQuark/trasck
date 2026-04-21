@@ -33,6 +33,7 @@ class ProductionSecurityStartupValidatorTest {
                 .hasMessageContaining("Unsafe production-like Trasck configuration")
                 .hasMessageContaining("trasck.security.jwt-secret")
                 .hasMessageContaining("trasck.security.cookie-secure")
+                .hasMessageContaining("trasck.security.rate-limit.store")
                 .hasMessageContaining("spring.datasource.password");
     }
 
@@ -45,6 +46,7 @@ class ProductionSecurityStartupValidatorTest {
         environment.withProperty("trasck.security.oauth-assertion-secret", "prod-test-oauth-assertion-secret-123456");
         environment.withProperty("spring.datasource.password", "prod-test-database-password-123456");
         environment.withProperty("trasck.security.cookie-secure", "true");
+        environment.withProperty("trasck.security.rate-limit.store", "redis");
         environment.withProperty("cors.allowed-origins", "https://app.example.test");
         environment.withProperty("trasck.security.oauth-success-redirect", "https://app.example.test/auth/callback");
 

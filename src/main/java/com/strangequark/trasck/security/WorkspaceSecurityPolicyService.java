@@ -2,6 +2,8 @@ package com.strangequark.trasck.security;
 
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.project.Project;
+import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.util.Arrays;
@@ -18,14 +20,18 @@ import org.springframework.web.server.ResponseStatusException;
 public class WorkspaceSecurityPolicyService {
 
     private final WorkspaceSecurityPolicyRepository policyRepository;
+    private final ProjectSecurityPolicyRepository projectPolicyRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final ProjectRepository projectRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
     private final ContentLimits defaults;
 
     public WorkspaceSecurityPolicyService(
             WorkspaceSecurityPolicyRepository policyRepository,
+            ProjectSecurityPolicyRepository projectPolicyRepository,
             WorkspaceRepository workspaceRepository,
+            ProjectRepository projectRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
             @Value("${trasck.attachments.max-upload-bytes:10485760}") long maxAttachmentUploadBytes,
@@ -37,7 +43,9 @@ public class WorkspaceSecurityPolicyService {
             @Value("${trasck.imports.allowed-content-types:text/csv,application/csv,application/json,text/json,text/plain}") String importContentTypes
     ) {
         this.policyRepository = policyRepository;
+        this.projectPolicyRepository = projectPolicyRepository;
         this.workspaceRepository = workspaceRepository;
+        this.projectRepository = projectRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
         this.defaults = new ContentLimits(
@@ -84,16 +92,71 @@ public class WorkspaceSecurityPolicyService {
     }
 
     @Transactional(readOnly = true)
+    public ProjectSecurityPolicyResponse getProjectPolicy(UUID projectId) {
+        UUID actorId = currentUserService.requireUserId();
+        Project project = activeProject(projectId);
+        permissionService.requireProjectPermission(actorId, project.getId(), "project.admin");
+        ProjectSecurityPolicy policy = projectPolicyRepository.findById(project.getId()).orElse(null);
+        return projectResponse(project, policy);
+    }
+
+    @Transactional
+    public ProjectSecurityPolicyResponse updateProjectPolicy(UUID projectId, WorkspaceSecurityPolicyRequest request) {
+        WorkspaceSecurityPolicyRequest updateRequest = request == null
+                ? new WorkspaceSecurityPolicyRequest(null, null, null, null, null, null, null)
+                : request;
+        UUID actorId = currentUserService.requireUserId();
+        Project project = activeProject(projectId);
+        permissionService.requireProjectPermission(actorId, project.getId(), "project.admin");
+        ProjectSecurityPolicy policy = projectPolicyRepository.findById(project.getId()).orElseGet(() -> {
+            ProjectSecurityPolicy created = new ProjectSecurityPolicy();
+            created.setProjectId(project.getId());
+            return created;
+        });
+        policy.setAttachmentMaxUploadBytes(nullablePositive(updateRequest.attachmentMaxUploadBytes(), "attachmentMaxUploadBytes"));
+        policy.setAttachmentMaxDownloadBytes(nullablePositive(updateRequest.attachmentMaxDownloadBytes(), "attachmentMaxDownloadBytes"));
+        policy.setAttachmentAllowedContentTypes(nullableCsv(updateRequest.attachmentAllowedContentTypes()));
+        policy.setExportMaxArtifactBytes(nullablePositive(updateRequest.exportMaxArtifactBytes(), "exportMaxArtifactBytes"));
+        policy.setExportAllowedContentTypes(nullableCsv(updateRequest.exportAllowedContentTypes()));
+        policy.setImportMaxParseBytes(nullablePositive(updateRequest.importMaxParseBytes(), "importMaxParseBytes"));
+        policy.setImportAllowedContentTypes(nullableCsv(updateRequest.importAllowedContentTypes()));
+        return projectResponse(project, projectPolicyRepository.save(policy));
+    }
+
+    @Transactional(readOnly = true)
     public ContentLimits limits(UUID workspaceId) {
+        return limits(workspaceId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public ContentLimits limits(UUID workspaceId, UUID projectId) {
         WorkspaceSecurityPolicy policy = workspaceId == null ? null : policyRepository.findById(workspaceId).orElse(null);
+        ProjectSecurityPolicy projectPolicy = projectId == null ? null : projectPolicyRepository.findById(projectId).orElse(null);
+        ContentLimits workspaceLimits = merge(defaults, policy);
+        return merge(workspaceLimits, projectPolicy);
+    }
+
+    private ContentLimits merge(ContentLimits base, WorkspaceSecurityPolicy policy) {
         return new ContentLimits(
-                policy == null || policy.getAttachmentMaxUploadBytes() == null ? defaults.attachmentMaxUploadBytes() : policy.getAttachmentMaxUploadBytes(),
-                policy == null || policy.getAttachmentMaxDownloadBytes() == null ? defaults.attachmentMaxDownloadBytes() : policy.getAttachmentMaxDownloadBytes(),
-                policy == null || policy.getAttachmentAllowedContentTypes() == null ? defaults.attachmentAllowedContentTypes() : policy.getAttachmentAllowedContentTypes(),
-                policy == null || policy.getExportMaxArtifactBytes() == null ? defaults.exportMaxArtifactBytes() : policy.getExportMaxArtifactBytes(),
-                policy == null || policy.getExportAllowedContentTypes() == null ? defaults.exportAllowedContentTypes() : policy.getExportAllowedContentTypes(),
-                policy == null || policy.getImportMaxParseBytes() == null ? defaults.importMaxParseBytes() : policy.getImportMaxParseBytes(),
-                policy == null || policy.getImportAllowedContentTypes() == null ? defaults.importAllowedContentTypes() : policy.getImportAllowedContentTypes()
+                policy == null || policy.getAttachmentMaxUploadBytes() == null ? base.attachmentMaxUploadBytes() : policy.getAttachmentMaxUploadBytes(),
+                policy == null || policy.getAttachmentMaxDownloadBytes() == null ? base.attachmentMaxDownloadBytes() : policy.getAttachmentMaxDownloadBytes(),
+                policy == null || policy.getAttachmentAllowedContentTypes() == null ? base.attachmentAllowedContentTypes() : policy.getAttachmentAllowedContentTypes(),
+                policy == null || policy.getExportMaxArtifactBytes() == null ? base.exportMaxArtifactBytes() : policy.getExportMaxArtifactBytes(),
+                policy == null || policy.getExportAllowedContentTypes() == null ? base.exportAllowedContentTypes() : policy.getExportAllowedContentTypes(),
+                policy == null || policy.getImportMaxParseBytes() == null ? base.importMaxParseBytes() : policy.getImportMaxParseBytes(),
+                policy == null || policy.getImportAllowedContentTypes() == null ? base.importAllowedContentTypes() : policy.getImportAllowedContentTypes()
+        );
+    }
+
+    private ContentLimits merge(ContentLimits base, ProjectSecurityPolicy policy) {
+        return new ContentLimits(
+                policy == null || policy.getAttachmentMaxUploadBytes() == null ? base.attachmentMaxUploadBytes() : policy.getAttachmentMaxUploadBytes(),
+                policy == null || policy.getAttachmentMaxDownloadBytes() == null ? base.attachmentMaxDownloadBytes() : policy.getAttachmentMaxDownloadBytes(),
+                policy == null || policy.getAttachmentAllowedContentTypes() == null ? base.attachmentAllowedContentTypes() : policy.getAttachmentAllowedContentTypes(),
+                policy == null || policy.getExportMaxArtifactBytes() == null ? base.exportMaxArtifactBytes() : policy.getExportMaxArtifactBytes(),
+                policy == null || policy.getExportAllowedContentTypes() == null ? base.exportAllowedContentTypes() : policy.getExportAllowedContentTypes(),
+                policy == null || policy.getImportMaxParseBytes() == null ? base.importMaxParseBytes() : policy.getImportMaxParseBytes(),
+                policy == null || policy.getImportAllowedContentTypes() == null ? base.importAllowedContentTypes() : policy.getImportAllowedContentTypes()
         );
     }
 
@@ -114,6 +177,25 @@ public class WorkspaceSecurityPolicyService {
         );
     }
 
+    private ProjectSecurityPolicyResponse projectResponse(Project project, ProjectSecurityPolicy policy) {
+        ContentLimits effective = limits(project.getWorkspaceId(), project.getId());
+        return new ProjectSecurityPolicyResponse(
+                project.getId(),
+                project.getWorkspaceId(),
+                effective.attachmentMaxUploadBytes(),
+                effective.attachmentMaxDownloadBytes(),
+                effective.attachmentAllowedContentTypes(),
+                effective.exportMaxArtifactBytes(),
+                effective.exportAllowedContentTypes(),
+                effective.importMaxParseBytes(),
+                effective.importAllowedContentTypes(),
+                policyRepository.existsById(project.getWorkspaceId()),
+                policy != null,
+                policy == null ? null : policy.getCreatedAt(),
+                policy == null ? null : policy.getUpdatedAt()
+        );
+    }
+
     private Workspace activeWorkspace(UUID workspaceId) {
         Workspace workspace = workspaceRepository.findById(required(workspaceId, "workspaceId"))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
@@ -121,6 +203,15 @@ public class WorkspaceSecurityPolicyService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found");
         }
         return workspace;
+    }
+
+    private Project activeProject(UUID projectId) {
+        Project project = projectRepository.findByIdAndDeletedAtIsNull(required(projectId, "projectId"))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found"));
+        if (!"active".equals(project.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found");
+        }
+        return project;
     }
 
     private UUID required(UUID value, String fieldName) {

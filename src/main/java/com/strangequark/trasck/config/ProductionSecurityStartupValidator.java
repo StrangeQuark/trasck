@@ -40,6 +40,7 @@ public class ProductionSecurityStartupValidator implements InitializingBean {
         validateSecret("trasck.security.oauth-assertion-secret", 32, failures);
         validateDatabasePassword(failures);
         validateCookieSecure(failures);
+        validateRateLimitStore(failures);
         validateCorsOrigins(failures);
         validateOAuthRedirect(failures);
         validateOAuthClientSecrets(failures);
@@ -67,6 +68,12 @@ public class ProductionSecurityStartupValidator implements InitializingBean {
     private void validateCookieSecure(List<String> failures) {
         if (!Boolean.parseBoolean(environment.getProperty("trasck.security.cookie-secure", "false"))) {
             failures.add("trasck.security.cookie-secure must be true");
+        }
+    }
+
+    private void validateRateLimitStore(List<String> failures) {
+        if (!"redis".equals(environment.getProperty("trasck.security.rate-limit.store", "database").trim().toLowerCase(Locale.ROOT))) {
+            failures.add("trasck.security.rate-limit.store must be redis for production-like profiles");
         }
     }
 
