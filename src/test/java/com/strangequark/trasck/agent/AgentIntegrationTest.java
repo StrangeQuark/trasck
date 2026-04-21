@@ -66,6 +66,7 @@ class AgentIntegrationTest {
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
         registry.add("trasck.events.outbox.fixed-delay-ms", () -> "600000");
+        registry.add("trasck.security.outbound-url.allowed-hosts", () -> "127.0.0.1");
     }
 
     @Test

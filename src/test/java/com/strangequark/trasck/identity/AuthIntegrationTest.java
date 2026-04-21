@@ -87,6 +87,17 @@ class AuthIntegrationTest {
         JsonNode openApi = read(get("/v3/api-docs", null));
         assertThat(openApi.at("/openapi").asText()).startsWith("3.");
         assertThat(openApi.at("/info/title").asText()).isEqualTo("Trasck API");
+        HttpResponse<String> allowedPreflight = preflight("/api/v1/auth/me", "http://localhost:8080", "GET");
+        assertThat(allowedPreflight.statusCode()).isEqualTo(200);
+        assertThat(allowedPreflight.headers().firstValue("Access-Control-Allow-Origin")).contains("http://localhost:8080");
+        HttpResponse<String> deniedPreflight = preflight("/api/v1/auth/me", "https://evil.example", "GET");
+        assertThat(deniedPreflight.statusCode()).isEqualTo(403);
+
+        String throttledIdentifier = "throttle-" + UUID.randomUUID() + "@example.com";
+        for (int i = 0; i < 5; i++) {
+            assertThat(loginWithForwardedFor(throttledIdentifier, "wrong-password", "198.51.100." + i).statusCode()).isEqualTo(401);
+        }
+        assertThat(loginWithForwardedFor(throttledIdentifier, "wrong-password", "198.51.100.250").statusCode()).isEqualTo(429);
 
         AuthSession admin = login(setup.at("/adminUser/email").asText(), "correct-horse-battery-staple");
         assertThat(admin.accessToken()).isNotBlank();
@@ -403,6 +414,17 @@ class AuthIntegrationTest {
         return new AuthSession(read(response).at("/accessToken").asText(), cookie);
     }
 
+    private HttpResponse<String> loginWithForwardedFor(String identifier, String password, String forwardedFor) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/v1/auth/login"))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .header("X-Forwarded-For", forwardedFor)
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(objectMapper.createObjectNode()
+                        .put("identifier", identifier)
+                        .put("password", password))))
+                .build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
     private HttpResponse<String> post(String path, JsonNode body, String accessToken) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
@@ -423,6 +445,15 @@ class AuthIntegrationTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> preflight(String path, String origin, String method) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri(path))
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .header("Origin", origin)
+                .header("Access-Control-Request-Method", method)
+                .build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     private HttpResponse<String> delete(String path, String accessToken) throws Exception {

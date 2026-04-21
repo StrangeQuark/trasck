@@ -2,12 +2,13 @@ package com.strangequark.trasck.identity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.strangequark.trasck.security.OutboundUrlPolicy;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class OAuthVerifiedEmailResolverTest {
 
-    private final OAuthVerifiedEmailResolver resolver = new OAuthVerifiedEmailResolver();
+    private final OAuthVerifiedEmailResolver resolver = new OAuthVerifiedEmailResolver(new OutboundUrlPolicy(""));
 
     @Test
     void usesProviderSpecificVerifiedEmailRules() {

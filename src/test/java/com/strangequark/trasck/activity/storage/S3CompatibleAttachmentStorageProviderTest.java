@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.security.OutboundUrlPolicy;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -41,7 +42,7 @@ class S3CompatibleAttachmentStorageProviderTest {
 
     @Test
     void storesReadsAndDeletesAgainstControlledS3CompatibleFake() {
-        S3CompatibleAttachmentStorageProvider provider = new S3CompatibleAttachmentStorageProvider();
+        S3CompatibleAttachmentStorageProvider provider = new S3CompatibleAttachmentStorageProvider(new OutboundUrlPolicy("127.0.0.1"));
         AttachmentStorageConfig config = storageConfig("bucket-a");
         byte[] content = "S3 fake attachment".getBytes(StandardCharsets.UTF_8);
 
@@ -55,6 +56,16 @@ class S3CompatibleAttachmentStorageProviderTest {
         assertThatThrownBy(() -> provider.read(config, "workspace/file.txt"))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("404");
+    }
+
+    @Test
+    void blocksPrivateS3EndpointsWithoutAllowlist() {
+        S3CompatibleAttachmentStorageProvider provider = new S3CompatibleAttachmentStorageProvider(new OutboundUrlPolicy(""));
+        AttachmentStorageConfig config = storageConfig("bucket-a");
+
+        assertThatThrownBy(() -> provider.read(config, "workspace/file.txt"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("blocked private or local network");
     }
 
     private AttachmentStorageConfig storageConfig(String bucket) {

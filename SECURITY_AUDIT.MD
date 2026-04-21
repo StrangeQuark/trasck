@@ -9,7 +9,7 @@ This audit covers the current Trasck backend repo and Vite React frontend repo b
 - Backend tracked files reviewed: 658
 - Frontend tracked files reviewed: 84
 - Excluded from scope: `.git`, `target`, `node_modules`, `dist`, generated runtime data, and other build output directories.
-- Included in scope: Java source, React source, generated OpenAPI/client artifacts, Flyway migrations, tests, Docker/nginx/build config, Jenkinsfiles, checked-in `.env` files, local runtime docs, HTTP examples, and import samples.
+- Included in scope: Java source, React source, generated OpenAPI/client artifacts, Flyway migrations, tests, Docker/nginx/build config, Jenkinsfiles, checked-in `.env.example` files, local runtime docs, HTTP examples, and import samples.
 
 The file pass was done with full-path inventory review, targeted secret and dangerous API scans, dependency/build inspection, and focused source review of the security-sensitive systems listed below. No product subsystem was intentionally skipped.
 
@@ -26,6 +26,7 @@ Commands and inspections used during this pass:
 - Port scan for `6100` and `6101`; no non-documentation `6101` runtime/config references were found.
 - `npm audit --json` in the frontend returned zero reported vulnerabilities.
 - `sh mvnw dependency:tree -DskipTests` completed successfully; no Java CVE scanner is currently wired into the repo.
+- Follow-up hardening verification ran the targeted security/auth tests, the full backend Maven test suite, frontend Vitest suite, frontend production build, frontend `npm audit`, `.env` inventory, `6101` config scan, whitespace checks, and local listener/container checks.
 
 ## Threat Model
 
@@ -67,17 +68,26 @@ Highest-risk entry points:
 - Callback JWTs are provider scoped and can be invalidated immediately by callback key rotation.
 - Generic worker endpoints require active encrypted worker-token credentials with `metadata.workerId`.
 - Activity/audit payload redaction covers token, password, secret, credential, authorization, cookie, hash, and private-key shaped fields.
+- Production-like profiles fail startup when known development secrets, weak database passwords, insecure auth-cookie flags, local OAuth success redirects, or local/wildcard CORS origins are active.
+- OpenAPI and Swagger stay public for local/non-production contract work, but production-like profiles require authenticated workspace-admin access.
+- CORS is explicitly allowlist-based through `CORS_ALLOWED_ORIGINS`.
+- Configured outbound HTTP targets are protected by a shared default-deny URL policy for localhost, private, link-local, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts are allowlisted.
+- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
 - Saved-filter/query-builder SQL uses whitelisted fields/operators and bind parameters. Raw SQL-shaped keys are rejected in user-configurable report/filter/dashboard paths.
 - Local filesystem attachment storage normalizes paths and rejects storage keys that escape the configured root.
 - The frontend does not persist access tokens in local storage. Current local storage is limited to API base URL and selected UI/entity IDs.
 - No `dangerouslySetInnerHTML`, `eval`, `new Function`, or direct `document.cookie` usage was found in current frontend source.
 - No `6101` backend or frontend config references were found; current backend defaults remain on `6100`.
+- Only `.env.example` files remain in the two repos; real `.env` files are ignored.
+- Frontend container builds use `npm ci` and nginx now sends baseline security headers.
 
 ## Findings
 
 ### SEC-001: Checked-in secret-bearing local environment files
 
 Severity: High before public hosting
+
+Status: Resolved in first hardening pass; CI secret scanning remains future work.
 
 Affected files:
 
@@ -88,9 +98,9 @@ Affected files:
 
 Current state:
 
-- Both repos track `.env` files.
-- Backend `.env` contains local database credentials and secret material examples.
-- Frontend `.env` contains local API-base values, including a stale `VITE_API_URL=http://localhost:6110/` value that is currently masked by `VITE_TRASCK_API_BASE_URL=http://localhost:6100`.
+- Both repos now ignore `.env` and `.env.*`.
+- Both repos commit only `.env.example`.
+- The stale frontend `6110` fallback is gone; the frontend example points at `http://localhost:6100`.
 
 Impact:
 
@@ -98,10 +108,8 @@ Impact:
 
 Recommended fix:
 
-- Stop tracking real `.env` files.
-- Add `.env` to both `.gitignore` files.
-- Commit `.env.example` files only, with clearly fake local values and a required-production-variable checklist.
-- Normalize frontend example API URLs to `http://localhost:6100`.
+- Keep real `.env` files untracked.
+- Add a CI secret scan that prevents future secret regressions.
 
 Regression tests/checks:
 
@@ -110,6 +118,8 @@ Regression tests/checks:
 ### SEC-002: Production runtime can start with development secrets and passwords
 
 Severity: High before public hosting
+
+Status: Resolved for known development defaults in production-like profiles.
 
 Affected files:
 
@@ -120,8 +130,9 @@ Affected files:
 
 Current state:
 
-- JWT secret, secret-encryption key, database password, maildev config, and cookie-secure settings have local defaults.
-- These defaults are good for first-run development but unsafe if reused in `prod`, `production`, `staging`, or `hosted` profiles.
+- Local/default profiles still have developer-friendly defaults.
+- Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup if development JWT/encryption/OAuth assertion secrets, weak database passwords, insecure cookie flags, local OAuth redirects, or local/wildcard CORS origins are active.
+- OAuth provider secrets are required when a real provider client ID is configured.
 
 Impact:
 
@@ -129,9 +140,7 @@ Impact:
 
 Recommended fix:
 
-- Add production-profile startup validation that refuses known dev values and missing required secrets.
-- Require `TRASCK_JWT_SECRET`, `TRASCK_SECRETS_ENCRYPTION_KEY`, production database credentials, OAuth secrets when providers are enabled, SMTP secrets when SMTP is enabled, and `TRASCK_AUTH_COOKIE_SECURE=true`.
-- Keep local defaults only in local docs/examples.
+- Keep expanding production startup checks as deployment packaging, SMTP mode, object storage, and external worker profiles become concrete.
 
 Regression tests/checks:
 
@@ -141,13 +150,16 @@ Regression tests/checks:
 
 Severity: High before public hosting
 
+Status: Resolved for the current decision to keep production docs behind authenticated admin access.
+
 Affected file:
 
 - `src/main/java/com/strangequark/trasck/config/SecurityConfig.java`
 
 Current state:
 
-- `GET /v3/api-docs/**`, `/swagger-ui.html`, and `/swagger-ui/**` are `permitAll`.
+- `GET /v3/api-docs/**`, `/swagger-ui.html`, and `/swagger-ui/**` remain public only in non-production-like profiles.
+- Production-like profiles require an authenticated principal with `workspace.admin` scope and at least one active workspace membership whose role grants `workspace.admin`.
 
 Impact:
 
@@ -155,8 +167,7 @@ Impact:
 
 Recommended fix:
 
-- Keep Swagger/OpenAPI public only in local/dev.
-- For production, either disable Swagger/OpenAPI entirely or require admin auth.
+- Before hosted multi-tenant deployments, decide whether workspace-admin access is enough or whether docs need a dedicated system-admin/global permission.
 
 Regression tests/checks:
 
@@ -166,6 +177,8 @@ Regression tests/checks:
 
 Severity: Medium-high
 
+Status: Resolved for current backend browser entry points.
+
 Affected files:
 
 - `src/main/resources/application.properties`
@@ -173,7 +186,9 @@ Affected files:
 
 Current state:
 
-- `cors.allowed-origins` exists, but there is no `CorsConfigurationSource` and the security chain does not enable `.cors(...)`.
+- `cors.allowed-origins` is enforced through a `CorsConfigurationSource`.
+- Credentialed browser requests are limited to configured origins.
+- Tests cover allowed localhost preflight and denied unlisted origins.
 
 Impact:
 
@@ -181,9 +196,7 @@ Impact:
 
 Recommended fix:
 
-- Add explicit CORS configuration sourced from `CORS_ALLOWED_ORIGINS`.
-- Deny credentials from unlisted origins.
-- Test localhost frontend origin and a denied origin.
+- Keep production CORS origins explicit and non-local through profile startup validation.
 
 Regression tests/checks:
 
@@ -193,6 +206,8 @@ Regression tests/checks:
 
 Severity: High before public hosting
 
+Status: Partially resolved; durable/distributed throttling and auth-failure audit events remain future work.
+
 Affected files:
 
 - `src/main/java/com/strangequark/trasck/identity/AuthService.java`
@@ -200,8 +215,9 @@ Affected files:
 
 Current state:
 
-- Login has no rate limit, lockout, throttling, or abuse tracking.
-- Password validation currently relies on required text and does not enforce length or complexity.
+- Login failures are throttled by identifier plus remote address using configurable in-memory counters, failure window, and lockout duration.
+- Spoofable `X-Forwarded-For` values are ignored by default and only used when `TRASCK_TRUST_FORWARDED_FOR=true` is set behind a trusted reverse proxy.
+- New human passwords are validated for configured minimum length and common development password rejection during setup, invitation registration, and workspace-admin direct user creation.
 
 Impact:
 
@@ -209,17 +225,18 @@ Impact:
 
 Recommended fix:
 
-- Add IP/account based login throttling with audit events.
-- Enforce a minimum password length and reject common or low-entropy passwords.
-- Apply the same policy to setup, direct admin user creation, invitation registration, and password-bearing auth paths.
+- Move throttling to database/Redis-backed counters before shared deployments if multiple app instances are expected.
+- Add auth-failure audit events and consider stronger entropy checks once password reset/change flows exist.
 
 Regression tests/checks:
 
-- Add tests for weak password rejection and login throttling/lockout boundaries.
+- Add tests for weak password rejection, login throttling/lockout boundaries, and trusted-proxy forwarding behavior.
 
 ### SEC-006: Outbound HTTP targets need SSRF and egress controls
 
 Severity: High before public hosting
+
+Status: Resolved as a baseline default-deny policy with exact host/host:port allowlisting.
 
 Affected files:
 
@@ -230,10 +247,9 @@ Affected files:
 
 Current state:
 
-- Webhook URLs are validated for basic HTTP/S shape.
-- Agent worker webhook `callbackUrl` and S3-compatible storage endpoints can point to arbitrary configured endpoints.
-- There is no centralized private-network, metadata-service, localhost, or denylist/allowlist egress policy.
-- Some outbound clients do not set explicit connect/read timeouts.
+- A shared outbound URL policy validates webhooks, agent worker callback URLs, OAuth verified-email side-fetch URLs, and S3-compatible endpoints.
+- The policy default-denies localhost, private networks, link-local ranges, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts are explicitly allowlisted.
+- Outbound webhook, agent-worker, OAuth side-fetch, and S3-compatible calls now use bounded connect/request timeouts.
 
 Impact:
 
@@ -241,9 +257,7 @@ Impact:
 
 Recommended fix:
 
-- Add a shared outbound URL policy for webhooks, agent worker callbacks, OAuth side fetches where relevant, and S3-compatible endpoints.
-- Default-deny private IP ranges, localhost, link-local, and metadata-service addresses unless an explicit admin/deployment allowlist enables them.
-- Add bounded timeouts to every outbound HTTP client.
+- Decide whether self-hosted deployments need CIDR or wildcard allowlisting, or whether exact host/host:port entries stay sufficient for the first manual test.
 
 Regression tests/checks:
 
@@ -252,6 +266,8 @@ Regression tests/checks:
 ### SEC-007: Auth cookies and OAuth redirects need production guardrails
 
 Severity: Medium-high
+
+Status: Partially resolved by production startup validation.
 
 Affected files:
 
@@ -264,6 +280,7 @@ Current state:
 - Auth cookies are `HttpOnly`, `SameSite=Lax`, and optionally `Secure`, but `Secure` defaults to false.
 - OAuth success redirect defaults to localhost.
 - OAuth client registrations use disabled placeholder credentials when not configured.
+- Production-like profiles now fail startup when secure cookies are disabled, OAuth success redirect remains local, or enabled provider client IDs are missing matching non-development secrets.
 
 Impact:
 
@@ -404,6 +421,8 @@ Regression tests/checks:
 
 Severity: Medium
 
+Status: Resolved as a baseline container/static-server hardening pass.
+
 Affected files:
 
 - `../trasck-frontend/Dockerfile`
@@ -411,8 +430,8 @@ Affected files:
 
 Current state:
 
-- Docker build uses `npm install` instead of `npm ci`.
-- Nginx serves the SPA without security headers.
+- Docker build uses `npm ci`.
+- Nginx sends `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and a conservative CSP.
 
 Impact:
 
@@ -420,8 +439,7 @@ Impact:
 
 Recommended fix:
 
-- Use `npm ci` in container builds.
-- Add production headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy`, frame restrictions, and a conservative CSP that matches the chosen deployment/API origin.
+- Parameterize production CSP/connect-src when deployment hostnames are finalized.
 
 Regression tests/checks:
 
@@ -510,26 +528,31 @@ Regression tests/checks:
 
 ## Production Hardening Priority
 
-The next primary step should close findings in this order:
+The next primary step should close the remaining findings in this order:
 
-1. Remove tracked `.env` files from normal source control, add `.env.example`, and add production startup validation for required secrets and cookie settings.
-2. Gate Swagger/OpenAPI and implement explicit CORS.
-3. Add outbound URL/egress policy and HTTP timeouts.
-4. Add login/password protections.
-5. Add upload/import size and content controls.
-6. Add frontend/container security header and secret-display hardening.
-7. Add dependency scanning and security regression tests.
+1. Add upload/import size and content controls.
+2. Add frontend secret-display hardening and one-time token reveal cleanup.
+3. Add callback/worker authentication failure rate limiting and audit events.
+4. Add Java dependency vulnerability scanning and keep frontend audit in CI.
+5. Add broader redaction, authorization denial, tenant-isolation, and outbound URL regression coverage.
+6. Decide whether production docs access needs a system-admin/global permission.
+7. Decide whether exact outbound allowlisting is enough or self-hosted deployments need CIDR/wildcard support.
 
 ## Review Notes
 
 - The operational changes made in the same implementation pass were reviewed for obvious authorization and tenant-boundary regressions. Scheduled import review exports use existing queued export jobs and worker run/health rows; scheduled agent dispatch-attempt pruning uses workspace worker settings and existing export-before-prune retention behavior.
-- No hard-coded production credentials were found in source code. The major config risk is tracked local `.env` files and development defaults that must be rejected under production-like profiles.
-- No `6101` config references were found. The frontend checked-in `.env` should still be normalized because it contains an unused `6110` fallback value.
+- No hard-coded production credentials were found in source code. Real `.env` files have been removed from the repos and ignored; committed examples remain local-only.
+- Development defaults are now rejected under production-like profiles.
+- No non-documentation `6101` config references were found.
 
 ## Verification Run
 
-- Backend `DOCKER_HOST=unix:///var/run/docker.sock sh mvnw test` passed with 18 tests.
-- Frontend `npm test` passed with 2 files and 10 tests.
+- Targeted backend security/auth run passed: `DOCKER_HOST=unix:///var/run/docker.sock sh mvnw -Dtest=LoginAttemptServiceTest,ProductionSecurityStartupValidatorTest,OutboundUrlPolicyTest,S3CompatibleAttachmentStorageProviderTest,AuthIntegrationTest,ProductionSecurityIntegrationTest,AgentIntegrationTest test` passed with 12 tests.
+- Backend `DOCKER_HOST=unix:///var/run/docker.sock sh mvnw test` passed with 27 tests.
+- Frontend `npm test -- --run` passed with 2 files and 10 tests.
 - Frontend `npm run build` passed; generated `dist/` output was removed afterward.
 - Frontend `npm audit --json` reported zero vulnerabilities.
-- OpenAPI/client artifacts were regenerated from a temporary backend on port `6100`; the temporary backend and temporary Postgres container were stopped afterward.
+- Only `.env.example` files remain in the two repos.
+- `git diff --check` passed in both repos.
+- No listeners were found on ports `6100`, `6101`, or `55432` after verification.
+- No non-documentation `6101` runtime/config references were found.

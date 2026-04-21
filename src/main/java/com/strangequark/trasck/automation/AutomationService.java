@@ -41,6 +41,7 @@ import com.strangequark.trasck.notification.Notification;
 import com.strangequark.trasck.notification.NotificationRepository;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.security.OutboundUrlPolicy;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.net.URI;
@@ -105,6 +106,7 @@ public class AutomationService {
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
     private final SecretCipherService secretCipherService;
+    private final OutboundUrlPolicy outboundUrlPolicy;
     private final ObjectProvider<JavaMailSender> mailSenderProvider;
     private final Environment environment;
     private final String emailProvider;
@@ -140,6 +142,7 @@ public class AutomationService {
             PermissionService permissionService,
             DomainEventService domainEventService,
             SecretCipherService secretCipherService,
+            OutboundUrlPolicy outboundUrlPolicy,
             ObjectProvider<JavaMailSender> mailSenderProvider,
             Environment environment,
             @Value("${trasck.email.provider:maildev}") String emailProvider,
@@ -171,6 +174,7 @@ public class AutomationService {
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
         this.secretCipherService = secretCipherService;
+        this.outboundUrlPolicy = outboundUrlPolicy;
         this.mailSenderProvider = mailSenderProvider;
         this.environment = environment;
         this.emailProvider = emailProvider;
@@ -848,7 +852,9 @@ public class AutomationService {
             return;
         }
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(webhook.getUrl()))
+            URI webhookUri = URI.create(webhook.getUrl());
+            outboundUrlPolicy.validateResolvedHttpUri(webhookUri, "webhook.url");
+            HttpRequest request = HttpRequest.newBuilder(webhookUri)
                     .timeout(Duration.ofSeconds(5))
                     .header("Content-Type", "application/json")
                     .header("X-Trasck-Event-Type", delivery.getEventType())
@@ -1052,15 +1058,7 @@ public class AutomationService {
         }
         if (create || hasText(request.url())) {
             String url = requiredText(request.url(), "url");
-            URI uri;
-            try {
-                uri = URI.create(url);
-            } catch (IllegalArgumentException ex) {
-                throw badRequest("url must be a valid URI");
-            }
-            if (!List.of("http", "https").contains(uri.getScheme())) {
-                throw badRequest("url must use http or https");
-            }
+            outboundUrlPolicy.validateHttpUrl(url, "url");
             webhook.setUrl(url);
         }
         if (hasText(request.secret())) {

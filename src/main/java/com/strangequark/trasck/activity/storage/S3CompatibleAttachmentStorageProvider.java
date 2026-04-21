@@ -2,6 +2,7 @@ package com.strangequark.trasck.activity.storage;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.security.OutboundUrlPolicy;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -32,9 +33,13 @@ public class S3CompatibleAttachmentStorageProvider implements AttachmentStorageP
     private static final String AWS4_ALGORITHM = "AWS4-HMAC-SHA256";
 
     private final HttpClient httpClient;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
-    public S3CompatibleAttachmentStorageProvider() {
-        this.httpClient = HttpClient.newHttpClient();
+    public S3CompatibleAttachmentStorageProvider(OutboundUrlPolicy outboundUrlPolicy) {
+        this.outboundUrlPolicy = outboundUrlPolicy;
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(2))
+                .build();
     }
 
     @Override
@@ -72,6 +77,7 @@ public class S3CompatibleAttachmentStorageProvider implements AttachmentStorageP
 
     private HttpResponse<byte[]> send(AttachmentStorageConfig config, String method, URI uri, byte[] content, String contentType) {
         try {
+            outboundUrlPolicy.validateResolvedHttpUri(uri, "s3 endpoint");
             byte[] body = content == null ? new byte[0] : content;
             String payloadHash = sha256Hex(body);
             Instant now = Instant.now();
@@ -105,6 +111,7 @@ public class S3CompatibleAttachmentStorageProvider implements AttachmentStorageP
             );
 
             HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+                    .timeout(java.time.Duration.ofSeconds(10))
                     .header("Authorization", authorization)
                     .header("x-amz-content-sha256", payloadHash)
                     .header("x-amz-date", amzDate);

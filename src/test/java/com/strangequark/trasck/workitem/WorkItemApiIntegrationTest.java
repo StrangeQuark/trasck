@@ -16,6 +16,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -423,10 +425,12 @@ class WorkItemApiIntegrationTest {
         assertThat(iterationReport.at("/live/scopedWorkItems").asLong()).isEqualTo(1);
         assertThat(iterationReport.at("/snapshots")).hasSize(1);
 
-        JsonNode projectSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z");
+        String dashboardFrom = "2026-04-18T00:00:00Z";
+        String dashboardTo = Instant.now().plus(1, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS).toString();
+        JsonNode projectSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=" + dashboardFrom + "&to=" + dashboardTo);
         assertThat(projectSummary.at("/scope/scopeType").asText()).isEqualTo("project");
-        assertThat(projectSummary.at("/from").asText()).isEqualTo("2026-04-18T00:00:00Z");
-        assertThat(projectSummary.at("/to").asText()).isEqualTo("2026-04-21T00:00:00Z");
+        assertThat(projectSummary.at("/from").asText()).isEqualTo(dashboardFrom);
+        assertThat(projectSummary.at("/to").asText()).isEqualTo(dashboardTo);
         assertThat(projectSummary.at("/workItems/total").asLong()).isEqualTo(3);
         assertThat(projectSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
         assertThat(projectSummary.at("/estimateAndTime/workLogDeletedBehavior").asText()).isEqualTo("soft_deleted_excluded");
@@ -435,7 +439,7 @@ class WorkItemApiIntegrationTest {
         assertThat(projectSummary.at("/byStatus")).isNotEmpty();
         assertThat(projectSummary.at("/widgets")).hasSize(9);
 
-        JsonNode teamIterationSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z&teamId=" + reportingScope.teamId() + "&iterationId=" + reportingScope.iterationId());
+        JsonNode teamIterationSummary = getJson("/api/v1/reports/projects/" + projectId + "/dashboard-summary?from=" + dashboardFrom + "&to=" + dashboardTo + "&teamId=" + reportingScope.teamId() + "&iterationId=" + reportingScope.iterationId());
         assertThat(teamIterationSummary.at("/scope/scopeType").asText()).isEqualTo("iteration");
         assertThat(uuid(teamIterationSummary, "/scope/teamId")).isEqualTo(reportingScope.teamId());
         assertThat(uuid(teamIterationSummary, "/scope/iterationId")).isEqualTo(reportingScope.iterationId());
@@ -445,14 +449,14 @@ class WorkItemApiIntegrationTest {
         assertThat(teamIterationSummary.at("/estimateAndTime/workLogMinutes").asLong()).isEqualTo(90);
 
         UUID programId = seedProgram(workspaceId, projectId);
-        JsonNode workspacePortfolioSummary = getJson("/api/v1/reports/workspaces/" + workspaceId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z&projectIds=" + projectId);
+        JsonNode workspacePortfolioSummary = getJson("/api/v1/reports/workspaces/" + workspaceId + "/dashboard-summary?from=" + dashboardFrom + "&to=" + dashboardTo + "&projectIds=" + projectId);
         assertThat(workspacePortfolioSummary.at("/scope/scopeType").asText()).isEqualTo("workspace");
         assertThat(workspacePortfolioSummary.at("/scope/projectIds")).hasSize(1);
         assertThat(workspacePortfolioSummary.at("/workItems/total").asLong()).isEqualTo(3);
         assertThat(workspacePortfolioSummary.at("/byProject")).isNotEmpty();
         assertThat(workspacePortfolioSummary.at("/byTeam")).isNotEmpty();
         assertThat(workspacePortfolioSummary.at("/byType")).isNotEmpty();
-        JsonNode programPortfolioSummary = getJson("/api/v1/reports/programs/" + programId + "/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z");
+        JsonNode programPortfolioSummary = getJson("/api/v1/reports/programs/" + programId + "/dashboard-summary?from=" + dashboardFrom + "&to=" + dashboardTo);
         assertThat(programPortfolioSummary.at("/scope/scopeType").asText()).isEqualTo("program");
         assertThat(uuid(programPortfolioSummary, "/scope/programId")).isEqualTo(programId);
         assertThat(programPortfolioSummary.at("/byProject")).isNotEmpty();
@@ -490,7 +494,7 @@ class WorkItemApiIntegrationTest {
                 .set("config", widgetConfig));
         UUID widgetId = uuid(widget, "/id");
         assertThat(widget.at("/config/reportType").asText()).isEqualTo("project_dashboard_summary");
-        JsonNode renderedDashboard = getJson("/api/v1/dashboards/" + dashboardId + "/render?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z");
+        JsonNode renderedDashboard = getJson("/api/v1/dashboards/" + dashboardId + "/render?from=" + dashboardFrom + "&to=" + dashboardTo);
         assertThat(renderedDashboard.at("/dashboard/widgets")).hasSize(1);
         assertThat(renderedDashboard.at("/widgets/0/data/total").asLong()).isEqualTo(1);
         JsonNode updatedWidget = patch("/api/v1/dashboards/" + dashboardId + "/widgets/" + widgetId, objectMapper.createObjectNode()
@@ -715,7 +719,7 @@ class WorkItemApiIntegrationTest {
                 .put("height", 2)
                 .set("config", objectMapper.createObjectNode().put("reportQueryId", reportQueryId.toString())));
         assertThat(uuid(catalogWidget, "/id")).isNotNull();
-        JsonNode renderedProjectDashboard = getJson("/api/v1/dashboards/" + projectDashboardId + "/render?from=2026-04-18T00:00:00Z&to=2026-04-21T00:00:00Z");
+        JsonNode renderedProjectDashboard = getJson("/api/v1/dashboards/" + projectDashboardId + "/render?from=" + dashboardFrom + "&to=" + dashboardTo);
         assertThat(renderedProjectDashboard.at("/widgets/0/data/total").asLong()).isEqualTo(1);
         JsonNode strictReportQuery = postJson("/api/v1/workspaces/" + workspaceId + "/report-query-catalog", objectMapper.createObjectNode()
                 .put("queryKey", "strict-runtime-params")

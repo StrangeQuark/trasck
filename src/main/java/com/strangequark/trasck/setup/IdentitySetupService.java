@@ -2,6 +2,7 @@ package com.strangequark.trasck.setup;
 
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
+import com.strangequark.trasck.identity.PasswordPolicy;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -12,10 +13,12 @@ public class IdentitySetupService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final PasswordPolicy passwordPolicy;
 
-    public IdentitySetupService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public IdentitySetupService(UserRepository userRepository, PasswordEncoder passwordEncoder, PasswordPolicy passwordPolicy) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.passwordPolicy = passwordPolicy;
     }
 
     User createAdminUser(InitialSetupRequest.AdminUserRequest request) {
@@ -24,6 +27,7 @@ public class IdentitySetupService {
         String username = SetupRequestValidator.requiredText(admin.username(), "adminUser.username");
         String displayName = SetupRequestValidator.requiredText(admin.displayName(), "adminUser.displayName");
         String password = SetupRequestValidator.requiredText(admin.password(), "adminUser.password");
+        passwordPolicy.validateNewPassword(password, "adminUser.password");
 
         if (userRepository.existsByEmailIgnoreCase(email)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A user with this email already exists");

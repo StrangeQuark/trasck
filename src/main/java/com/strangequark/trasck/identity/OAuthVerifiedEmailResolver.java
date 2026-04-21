@@ -1,9 +1,14 @@
 package com.strangequark.trasck.identity;
 
+import com.strangequark.trasck.security.OutboundUrlPolicy;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -11,10 +16,23 @@ import org.springframework.web.client.RestClient;
 @Service
 public class OAuthVerifiedEmailResolver {
 
-    private final RestClient restClient;
+    private static final String GITHUB_EMAILS_URL = "https://api.github.com/user/emails";
+    private static final String GITLAB_EMAILS_URL = "https://gitlab.com/api/v4/user/emails";
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(10);
 
-    public OAuthVerifiedEmailResolver() {
-        this.restClient = RestClient.builder().build();
+    private final RestClient restClient;
+    private final OutboundUrlPolicy outboundUrlPolicy;
+
+    public OAuthVerifiedEmailResolver(OutboundUrlPolicy outboundUrlPolicy) {
+        this.outboundUrlPolicy = outboundUrlPolicy;
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(HttpClient.newBuilder()
+                .connectTimeout(CONNECT_TIMEOUT)
+                .build());
+        requestFactory.setReadTimeout(READ_TIMEOUT);
+        this.restClient = RestClient.builder()
+                .requestFactory(requestFactory)
+                .build();
     }
 
     public VerifiedEmail resolve(String provider, Map<String, Object> attributes, OAuth2AuthorizedClient authorizedClient) {
@@ -38,8 +56,9 @@ public class OAuthVerifiedEmailResolver {
             return new VerifiedEmail(attributeEmail, false);
         }
         try {
+            outboundUrlPolicy.validateResolvedHttpUri(URI.create(GITHUB_EMAILS_URL), "GitHub verified-email URL");
             List<Map<String, Object>> emails = restClient.get()
-                    .uri("https://api.github.com/user/emails")
+                    .uri(GITHUB_EMAILS_URL)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + authorizedClient.getAccessToken().getTokenValue())
                     .retrieve()
                     .body(new ParameterizedTypeReference<List<Map<String, Object>>>() {
@@ -66,8 +85,9 @@ public class OAuthVerifiedEmailResolver {
             return new VerifiedEmail(attributeEmail, false);
         }
         try {
+            outboundUrlPolicy.validateResolvedHttpUri(URI.create(GITLAB_EMAILS_URL), "GitLab verified-email URL");
             List<Map<String, Object>> emails = restClient.get()
-                    .uri("https://gitlab.com/api/v4/user/emails")
+                    .uri(GITLAB_EMAILS_URL)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + authorizedClient.getAccessToken().getTokenValue())
                     .retrieve()
                     .body(new ParameterizedTypeReference<List<Map<String, Object>>>() {

@@ -38,6 +38,7 @@ import com.strangequark.trasck.reporting.WorkItemAssignmentHistory;
 import com.strangequark.trasck.reporting.WorkItemAssignmentHistoryRepository;
 import com.strangequark.trasck.reporting.WorkItemStatusHistory;
 import com.strangequark.trasck.reporting.WorkItemStatusHistoryRepository;
+import com.strangequark.trasck.security.OutboundUrlPolicy;
 import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
 import com.strangequark.trasck.workspace.Workspace;
@@ -114,6 +115,7 @@ public class AgentService {
     private final DomainEventService domainEventService;
     private final AgentCallbackJwtService callbackJwtService;
     private final SecretCipherService secretCipherService;
+    private final OutboundUrlPolicy outboundUrlPolicy;
     private final List<AgentProviderAdapter> adapters;
 
     public AgentService(
@@ -153,6 +155,7 @@ public class AgentService {
             DomainEventService domainEventService,
             AgentCallbackJwtService callbackJwtService,
             SecretCipherService secretCipherService,
+            OutboundUrlPolicy outboundUrlPolicy,
             List<AgentProviderAdapter> adapters
     ) {
         this.objectMapper = objectMapper;
@@ -191,6 +194,7 @@ public class AgentService {
         this.domainEventService = domainEventService;
         this.callbackJwtService = callbackJwtService;
         this.secretCipherService = secretCipherService;
+        this.outboundUrlPolicy = outboundUrlPolicy;
         this.adapters = adapters;
     }
 
@@ -444,7 +448,7 @@ public class AgentService {
         provider.setProviderType(normalizeProviderType(createRequest.providerType()));
         provider.setDisplayName(requiredText(createRequest.displayName(), "displayName"));
         provider.setDispatchMode(normalizeDispatchMode(createRequest.dispatchMode()));
-        provider.setCallbackUrl(createRequest.callbackUrl());
+        provider.setCallbackUrl(normalizeCallbackUrl(createRequest.callbackUrl()));
         provider.setCapabilitySchema(toJson(createRequest.capabilitySchema()));
         provider.setConfig(toJson(createRequest.config()));
         provider.setEnabled(createRequest.enabled() == null || createRequest.enabled());
@@ -470,7 +474,7 @@ public class AgentService {
             provider.setDispatchMode(normalizeDispatchMode(updateRequest.dispatchMode()));
         }
         if (updateRequest.callbackUrl() != null) {
-            provider.setCallbackUrl(updateRequest.callbackUrl());
+            provider.setCallbackUrl(normalizeCallbackUrl(updateRequest.callbackUrl()));
         }
         if (updateRequest.capabilitySchema() != null) {
             provider.setCapabilitySchema(toJson(updateRequest.capabilitySchema()));
@@ -2100,6 +2104,15 @@ public class AgentService {
             throw badRequest("action must be dispatched, retried, or cancelled");
         }
         return "canceled".equals(normalized) ? "cancelled" : normalized;
+    }
+
+    private String normalizeCallbackUrl(String callbackUrl) {
+        if (!hasText(callbackUrl)) {
+            return null;
+        }
+        String normalized = callbackUrl.trim();
+        outboundUrlPolicy.validateHttpUrl(normalized, "callbackUrl");
+        return normalized;
     }
 
     private boolean shouldRunAutomaticDispatchAttemptPruning(

@@ -36,7 +36,7 @@ public class OAuth2LoginSuccessHandler implements AuthenticationSuccessHandler {
             OAuthVerifiedEmailResolver verifiedEmailResolver,
             ObjectMapper objectMapper,
             @Value("${trasck.security.cookie-secure:false}") boolean cookieSecure,
-            @Value("${trasck.security.oauth-success-redirect:http://localhost:5173/auth/callback}") String successRedirectUri
+            @Value("${trasck.security.oauth-success-redirect:http://localhost:8080/auth/callback}") String successRedirectUri
     ) {
         this.authService = authService;
         this.authorizedClientService = authorizedClientService;

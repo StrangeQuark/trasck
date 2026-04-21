@@ -44,6 +44,8 @@ public class AuthService {
     private final RoleRepository roleRepository;
     private final ProjectRepository projectRepository;
     private final PasswordEncoder passwordEncoder;
+    private final PasswordPolicy passwordPolicy;
+    private final LoginAttemptService loginAttemptService;
     private final JwtTokenService jwtTokenService;
     private final DomainEventService domainEventService;
     private final ObjectMapper objectMapper;
@@ -58,6 +60,8 @@ public class AuthService {
             RoleRepository roleRepository,
             ProjectRepository projectRepository,
             PasswordEncoder passwordEncoder,
+            PasswordPolicy passwordPolicy,
+            LoginAttemptService loginAttemptService,
             JwtTokenService jwtTokenService,
             DomainEventService domainEventService,
             ObjectMapper objectMapper,
@@ -71,6 +75,8 @@ public class AuthService {
         this.roleRepository = roleRepository;
         this.projectRepository = projectRepository;
         this.passwordEncoder = passwordEncoder;
+        this.passwordPolicy = passwordPolicy;
+        this.loginAttemptService = loginAttemptService;
         this.jwtTokenService = jwtTokenService;
         this.domainEventService = domainEventService;
         this.objectMapper = objectMapper;
@@ -79,15 +85,27 @@ public class AuthService {
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
+        return login(request, null);
+    }
+
+    @Transactional
+    public AuthResponse login(LoginRequest request, String remoteAddress) {
         LoginRequest login = required(request, "request");
         String identifier = requiredText(login.identifier(), "identifier");
         String password = requiredText(login.password(), "password");
+        loginAttemptService.assertAllowed(identifier, remoteAddress);
         User user = userRepository.findByEmailIgnoreCase(identifier)
                 .or(() -> userRepository.findByUsernameIgnoreCase(identifier))
-                .orElseThrow(() -> unauthorized("Invalid username or password"));
-        if (!isActive(user) || user.getPasswordHash() == null || !passwordEncoder.matches(password, user.getPasswordHash())) {
+                .orElse(null);
+        if (user == null) {
+            loginAttemptService.recordFailure(identifier, remoteAddress);
             throw unauthorized("Invalid username or password");
         }
+        if (!isActive(user) || user.getPasswordHash() == null || !passwordEncoder.matches(password, user.getPasswordHash())) {
+            loginAttemptService.recordFailure(identifier, remoteAddress);
+            throw unauthorized("Invalid username or password");
+        }
+        loginAttemptService.recordSuccess(identifier, remoteAddress);
         return issueAuth(user, "auth.login", null);
     }
 
@@ -243,6 +261,7 @@ public class AuthService {
 
     private User createHumanUser(String email, String username, String displayName, String password, boolean emailVerified) {
         assertUniqueUser(email, username);
+        passwordPolicy.validateNewPassword(password, "password");
         User user = new User();
         user.setEmail(email);
         user.setUsername(username);
