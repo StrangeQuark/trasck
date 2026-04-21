@@ -392,7 +392,7 @@ public class AuditService {
                 export.exportJobId(),
                 export.fileAttachmentId(),
                 export.filename(),
-                export.storageKey(),
+                null,
                 export.checksum(),
                 export.sizeBytes(),
                 snapshot.entries()

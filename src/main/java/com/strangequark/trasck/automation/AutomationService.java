@@ -1077,6 +1077,7 @@ public class AutomationService {
         if (hasText(request.secret())) {
             webhook.setSecretHash(sha256(request.secret()));
             webhook.setSecretEncrypted(secretCipherService.encrypt(request.secret()));
+            webhook.setSecretKeyId(newWebhookSecretKeyId());
         }
         if (create || request.eventTypes() != null) {
             webhook.setEventTypes(toJsonArray(request.eventTypes(), "eventTypes"));
@@ -1859,6 +1860,7 @@ public class AutomationService {
         String signature = hmacSha256(secretCipherService.decrypt(webhook.getSecretEncrypted()), timestamp + "." + body);
         requestBuilder
                 .header("X-Trasck-Webhook-Timestamp", timestamp)
+                .header("X-Trasck-Webhook-Signature-Key-Id", webhookSigningKeyId(webhook))
                 .header("X-Trasck-Webhook-Signature", "sha256=" + signature);
     }
 
@@ -1870,6 +1872,14 @@ public class AutomationService {
         } catch (Exception ex) {
             throw new IllegalStateException("Unable to sign webhook delivery", ex);
         }
+    }
+
+    private String webhookSigningKeyId(Webhook webhook) {
+        return hasText(webhook.getSecretKeyId()) ? webhook.getSecretKeyId() : "legacy";
+    }
+
+    private String newWebhookSecretKeyId() {
+        return "whsec_" + UUID.randomUUID();
     }
 
     private int nonNegative(Integer value, String fieldName) {

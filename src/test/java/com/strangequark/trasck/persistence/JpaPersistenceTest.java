@@ -238,6 +238,7 @@ class JpaPersistenceTest {
         assertThat(columnExists("automation_worker_settings", "agent_dispatch_attempt_pruning_automatic_enabled")).isTrue();
         assertThat(columnExists("email_provider_settings", "smtp_password_encrypted")).isTrue();
         assertThat(columnExists("webhooks", "secret_encrypted")).isTrue();
+        assertThat(columnExists("webhooks", "secret_key_id")).isTrue();
         assertThat(columnExists("import_mapping_templates", "transform_preset_id")).isTrue();
         assertThat(columnExists("import_transform_presets", "version")).isTrue();
         assertThat(columnExists("import_transform_preset_versions", "change_type")).isTrue();
