@@ -18,7 +18,8 @@ public record WebhookResponse(
                 webhook.getWorkspaceId(),
                 webhook.getName(),
                 webhook.getUrl(),
-                webhook.getSecretHash() != null && !webhook.getSecretHash().isBlank(),
+                (webhook.getSecretHash() != null && !webhook.getSecretHash().isBlank())
+                        || (webhook.getSecretEncrypted() != null && !webhook.getSecretEncrypted().isBlank()),
                 JsonValues.toJavaValue(webhook.getEventTypes()),
                 webhook.getEnabled()
         );

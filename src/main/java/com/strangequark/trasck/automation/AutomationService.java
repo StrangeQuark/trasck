@@ -49,6 +49,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.DateTimeException;
 import java.time.Duration;
@@ -64,6 +65,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.UUID;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -80,6 +83,7 @@ public class AutomationService {
 
     private static final int MAX_WORKER_RUN_RETENTION_EXPORT_ROWS = 10_000;
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
+    private static final String WEBHOOK_SIGNATURE_ALGORITHM = "HmacSHA256";
 
     private final ObjectMapper objectMapper;
     private final AutomationRuleRepository automationRuleRepository;
@@ -858,11 +862,16 @@ public class AutomationService {
         try {
             URI webhookUri = URI.create(webhook.getUrl());
             outboundUrlPolicy.validateResolvedHttpUri(webhookUri, "webhook.url");
-            HttpRequest request = HttpRequest.newBuilder(webhookUri)
+            String body = delivery.getPayload() == null ? "{}" : delivery.getPayload().toString();
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(webhookUri)
                     .timeout(Duration.ofSeconds(5))
                     .header("Content-Type", "application/json")
                     .header("X-Trasck-Event-Type", delivery.getEventType())
-                    .POST(HttpRequest.BodyPublishers.ofString(delivery.getPayload() == null ? "{}" : delivery.getPayload().toString()))
+                    .header("X-Trasck-Webhook-Id", webhook.getId().toString())
+                    .header("X-Trasck-Webhook-Delivery-Id", delivery.getId().toString());
+            addWebhookSignatureHeaders(requestBuilder, webhook, body);
+            HttpRequest request = requestBuilder
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             delivery.setResponseCode(response.statusCode());
@@ -1067,6 +1076,7 @@ public class AutomationService {
         }
         if (hasText(request.secret())) {
             webhook.setSecretHash(sha256(request.secret()));
+            webhook.setSecretEncrypted(secretCipherService.encrypt(request.secret()));
         }
         if (create || request.eventTypes() != null) {
             webhook.setEventTypes(toJsonArray(request.eventTypes(), "eventTypes"));
@@ -1835,9 +1845,30 @@ public class AutomationService {
 
     private String sha256(String value) {
         try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception ex) {
             throw new IllegalStateException("Unable to hash webhook secret", ex);
+        }
+    }
+
+    private void addWebhookSignatureHeaders(HttpRequest.Builder requestBuilder, Webhook webhook, String body) {
+        if (!hasText(webhook.getSecretEncrypted())) {
+            return;
+        }
+        String timestamp = String.valueOf(OffsetDateTime.now(ZoneOffset.UTC).toEpochSecond());
+        String signature = hmacSha256(secretCipherService.decrypt(webhook.getSecretEncrypted()), timestamp + "." + body);
+        requestBuilder
+                .header("X-Trasck-Webhook-Timestamp", timestamp)
+                .header("X-Trasck-Webhook-Signature", "sha256=" + signature);
+    }
+
+    private String hmacSha256(String secret, String value) {
+        try {
+            Mac mac = Mac.getInstance(WEBHOOK_SIGNATURE_ALGORITHM);
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), WEBHOOK_SIGNATURE_ALGORITHM));
+            return HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ex) {
+            throw new IllegalStateException("Unable to sign webhook delivery", ex);
         }
     }
 
