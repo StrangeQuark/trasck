@@ -29,6 +29,40 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
     );
 
     @Query(value = """
+            select *
+            from work_items
+            where project_id = :projectId
+              and deleted_at is null
+              and visibility <> 'private'
+            order by rank asc, id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<WorkItem> findPublicProjectFirstCursorPage(
+            @Param("projectId") UUID projectId,
+            @Param("limit") int limit
+    );
+
+    @Query(value = """
+            select *
+            from work_items
+            where project_id = :projectId
+              and deleted_at is null
+              and visibility <> 'private'
+              and (
+                  rank > :cursorRank
+                  or (rank = :cursorRank and id::text > :cursorId)
+              )
+            order by rank asc, id asc
+            limit :limit
+            """, nativeQuery = true)
+    List<WorkItem> findPublicProjectCursorPageAfter(
+            @Param("projectId") UUID projectId,
+            @Param("cursorRank") String cursorRank,
+            @Param("cursorId") String cursorId,
+            @Param("limit") int limit
+    );
+
+    @Query(value = """
             select wi.*
             from work_items wi
             join custom_field_values cfv on cfv.work_item_id = wi.id

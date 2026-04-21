@@ -1,8 +1,10 @@
 package com.strangequark.trasck.project;
 
+import com.strangequark.trasck.api.CursorPageResponse;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -19,5 +21,22 @@ public class PublicProjectController {
     @GetMapping("/{projectId}")
     public PublicProjectResponse getPublicProject(@PathVariable UUID projectId) {
         return publicProjectService.getPublicProject(projectId);
+    }
+
+    @GetMapping("/{projectId}/work-items")
+    public CursorPageResponse<PublicWorkItemResponse> listPublicProjectWorkItems(
+            @PathVariable UUID projectId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String cursor
+    ) {
+        return publicProjectService.listPublicWorkItems(projectId, limit, cursor);
+    }
+
+    @GetMapping("/{projectId}/work-items/{workItemId}")
+    public PublicWorkItemResponse getPublicProjectWorkItem(
+            @PathVariable UUID projectId,
+            @PathVariable UUID workItemId
+    ) {
+        return publicProjectService.getPublicWorkItem(projectId, workItemId);
     }
 }
