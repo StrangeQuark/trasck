@@ -14,6 +14,10 @@ public interface ProjectMembershipRepository extends JpaRepository<ProjectMember
 
     boolean existsByProjectIdAndUserIdAndStatusIgnoreCase(UUID projectId, UUID userId, String status);
 
+    long countByProjectIdAndRoleIdAndStatusIgnoreCase(UUID projectId, UUID roleId, String status);
+
+    List<ProjectMembership> findByProjectIdAndStatusIgnoreCaseOrderByCreatedAtDesc(UUID projectId, String status);
+
     @Query("""
             select membership
             from ProjectMembership membership

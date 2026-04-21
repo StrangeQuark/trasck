@@ -1,5 +1,6 @@
 package com.strangequark.trasck.access;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -10,23 +11,31 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @DynamicInsert
 @DynamicUpdate
-@Table(name = "roles")
-public class Role {
+@Table(name = "role_versions")
+public class RoleVersion {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "id")
     private UUID id;
 
+    @Column(name = "role_id")
+    private UUID roleId;
+
     @Column(name = "workspace_id")
     private UUID workspaceId;
 
     @Column(name = "project_id")
     private UUID projectId;
+
+    @Column(name = "version_number")
+    private Integer versionNumber;
 
     @Column(name = "name")
     private String name;
@@ -46,15 +55,21 @@ public class Role {
     @Column(name = "status")
     private String status;
 
-    @Column(name = "archived_at")
-    private OffsetDateTime archivedAt;
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "permission_keys")
+    private JsonNode permissionKeys;
+
+    @Column(name = "change_type")
+    private String changeType;
+
+    @Column(name = "change_note")
+    private String changeNote;
+
+    @Column(name = "created_by_id")
+    private UUID createdById;
 
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
-
-    @Column(name = "updated_at")
-    private OffsetDateTime updatedAt;
-
 
     public UUID getId() {
         return id;
@@ -62,6 +77,14 @@ public class Role {
 
     public void setId(UUID id) {
         this.id = id;
+    }
+
+    public UUID getRoleId() {
+        return roleId;
+    }
+
+    public void setRoleId(UUID roleId) {
+        this.roleId = roleId;
     }
 
     public UUID getWorkspaceId() {
@@ -78,6 +101,14 @@ public class Role {
 
     public void setProjectId(UUID projectId) {
         this.projectId = projectId;
+    }
+
+    public Integer getVersionNumber() {
+        return versionNumber;
+    }
+
+    public void setVersionNumber(Integer versionNumber) {
+        this.versionNumber = versionNumber;
     }
 
     public String getName() {
@@ -128,12 +159,36 @@ public class Role {
         this.status = status;
     }
 
-    public OffsetDateTime getArchivedAt() {
-        return archivedAt;
+    public JsonNode getPermissionKeys() {
+        return permissionKeys;
     }
 
-    public void setArchivedAt(OffsetDateTime archivedAt) {
-        this.archivedAt = archivedAt;
+    public void setPermissionKeys(JsonNode permissionKeys) {
+        this.permissionKeys = permissionKeys;
+    }
+
+    public String getChangeType() {
+        return changeType;
+    }
+
+    public void setChangeType(String changeType) {
+        this.changeType = changeType;
+    }
+
+    public String getChangeNote() {
+        return changeNote;
+    }
+
+    public void setChangeNote(String changeNote) {
+        this.changeNote = changeNote;
+    }
+
+    public UUID getCreatedById() {
+        return createdById;
+    }
+
+    public void setCreatedById(UUID createdById) {
+        this.createdById = createdById;
     }
 
     public OffsetDateTime getCreatedAt() {
@@ -142,13 +197,5 @@ public class Role {
 
     public void setCreatedAt(OffsetDateTime createdAt) {
         this.createdAt = createdAt;
-    }
-
-    public OffsetDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(OffsetDateTime updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

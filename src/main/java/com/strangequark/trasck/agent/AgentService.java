@@ -1998,12 +1998,18 @@ public class AgentService {
     }
 
     private Role resolveWorkspaceRole(UUID workspaceId, UUID roleId) {
+        Role role;
         if (roleId != null) {
-            return roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
+            role = roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
                     .orElseThrow(() -> badRequest("Workspace role not found"));
+        } else {
+            role = roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
+                    .orElseThrow(() -> badRequest("Default member role not found"));
         }
-        return roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
-                .orElseThrow(() -> badRequest("Default member role not found"));
+        if (!"active".equalsIgnoreCase(role.getStatus() == null ? "active" : role.getStatus())) {
+            throw badRequest("Workspace role not found");
+        }
+        return role;
     }
 
     private User createAgentUser(String displayName, String requestedUsername) {

@@ -17,4 +17,6 @@ public interface WorkspaceMembershipRepository extends JpaRepository<WorkspaceMe
     List<WorkspaceMembership> findByWorkspaceIdOrderByCreatedAtDesc(UUID workspaceId);
 
     List<WorkspaceMembership> findByWorkspaceIdAndStatusIgnoreCaseOrderByJoinedAtDescCreatedAtDesc(UUID workspaceId, String status);
+
+    long countByWorkspaceIdAndRoleIdAndStatusIgnoreCase(UUID workspaceId, UUID roleId, String status);
 }
