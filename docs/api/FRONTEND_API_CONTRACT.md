@@ -33,7 +33,7 @@ Small configuration or scoped-detail endpoints still return arrays:
 
 - Setup seed data, auth token lists, service-token lists.
 - Workspace/project configuration lists: teams, team memberships, project-team assignments, labels including workspace label cleanup, boards, board columns, board swimlanes, workflows, statuses, roles, field configurations, releases, release work items, roadmaps, and roadmap items.
-- Dashboard, dashboard widget, saved filter, saved view, report query catalog, repository connection list/create/deactivate, agent provider/profile/credential lists, including workspace/project/team scoped dashboard/filter/view/catalog lists.
+- Program, program-project assignment, dashboard, dashboard widget, saved filter, saved view, report query catalog, repository connection list/create/deactivate, agent provider/profile/credential lists, including workspace/project/team scoped dashboard/filter/view/catalog lists.
 - Notification, notification preference, automation rule, automation condition, automation action, automation job/log, webhook/delivery, import job, import sample, import transform preset/version, import mapping template, import record, and import conflict-resolution job lists.
 - Work item collaboration lists: comments, links, watchers, work logs, labels, attachments.
 - Reporting history lists for one work item or one scoped report.
@@ -218,6 +218,26 @@ export interface ReportQueryCatalogEntry {
   parametersSchema: JsonObject;
   visibility: Dashboard["visibility"];
   enabled: boolean;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+export interface ProgramProject {
+  programId: UUID;
+  projectId: UUID;
+  position: number;
+  createdAt: ISODateTime;
+}
+
+export interface Program {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  description?: string;
+  status: "active" | "archived";
+  roadmapConfig: JsonObject;
+  reportConfig: JsonObject;
+  projects: ProgramProject[];
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
 }
@@ -463,6 +483,15 @@ export interface NotificationPreference {
   eventType: string;
   enabled: boolean;
   config: unknown;
+}
+
+export interface NotificationCreateRequest {
+  userId: UUID;
+  type?: string;
+  title: string;
+  body?: string;
+  targetType?: string;
+  targetId?: UUID;
 }
 
 export interface AutomationCondition {
@@ -1016,7 +1045,8 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status and `dispatchAttempts` until review or completion.
 11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
 12. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
-13. System and workspace/project security: active system admins can list/grant/revoke dedicated system-admin access through `GET/POST/DELETE /api/v1/system-admins`; production-like grant/revoke requires recent authentication; workspace admins can inspect and update effective attachment/import/export limits plus anonymous-read policy through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`; project admins can inspect inherited limits, update project visibility, and apply project overrides through `GET/PATCH /api/v1/projects/{projectId}/security-policy`; public project reads require both workspace anonymous-read and project `public` visibility. Workspace-admin member cleanup can revoke pending invitations with `DELETE /api/v1/workspaces/{workspaceId}/invitations/{invitationId}` and remove direct workspace users with `DELETE /api/v1/workspaces/{workspaceId}/users/{userId}`.
+13. Program reporting: create or update a workspace program with `GET/POST /api/v1/workspaces/{workspaceId}/programs` and `GET/PATCH/DELETE /api/v1/programs/{programId}`, assign projects with `PUT /api/v1/programs/{programId}/projects/{projectId}`, then read `GET /api/v1/reports/programs/{programId}/dashboard-summary`.
+14. System and workspace/project security: active system admins can list/grant/revoke dedicated system-admin access through `GET/POST/DELETE /api/v1/system-admins`; production-like grant/revoke requires recent authentication; workspace admins can inspect and update effective attachment/import/export limits plus anonymous-read policy through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`; project admins can inspect inherited limits, update project visibility, and apply project overrides through `GET/PATCH /api/v1/projects/{projectId}/security-policy`; public project reads require both workspace anonymous-read and project `public` visibility. Workspace-admin member cleanup can revoke pending invitations with `DELETE /api/v1/workspaces/{workspaceId}/invitations/{invitationId}` and remove direct workspace users with `DELETE /api/v1/workspaces/{workspaceId}/users/{userId}`.
 
 ## Endpoint Coverage
 
@@ -1025,9 +1055,9 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, workspace labels create/list/delete, work-item labels add/remove/list, attachments.
 - Product configuration: custom field/context/value CRUD, field configuration CRUD with project/type overrides, screen/field/assignment CRUD.
 - Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, saved-filter-ID and inline-query board swimlanes, board work item columns/swimlanes, board-scoped rank/transition/move commands with target column/status transition derivation and card-level relative insertion, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
-- Reporting: work item histories, work-log summary, project/workspace/program dashboard summaries, focused project/workspace import-completion metrics, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
+- Reporting/programs: program CRUD, program project assignment/removal, work item histories, work-log summary, project/workspace/program dashboard summaries, focused project/workspace import-completion metrics, snapshot run/backfill/reconcile, snapshot retention policy, rollup run/backfill, raw snapshots with `rollupSeries`, iteration reports.
 - Dashboards/search: dashboard CRUD/render, widget CRUD, workspace/project/team dashboard lists, saved filter CRUD plus workspace/project/team lists and cursor-paged work item execution, saved view CRUD plus workspace/project/team lists, report query catalog CRUD plus workspace/project/team lists.
-- Notifications/automation/import: current-user notifications, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings including scheduled import conflict-resolution pickup, scheduled import review export pickup, and agent dispatch-attempt retention pruning, worker run/health/export/prune APIs with `import_conflict_resolution` and `import_review_export` worker rows and worker-type filters, automatic worker-run pruning interval/window settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, workspace import sample settings, guarded backend sample catalog/job creation, parser, editable record APIs, filtered record lists, record version history and backend diff rows, job-level diff/export rows, stored JSON/CSV import diff export artifact history/download, stored CSV import review table exports for conflict jobs/export jobs/completion metrics, versioned transform preset plus immutable preset version history, clone-from-version, clone-retarget preview/apply, mapping-template, value lookup, transformation pipeline validation, type/status translation, materialization snapshot/skipped/conflicted counters, single/selected/filtered conflict review and resolution with paginated preview safeguards, queued filtered conflict-resolution jobs for larger sets, guarded completion with typed open-conflict confirmation and first-class audit/report fields, and exact/modified rerun APIs.
+- Notifications/automation/import: current-user notifications, workspace-admin direct notification creation, notification read state, notification preferences, automation rule/condition/action CRUD, manual rule execution with job logs, worker settings including scheduled import conflict-resolution pickup, scheduled import review export pickup, and agent dispatch-attempt retention pruning, worker run/health/export/prune APIs with `import_conflict_resolution` and `import_review_export` worker rows and worker-type filters, automatic worker-run pruning interval/window settings, workspace email provider settings, webhook CRUD plus queued delivery records/retry/cancel/process APIs, Maildev/SMTP-backed email delivery records/retry/cancel/process APIs, import job lifecycle, workspace import sample settings, guarded backend sample catalog/job creation, parser, editable record APIs, filtered record lists, record version history and backend diff rows, job-level diff/export rows, stored JSON/CSV import diff export artifact history/download, stored CSV import review table exports for conflict jobs/export jobs/completion metrics, versioned transform preset plus immutable preset version history, clone-from-version, clone-retarget preview/apply, mapping-template, value lookup, transformation pipeline validation, type/status translation, materialization snapshot/skipped/conflicted counters, single/selected/filtered conflict review and resolution with paginated preview safeguards, queued filtered conflict-resolution jobs for larger sets, guarded completion with typed open-conflict confirmation and first-class audit/report fields, and exact/modified rerun APIs.
 - Audit/admin: cursor-page audit log, audit retention policy/export/prune, cursor-page export jobs, export metadata/download, domain event replay.
 - Agents: providers, credentials, callback keys, profiles, repository connections create/list/deactivate, assignment, dispatch attempts, worker dispatch, worker protocol, callbacks, task messages/artifacts/review actions.
 

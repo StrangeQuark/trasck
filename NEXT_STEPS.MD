@@ -4,14 +4,14 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. When real notification-producing workflows are ready for Playwright, should notification read coverage be driven through automation delivery, direct user notification events, or both?
-    - Answer: Both
-2. Should full program APIs start with workspace program CRUD and project assignment only, or include program roadmap/report configuration in the first pass?
-    - Answer: Include everything in the first pass
-3. Should workspace invitation cancellation and workspace user removal get frontend admin screens before broader member-management UI exists, or remain API-only until that UI is designed?
-    - Answer: Add a section in Primary Next Steps to add that UI work, and remain API-only until that UI work is taken
-4. Should public-read controls be added to the frontend workspace/project settings screens now, or remain backend/API-only until the settings UX is expanded?
-    - Answer: Add a section in Primary Next Steps to add that UX work, and remain API-only until that UX work is taken
+1. Should workspace member-management UI live in the existing Admin area first, or should it introduce a broader Workspace Settings route now?
+    - Answer: Introduce a broader route now
+2. Should public-read controls show only workspace/project policy toggles first, or also show effective anonymous-read status and an anonymous preview link?
+    - Answer: Also show anonymous status and link
+3. Should program management get a small portfolio admin UI before high-risk Playwright worker/import/agent coverage, or wait for a broader portfolio planning UI pass?
+    - Answer: Wait for the broader pass, make sure we are adding this as a task in NEXT_STEPS.MD
+4. Should direct workspace-admin notification creation get a UI, or remain API/test-fixture-only until notification center UX is expanded?
+    - Answer: Wait until the expansion, but add it as a note in NEXT_STEPS.MD
 
 ## Current State
 
@@ -23,7 +23,7 @@ Authentication and authorization foundations are implemented. Username/password 
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list/delete, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team, planning, board, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin and workspace security-policy flows, a Project Settings route that currently hosts project security-policy controls and is the planned home for future project-admin settings, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
+Team, planning, board, program/portfolio, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces except the newest program/portfolio and member-management/public-read UX follow-ups, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin and workspace security-policy flows, a Project Settings route that currently hosts project security-policy controls and is the planned home for future project-admin settings, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
 
 Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered, versioned, diffed, materialized, conflicted, resolved, rerun, completed with guarded open-conflict acceptance, and exercised through checked-in CSV/Jira/Rally sample payload flows. Reusable transform presets have immutable version records, clone-from-version recovery, clone-and-retarget preview/apply, template-local overrides, value lookups, type translations, status translations, materialization snapshots, exact/modified reruns, and conflict-resolution worker pickup.
 
@@ -39,29 +39,62 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client that is refreshed after backend endpoint batches, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy and public project read boundaries, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, attachment byte upload/download, workspace and work-item label cleanup, team/membership/planning/board/swimlane/release/roadmap resources, reporting history/snapshot reads and snapshot execution controls, team-scoped dashboard/filter/view/report-query lists, repository connections, invitation cancellation, workspace-admin user creation/removal, notification preference/default CRUD, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs where public cleanup APIs exist, and a browser smoke test for the frontend shell. The committed baseline currently tracks 215 covered backend routes, 2 planned lower-risk routes, and 144 planned high-risk routes. The remaining lower-risk gaps are notification-read coverage waiting for real notifications and program dashboard summary coverage waiting for full program CRUD/project-assignment APIs; the next broad testing work should also move into high-risk asynchronous worker/import/export/agent surfaces.
+The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy and public project read boundaries, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, attachment byte upload/download, workspace and work-item label cleanup, team/membership/planning/board/swimlane/release/roadmap resources, reporting history/snapshot reads and snapshot execution controls, program CRUD/project assignment/dashboard summary coverage, team-scoped dashboard/filter/view/report-query lists, repository connections, invitation cancellation, workspace-admin user creation/removal, notification preference/default CRUD plus direct and automation-created notification read coverage, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs where public cleanup APIs exist, and a browser smoke test for the frontend shell. The committed baseline currently tracks 226 covered backend routes, 0 ordinary planned routes, and 144 planned high-risk routes. The remaining backend route work is now the high-risk asynchronous worker/import/export/agent/security surfaces.
 
 The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, requires Redis-backed auth throttling in production-like profiles and pings Redis on startup, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection and production-like recent-login step-up for grant/revoke, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, rate-limits callback/worker auth failures, enforces workspace-admin and project-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, system-admin step-up UX hardening, production deployment health/observability around Redis-backed throttling, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Complete Remaining Fixture-Gated Lower-Risk Route-Baseline Playwright Gaps
+### 1. Workspace Member Management Frontend UI
 
-Goal: close the last two non-worker, non-external backend API gaps from the committed route coverage baseline once their real product fixture sources exist.
+Goal: expose the existing workspace invitation cancellation and workspace-admin user removal APIs through a usable admin UI before broad manual testing.
 
 Planned work:
 
-- Add deterministic coverage for `PATCH /api/v1/notifications/{notificationId}/read` once real notification-producing workflows exist.
-- Add deterministic coverage for `GET /api/v1/reports/programs/{programId}/dashboard-summary` once full program CRUD and project-assignment APIs exist.
-- Keep the committed route baseline at `src/test/resources/backend-route-coverage.tsv` accurate, with `coverageOwner` on every covered row and no owner on `planned` or `planned-high-risk` rows.
-- Keep any new tests data-driven and isolated so they create uniquely named data, clean up through public APIs, and do not depend on direct database access.
+- Add a workspace members/invitations screen in the chosen admin/settings location.
+- List pending invitations when the backend has the list endpoint needed for the UI, and provide revoke controls against `DELETE /api/v1/workspaces/{workspaceId}/invitations/{invitationId}`.
+- List active workspace users when the backend has the list endpoint needed for the UI, and provide guarded removal controls against `DELETE /api/v1/workspaces/{workspaceId}/users/{userId}`.
+- Show clear destructive-action confirmation and backend error handling for self-removal, accepted invitations, and last/admin boundary cases.
+- Add frontend route/component tests and Java Playwright browser coverage for the critical member-management paths.
 
 Done when:
 
-- The committed route baseline has zero ordinary `planned` rows, or each remaining ordinary `planned` row is intentionally blocked by a documented product/API fixture decision.
+- Workspace admins can revoke pending invitations and remove workspace users without using direct database access or REST-client-only workflows.
 
-### 2. Complete High-Risk Asynchronous Playwright API Coverage
+### 2. Public-Read Settings Frontend UX
+
+Goal: make the implemented workspace/project anonymous-read controls inspectable and changeable from the frontend before manual testing.
+
+Planned work:
+
+- Surface workspace `anonymousReadEnabled` from `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`.
+- Surface project `visibility`, inherited limits, and effective `publicReadEnabled` from `GET/PATCH /api/v1/projects/{projectId}/security-policy`.
+- Add confirmation/preview affordances for making a project public, including any effective anonymous-read status decided in the questions above.
+- Keep public project reads as domain-enforced backend checks; frontend controls should explain state by reading policy responses rather than duplicating access logic.
+- Add frontend tests and Java Playwright browser coverage around private-to-public and public-to-private settings.
+
+Done when:
+
+- A workspace/project admin can configure and verify public-read state through the UI without guessing which backend switches are active.
+
+### 3. Program And Portfolio Frontend UI
+
+Goal: expose the new full program API through a lightweight frontend surface so program/reporting behavior can be manually tested.
+
+Planned work:
+
+- Add workspace program list/create/edit/archive UI for `GET/POST /api/v1/workspaces/{workspaceId}/programs` and `GET/PATCH/DELETE /api/v1/programs/{programId}`.
+- Add project assignment/removal and ordering controls for `GET/PUT/DELETE /api/v1/programs/{programId}/projects/{projectId}`.
+- Add editable roadmap/report configuration fields with safe JSON-object validation or purpose-built controls for the first supported keys.
+- Link to or embed `GET /api/v1/reports/programs/{programId}/dashboard-summary` so assigned-project reporting can be reviewed.
+- Add frontend route/component tests and Java Playwright API/browser coverage for program creation, project assignment, summary read, and archive.
+
+Done when:
+
+- Program CRUD, project assignment, and program summary reporting can be exercised without REST-client-only setup.
+
+### 4. Complete High-Risk Asynchronous Playwright API Coverage
 
 Goal: make sure the route-by-route suite covers the surfaces most likely to hide security, tenant-boundary, worker, callback, and durable-state bugs.
 
@@ -77,7 +110,7 @@ Done when:
 
 - High-risk route baseline rows move from `planned-high-risk` to `covered`, with focused denial/security assertions in addition to happy paths.
 
-### 3. Playwright Frontend Workflow Coverage
+### 5. Playwright Frontend Workflow Coverage
 
 Goal: cover the implemented Vite React screens through browser workflows, not only API calls.
 
@@ -91,7 +124,7 @@ Done when:
 
 - The major implemented frontend routes have smoke and core-workflow browser tests that fail on broken navigation, broken forms, missing critical data, or visible runtime errors.
 
-### 4. Playwright Full-Stack Security And Regression Coverage
+### 6. Playwright Full-Stack Security And Regression Coverage
 
 Goal: encode the security audit and production-readiness risks as executable full-stack regression tests.
 
@@ -105,7 +138,7 @@ Done when:
 
 - The `trasck-test` suite can replace the current manual checklist for broad regression confidence while still leaving exploratory testing for usability issues.
 
-### 5. Human Manual Test And Bug-Fix Loop
+### 7. Human Manual Test And Bug-Fix Loop
 
 Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
@@ -119,7 +152,7 @@ Done when:
 
 - A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, and agent task inspection without touching the database.
 
-### 6. External Worker And Provider Readiness
+### 8. External Worker And Provider Readiness
 
 Goal: prepare the provider-neutral worker boundary for the first non-stub external agent execution without weakening normal Jira/Rally-style product behavior.
 
@@ -134,7 +167,7 @@ Done when:
 
 - Admins can preview runtime payloads, rotate/revoke credentials, inspect dispatch attempts, and test a local worker without enabling paid or unmanaged external execution.
 
-### 7. Production Security Packaging Follow-Ups
+### 9. Production Security Packaging Follow-Ups
 
 Goal: turn the hardened local/manual-test baseline into deployable production controls.
 
@@ -199,6 +232,7 @@ The following work should be completed before the application is ready for a mea
 - Use the route-based frontend shell and global toast/error handling as the manual-test surface.
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
+- Add workspace member/invitation management UI, public-read settings UI, and program/portfolio management UI so those implemented backend APIs do not require REST-client-only manual testing.
 - Replace remaining raw JSON child editors with field-specific forms for common nested admin/import records.
 - Expand frontend route tests and replace remaining raw ID inputs only after corresponding list endpoints exist.
 - Keep board drag/drop card-level insertion covered in route/component tests as the board UI grows.

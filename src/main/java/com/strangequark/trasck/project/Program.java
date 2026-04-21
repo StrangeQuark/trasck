@@ -1,5 +1,6 @@
 package com.strangequark.trasck.project;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -10,6 +11,8 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @DynamicInsert
@@ -33,6 +36,14 @@ public class Program {
 
     @Column(name = "status")
     private String status;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "roadmap_config")
+    private JsonNode roadmapConfig;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "report_config")
+    private JsonNode reportConfig;
 
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
@@ -79,6 +90,22 @@ public class Program {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public JsonNode getRoadmapConfig() {
+        return roadmapConfig;
+    }
+
+    public void setRoadmapConfig(JsonNode roadmapConfig) {
+        this.roadmapConfig = roadmapConfig;
+    }
+
+    public JsonNode getReportConfig() {
+        return reportConfig;
+    }
+
+    public void setReportConfig(JsonNode reportConfig) {
+        this.reportConfig = reportConfig;
     }
 
     public OffsetDateTime getCreatedAt() {

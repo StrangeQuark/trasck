@@ -1091,22 +1091,14 @@ class WorkItemApiIntegrationTest {
         return new ReportingScopeSeed(teamId, iterationId);
     }
 
-    private UUID seedProgram(UUID workspaceId, UUID projectId) {
-        UUID programId = UUID.randomUUID();
-        jdbcTemplate.update(
-                "insert into programs (id, workspace_id, name, description, status) values (?, ?, ?, ?, ?)",
-                programId,
-                workspaceId,
-                "Portfolio " + programId.toString().substring(0, 8),
-                "Program for cross-project reporting.",
-                "active"
-        );
-        jdbcTemplate.update(
-                "insert into program_projects (program_id, project_id, position) values (?, ?, ?)",
-                programId,
-                projectId,
-                0
-        );
+    private UUID seedProgram(UUID workspaceId, UUID projectId) throws Exception {
+        JsonNode program = postJson("/api/v1/workspaces/" + workspaceId + "/programs", objectMapper.createObjectNode()
+                .put("name", "Portfolio " + UUID.randomUUID().toString().substring(0, 8))
+                .put("description", "Program for cross-project reporting.")
+                .set("reportConfig", objectMapper.createObjectNode().put("defaultWindow", "current_quarter")));
+        UUID programId = uuid(program, "/id");
+        putJson("/api/v1/programs/" + programId + "/projects/" + projectId, objectMapper.createObjectNode()
+                .put("position", 0));
         return programId;
     }
 
