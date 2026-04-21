@@ -221,9 +221,9 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(136);
+        assertThat(tableCount).isEqualTo(137);
         assertThat(permissionCount).isEqualTo(32);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(133);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(134);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(106);
         assertThat(tableExists("system_admins")).isTrue();
         assertThat(tableExists("workspace_security_policies")).isTrue();
@@ -237,6 +237,7 @@ class JpaPersistenceTest {
         assertThat(columnExists("automation_worker_settings", "agent_dispatch_attempt_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "agent_dispatch_attempt_pruning_automatic_enabled")).isTrue();
         assertThat(columnExists("email_provider_settings", "smtp_password_encrypted")).isTrue();
+        assertThat(columnExists("webhooks", "secret_encrypted")).isTrue();
         assertThat(columnExists("import_mapping_templates", "transform_preset_id")).isTrue();
         assertThat(columnExists("import_transform_presets", "version")).isTrue();
         assertThat(columnExists("import_transform_preset_versions", "change_type")).isTrue();
