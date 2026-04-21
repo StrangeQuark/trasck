@@ -18,7 +18,7 @@ The compose file starts:
 
 The Vite frontend runs on `localhost:8080` during local development and reads the backend URL from `VITE_TRASCK_API_BASE_URL`, then `VITE_API_URL`, then `http://localhost:6100`.
 
-Default local credentials are defined in `.env`. They are development-only values and must be replaced outside local testing.
+Copy `.env.example` to `.env` for local development and keep `.env` untracked. Example values are development-only and must be replaced outside local testing.
 
 ## Start The Service Manually
 
@@ -36,6 +36,7 @@ SPRING_DATASOURCE_USERNAME=postgres \
 SPRING_DATASOURCE_PASSWORD=password \
 TRASCK_JWT_SECRET=dev-only-change-me-dev-only-change-me-dev-only-change-me-32 \
 TRASCK_SECRETS_ENCRYPTION_KEY=dev-only-change-me-dev-only-change-me-dev-only-change-me-32 \
+TRASCK_OAUTH_ASSERTION_SECRET=dev-only-change-me-dev-only-change-me-dev-only-change-me-32 \
 sh mvnw spring-boot:run
 ```
 
@@ -48,6 +49,13 @@ Core local variables:
 - `SPRING_DATASOURCE_PASSWORD`: PostgreSQL password.
 - `TRASCK_JWT_SECRET`: HMAC secret for user access JWTs.
 - `TRASCK_SECRETS_ENCRYPTION_KEY`: secret material used by the encrypted DB secret abstraction.
+- `TRASCK_OAUTH_ASSERTION_SECRET`: secret material used by the provider-neutral verified identity endpoint.
+- `TRASCK_AUTH_COOKIE_SECURE`: defaults to `false` locally; production-like profiles require `true`.
+- `TRASCK_OAUTH_SUCCESS_REDIRECT`: local OAuth success redirect defaults to `http://localhost:8080/auth/callback`; production-like profiles require a non-local URL.
+- `CORS_ALLOWED_ORIGINS`: comma-separated browser origins allowed to use credentialed CORS requests.
+- `TRASCK_OUTBOUND_URL_ALLOWED_HOSTS`: comma-separated exact host or host:port entries that may bypass the default-deny outbound URL policy for trusted local/private webhook, worker, OAuth side-fetch, or S3-compatible targets.
+- `TRASCK_PASSWORD_MIN_LENGTH`, `TRASCK_LOGIN_MAX_FAILURES`, `TRASCK_LOGIN_FAILURE_WINDOW`, and `TRASCK_LOGIN_LOCKOUT_DURATION`: password and login throttling controls.
+- `TRASCK_TRUST_FORWARDED_FOR`: defaults to `false`. Set only when Trasck is behind a trusted reverse proxy that controls `X-Forwarded-For`.
 - `SPRING_JPA_OPEN_IN_VIEW`: defaults to `false`.
 - `SPRING_JPA_HIBERNATE_DDL_AUTO`: defaults to `validate`; Flyway owns schema creation.
 - `SPRING_MAIL_HOST`: defaults to `localhost`; Docker Compose sets it to `maildev`.
@@ -57,6 +65,8 @@ Core local variables:
 - `TRASCK_IMPORT_SAMPLE_JOBS_ENABLED`: defaults to `false`. Local/default profiles can use admin sample import endpoints when the workspace import setting is enabled. Production-like `prod`, `production`, `staging`, and `hosted` profiles require this variable to be `true` and the workspace `sampleJobsEnabled` setting to be enabled before sample jobs can be created.
 
 Agent callback private keys and provider credentials are stored encrypted in `agent_provider_credentials.encrypted_secret`. `TRASCK_SECRETS_ENCRYPTION_KEY` can be raw text, hex, standard Base64, or URL-safe Base64. A direct 16, 24, or 32 byte decoded key is used as AES key material; otherwise Trasck derives an AES-256 key with SHA-256.
+
+Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup when known development secrets, weak database passwords, insecure cookie flags, local OAuth redirects, or local/wildcard CORS origins are active. OpenAPI and Swagger remain public in local/non-production profiles, but production-like profiles require authenticated admin access.
 
 ## Health Check
 

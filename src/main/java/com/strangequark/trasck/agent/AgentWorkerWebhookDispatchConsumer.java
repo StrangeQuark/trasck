@@ -6,11 +6,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.event.ConfiguredDomainEventConsumer;
 import com.strangequark.trasck.event.DomainEvent;
 import com.strangequark.trasck.event.EventConsumerConfig;
+import com.strangequark.trasck.security.OutboundUrlPolicy;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -28,7 +30,10 @@ public class AgentWorkerWebhookDispatchConsumer implements ConfiguredDomainEvent
     private final AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository;
     private final AgentTaskEventRepository agentTaskEventRepository;
     private final AgentCallbackJwtService callbackJwtService;
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final OutboundUrlPolicy outboundUrlPolicy;
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2))
+            .build();
 
     public AgentWorkerWebhookDispatchConsumer(
             ObjectMapper objectMapper,
@@ -37,7 +42,8 @@ public class AgentWorkerWebhookDispatchConsumer implements ConfiguredDomainEvent
             AgentProfileRepository agentProfileRepository,
             AgentTaskRepositoryLinkRepository agentTaskRepositoryLinkRepository,
             AgentTaskEventRepository agentTaskEventRepository,
-            AgentCallbackJwtService callbackJwtService
+            AgentCallbackJwtService callbackJwtService,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.objectMapper = objectMapper;
         this.agentTaskRepository = agentTaskRepository;
@@ -46,6 +52,7 @@ public class AgentWorkerWebhookDispatchConsumer implements ConfiguredDomainEvent
         this.agentTaskRepositoryLinkRepository = agentTaskRepositoryLinkRepository;
         this.agentTaskEventRepository = agentTaskEventRepository;
         this.callbackJwtService = callbackJwtService;
+        this.outboundUrlPolicy = outboundUrlPolicy;
     }
 
     @Override
@@ -89,7 +96,10 @@ public class AgentWorkerWebhookDispatchConsumer implements ConfiguredDomainEvent
 
     private void postDispatch(DomainEvent event, AgentTask task, String callbackUrl, AgentWorkerTaskResponse dispatch) {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(callbackUrl))
+            URI callbackUri = URI.create(callbackUrl);
+            outboundUrlPolicy.validateResolvedHttpUri(callbackUri, "callbackUrl");
+            HttpRequest request = HttpRequest.newBuilder(callbackUri)
+                    .timeout(Duration.ofSeconds(5))
                     .header("Content-Type", "application/json")
                     .header("X-Trasck-Domain-Event-Id", event.getId().toString())
                     .header("X-Trasck-Agent-Task-Id", task.getId().toString())

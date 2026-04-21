@@ -4,14 +4,16 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should production-like profile validation fail startup when known development defaults are active, including JWT/encryption secrets, database passwords, insecure cookie flags, and missing required production secrets, or should the first hardening pass warn only until deployment packaging is finalized?
-    - Answer: Yes, fail startup for production like profiles
-2. Should Swagger/OpenAPI be disabled entirely outside local/dev, or stay available in production behind authenticated admin access?
-    - Answer: Stay available in prod behind authenticated admin access
-3. Should the outbound URL policy default-deny localhost, private-network, link-local, and cloud metadata endpoints for webhooks, agent worker callbacks, OAuth side fetches, and S3-compatible storage unless explicitly allowlisted?
-    - Answer: Yes, default-deny those destinations
-4. Should checked-in `.env` files be removed from source control now and replaced with committed `.env.example` files in both repos, or wait until a deployment secrets strategy is written?
-    - Answer: Yes remove them now and replace with .env.example only
+1. Should production OpenAPI/Swagger admin access remain available to any active workspace admin, or should it move to a dedicated system-admin/global permission before hosted multi-tenant deployments?
+    - Answer: Move to a dedicated system-admin/global permission
+2. Should outbound URL allowlisting remain exact host/host:port entries for now, or should the next hardening pass add CIDR ranges and wildcard host patterns for self-hosted deployments?
+    - Answer: Add CIDR ranged and wildcard host patterns now
+3. Should login throttling stay in-memory for the first manual test, or move to database/Redis-backed counters before any shared deployment?
+    - Answer: Move to database/Redis-backed counters
+4. Should the next security hardening task prioritize upload/import size and content-type limits first, or frontend secret-display masking and one-time token reveal cleanup first?
+    - Answer: Implement them both
+5. Should the frontend production nginx CSP be templated from the deployed API/browser origins, or stay as the current static local/default baseline until deployment packaging is finalized?
+    - Answer: Yes, template it now
 
 ## Current State
 
@@ -39,28 +41,30 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The audit found no `6101` configuration references and no frontend access-token local storage, but it identified production hardening work that must be completed before broad manual testing: remove tracked `.env` files in favor of examples, reject unsafe production defaults, gate Swagger/OpenAPI, add explicit CORS, add outbound egress/SSRF controls and timeouts, tighten login/password policy, enforce upload/import size controls, harden frontend secret display and container headers, and add security/dependency regression gates.
+The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The first hardening pass removed checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, gates Swagger/OpenAPI behind authenticated admin access in production-like profiles, enables explicit CORS, adds default-deny outbound URL/SSRF policy and HTTP timeouts for configured outbound calls, tightens password/login protections including default-untrusted `X-Forwarded-For`, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks remaining production work: upload/import size and content-type controls, frontend secret-display polish, Java dependency vulnerability automation, callback/worker auth-failure rate/audit controls, stronger secret-management/KMS abstraction, centralized production error/log redaction, and a broader dedicated security regression suite.
 
 
 ## Primary Next Steps
 
-### 1. Production Security Hardening And Regression Coverage
+### 1. Complete Remaining Security Hardening And Regression Coverage
 
-Goal: close the security findings before manual end-to-end testing so manual testing starts from a hardened baseline.
+Goal: finish the remaining security findings that still matter before broad manual end-to-end testing.
 
 Planned work:
 
-- Work through `SECURITY_AUDIT.MD` findings in priority order.
-- Move unsafe deployable defaults and secret-bearing configuration behind environment variables, document required variables, untrack real `.env` files, and keep committed examples clearly non-production.
-- Tighten backend security where findings require it: production startup validation, cookie flags, CSRF boundaries, explicit CORS, Swagger/OpenAPI gating, OAuth redirect/provider validation, JWT/key handling, token scope enforcement, permission checks, tenant scoping, public-read gates, request validation, upload/download safety, export/download authorization, redaction, audit logging, rate/size limits where practical, and secure error responses.
-- Tighten integration and worker surfaces: outbound URL/SSRF policy, HTTP timeouts, webhook validation, email/SMTP secret handling, import payload limits and parser safety, export artifact access, automation execution boundaries, AI agent runtime/callback/worker credential handling, and prevention of secrets leaking into task context, dispatch attempts, activity, audit, comments, exports, or frontend JSON previews.
-- Tighten frontend security where findings require it: no browser access-token persistence, CSRF handling, API-base configuration safety, route/data exposure checks, dangerous rendering review, generated-client usage, admin-only screen assumptions, masked secret fields, one-time token reveal handling, container security headers, reproducible Docker builds, and accidental display of secret-bearing payloads.
-- Add targeted backend/frontend tests for every fixed class of issue, including authorization denial, cross-workspace/project isolation, production secret config, CORS, Swagger/OpenAPI denial, egress URL validation, login/password protections, redaction, attachment/export access, callback/token validation, and frontend no-secret/no-token persistence checks.
-- Run dependency and build verification for both repos, including Maven tests, frontend tests, frontend build, `npm audit`, Java dependency vulnerability scanning once added, and any static checks added during the hardening pass.
+- Add explicit upload/download, attachment metadata, export-artifact, and import parser size/content-type limits with rejection tests.
+- Harden frontend secret presentation: masked webhook/credential fields, dedicated one-time token reveal UI, and safer JSON preview behavior for secret-shaped fields.
+- Add Java dependency vulnerability automation in CI and keep frontend `npm audit` in the normal verification path.
+- Add callback/generic-worker authentication failure rate limiting and audit logging before any external worker is enabled.
+- Expand redaction tests so provider credentials, callback private keys, worker tokens, SMTP passwords, webhook secrets, API tokens, task context, dispatch attempts, comments, activity, audit, exports, and frontend previews do not leak raw secrets.
+- Decide whether production OpenAPI admin access should stay workspace-admin based or move behind a system-admin/global permission.
+- Decide whether outbound URL allowlists need CIDR/wildcard support or should stay exact host/port entries for the first manual test.
+- Decide whether login throttling remains in-memory through local manual testing or moves to database/Redis-backed counters before shared deployments.
+- Re-run Maven tests, frontend tests, frontend build, `npm audit`, port/config checks, and any newly added security checks.
 
 Done when:
 
-- All critical/high security findings are fixed, medium findings are fixed or explicitly documented with a production-safe mitigation plan, no real-user data leak paths remain known, and both repos pass the security regression suite.
+- Remaining high-risk security findings are fixed, medium findings are either fixed or explicitly documented with production-safe mitigations, and both repos pass the expanded security regression suite.
 
 ### 2. Manual End-To-End Product Test Pass
 
@@ -102,12 +106,12 @@ The following work should be completed before the application is ready for a mea
 
 ### Backend Readiness
 
-- Complete the production hardening pass from `SECURITY_AUDIT.MD` before broad manual product testing begins.
+- Complete the remaining security hardening pass from `SECURITY_AUDIT.MD` before broad manual product testing begins.
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization/record editing/history/conflict resolution, and worker history as more APIs are exposed.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import review export jobs, import record versions, clone-retarget, snapshot reruns, and external callback/delivery failures as those flows are added.
 - Review dedicated automatic worker-run pruning interval/window defaults after manual worker history grows enough to validate cadence.
-- Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials, and ensure all secret-bearing deployment configuration comes from environment variables rather than checked-in files.
+- Keep SMTP secrets database-encrypted until the shared external secret-management abstraction is introduced for both SMTP and non-stub agent credentials, and keep all secret-bearing deployment configuration in environment variables rather than checked-in files.
 - Manually test a larger real-world import set through the UI, including field diff tables, backend-generated review CSV export artifacts, export artifact downloads, scheduled conflict pickup, and guarded sample job creation, before expanding import update/delete semantics further.
 
 ### Product Configuration Readiness

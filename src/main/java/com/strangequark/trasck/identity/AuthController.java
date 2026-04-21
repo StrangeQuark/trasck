@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -27,22 +28,25 @@ public class AuthController {
     private final ApiTokenService apiTokenService;
     private final CurrentUserService currentUserService;
     private final boolean cookieSecure;
+    private final boolean trustForwardedFor;
 
     public AuthController(
             AuthService authService,
             ApiTokenService apiTokenService,
             CurrentUserService currentUserService,
-            @Value("${trasck.security.cookie-secure:false}") boolean cookieSecure
+            @Value("${trasck.security.cookie-secure:false}") boolean cookieSecure,
+            @Value("${trasck.security.trust-forwarded-for:false}") boolean trustForwardedFor
     ) {
         this.authService = authService;
         this.apiTokenService = apiTokenService;
         this.currentUserService = currentUserService;
         this.cookieSecure = cookieSecure;
+        this.trustForwardedFor = trustForwardedFor;
     }
 
     @PostMapping("/auth/login")
-    public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request) {
-        return authenticated(authService.login(request), HttpStatus.OK);
+    public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request, HttpServletRequest httpRequest) {
+        return authenticated(authService.login(request, remoteAddress(httpRequest)), HttpStatus.OK);
     }
 
     @PostMapping("/auth/register")
@@ -151,5 +155,13 @@ public class AuthController {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.SET_COOKIE, cookie.toString())
                 .body(response);
+    }
+
+    private String remoteAddress(HttpServletRequest request) {
+        String forwardedFor = trustForwardedFor ? request.getHeader("X-Forwarded-For") : null;
+        if (forwardedFor != null && !forwardedFor.isBlank()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }

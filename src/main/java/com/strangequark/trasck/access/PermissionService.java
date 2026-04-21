@@ -48,6 +48,15 @@ public class PermissionService {
     }
 
     @Transactional(readOnly = true)
+    public boolean canAccessOpenApiDocs(Authentication authentication) {
+        return principal(authentication)
+                .filter(principal -> principal.allowsScope("workspace.admin"))
+                .map(principal -> workspaceMembershipRepository.findByUserIdAndStatusIgnoreCase(principal.userId(), "active").stream()
+                        .anyMatch(membership -> rolePermissionRepository.roleHasPermission(membership.getRoleId(), "workspace.admin")))
+                .orElse(false);
+    }
+
+    @Transactional(readOnly = true)
     public boolean canUseWorkspace(Authentication authentication, UUID workspaceId, String permissionKey) {
         return principal(authentication)
                 .filter(principal -> principal.allowsScope(permissionKey))
