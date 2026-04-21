@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
+import com.strangequark.trasck.access.WorkspaceMembershipRepository;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.workspace.Workspace;
@@ -22,6 +23,7 @@ public class NotificationService {
     private final ObjectMapper objectMapper;
     private final NotificationRepository notificationRepository;
     private final NotificationPreferenceRepository notificationPreferenceRepository;
+    private final WorkspaceMembershipRepository workspaceMembershipRepository;
     private final WorkspaceRepository workspaceRepository;
     private final CurrentUserService currentUserService;
     private final PermissionService permissionService;
@@ -31,6 +33,7 @@ public class NotificationService {
             ObjectMapper objectMapper,
             NotificationRepository notificationRepository,
             NotificationPreferenceRepository notificationPreferenceRepository,
+            WorkspaceMembershipRepository workspaceMembershipRepository,
             WorkspaceRepository workspaceRepository,
             CurrentUserService currentUserService,
             PermissionService permissionService,
@@ -39,6 +42,7 @@ public class NotificationService {
         this.objectMapper = objectMapper;
         this.notificationRepository = notificationRepository;
         this.notificationPreferenceRepository = notificationPreferenceRepository;
+        this.workspaceMembershipRepository = workspaceMembershipRepository;
         this.workspaceRepository = workspaceRepository;
         this.currentUserService = currentUserService;
         this.permissionService = permissionService;
@@ -56,6 +60,31 @@ public class NotificationService {
     }
 
     @Transactional
+    public NotificationResponse createNotification(UUID workspaceId, NotificationRequest request) {
+        NotificationRequest createRequest = required(request, "request");
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        UUID userId = required(createRequest.userId(), "userId");
+        if (!workspaceMembershipRepository.existsByWorkspaceIdAndUserIdAndStatusIgnoreCase(workspaceId, userId, "active")) {
+            throw badRequest("userId must be an active workspace member");
+        }
+        Notification notification = new Notification();
+        notification.setWorkspaceId(workspaceId);
+        notification.setUserId(userId);
+        notification.setActorId(actorId);
+        notification.setType(optionalText(createRequest.type(), "direct", 120, "type"));
+        notification.setTitle(requiredText(createRequest.title(), "title", 255));
+        notification.setBody(createRequest.body());
+        notification.setTargetType(optionalText(createRequest.targetType(), null, 80, "targetType"));
+        notification.setTargetId(createRequest.targetId());
+        notification.setCreatedAt(OffsetDateTime.now());
+        Notification saved = notificationRepository.save(notification);
+        recordNotificationEvent(saved, "notification.created", actorId);
+        return NotificationResponse.from(saved);
+    }
+
+    @Transactional
     public NotificationResponse markRead(UUID notificationId) {
         UUID actorId = currentUserService.requireUserId();
         Notification notification = notificationRepository.findByIdAndUserId(notificationId, actorId)
@@ -64,6 +93,7 @@ public class NotificationService {
         if (notification.getReadAt() == null) {
             notification.setReadAt(OffsetDateTime.now());
             notificationRepository.save(notification);
+            recordNotificationEvent(notification, "notification.read", actorId);
         }
         return NotificationResponse.from(notification);
     }
@@ -237,6 +267,22 @@ public class NotificationService {
         domainEventService.record(preference.getWorkspaceId(), "notification_preference", preference.getId(), eventType, payload);
     }
 
+    private void recordNotificationEvent(Notification notification, String eventType, UUID actorId) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("notificationId", notification.getId().toString())
+                .put("userId", notification.getUserId().toString())
+                .put("type", notification.getType())
+                .put("title", notification.getTitle())
+                .put("actorUserId", actorId.toString());
+        if (notification.getTargetType() != null) {
+            payload.put("targetType", notification.getTargetType());
+        }
+        if (notification.getTargetId() != null) {
+            payload.put("targetId", notification.getTargetId().toString());
+        }
+        domainEventService.record(notification.getWorkspaceId(), "notification", notification.getId(), eventType, payload);
+    }
+
     private <T> T required(T value, String fieldName) {
         if (value == null) {
             throw badRequest(fieldName + " is required");
@@ -245,10 +291,26 @@ public class NotificationService {
     }
 
     private String requiredText(String value, String fieldName) {
+        return requiredText(value, fieldName, null);
+    }
+
+    private String requiredText(String value, String fieldName, Integer maxLength) {
         if (!hasText(value)) {
             throw badRequest(fieldName + " is required");
         }
-        return value.trim();
+        String trimmed = value.trim();
+        if (maxLength != null && trimmed.length() > maxLength) {
+            throw badRequest(fieldName + " must be " + maxLength + " characters or fewer");
+        }
+        return trimmed;
+    }
+
+    private String optionalText(String value, String defaultValue, int maxLength, String fieldName) {
+        String normalized = hasText(value) ? value.trim() : defaultValue;
+        if (normalized != null && normalized.length() > maxLength) {
+            throw badRequest(fieldName + " must be " + maxLength + " characters or fewer");
+        }
+        return normalized;
     }
 
     private boolean hasText(String value) {

@@ -17,10 +17,17 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
@@ -112,6 +119,47 @@ public class AuthService {
     @Transactional(readOnly = true)
     public AuthUserResponse currentUser(UUID userId) {
         return AuthUserResponse.from(activeUser(userId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkspaceInvitationResponse> listInvitations(UUID workspaceId, String status) {
+        UUID workspace = required(workspaceId, "workspaceId");
+        String normalizedStatus = normalizeStatus(status, "pending");
+        List<UserInvitation> invitations = "all".equals(normalizedStatus)
+                ? userInvitationRepository.findByWorkspaceIdOrderByCreatedAtDesc(workspace)
+                : userInvitationRepository.findByWorkspaceIdAndStatusIgnoreCaseOrderByCreatedAtDesc(workspace, normalizedStatus);
+        Map<UUID, Role> roles = rolesById(invitations.stream()
+                .flatMap(invitation -> Stream.of(invitation.getRoleId(), invitation.getProjectRoleId()))
+                .filter(Objects::nonNull)
+                .toList());
+        return invitations.stream()
+                .map(invitation -> WorkspaceInvitationResponse.from(
+                        invitation,
+                        roles.get(invitation.getRoleId()),
+                        roles.get(invitation.getProjectRoleId())
+                ))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkspaceMemberResponse> listWorkspaceUsers(UUID workspaceId, String status) {
+        UUID workspace = required(workspaceId, "workspaceId");
+        String normalizedStatus = normalizeStatus(status, "active");
+        List<WorkspaceMembership> memberships = "all".equals(normalizedStatus)
+                ? workspaceMembershipRepository.findByWorkspaceIdOrderByCreatedAtDesc(workspace)
+                : workspaceMembershipRepository.findByWorkspaceIdAndStatusIgnoreCaseOrderByJoinedAtDescCreatedAtDesc(workspace, normalizedStatus);
+        Map<UUID, User> users = usersById(memberships.stream()
+                .map(WorkspaceMembership::getUserId)
+                .filter(Objects::nonNull)
+                .toList());
+        Map<UUID, Role> roles = rolesById(memberships.stream()
+                .map(WorkspaceMembership::getRoleId)
+                .filter(Objects::nonNull)
+                .toList());
+        return memberships.stream()
+                .filter(membership -> isHumanUser(users.get(membership.getUserId())))
+                .map(membership -> WorkspaceMemberResponse.from(membership, users.get(membership.getUserId()), roles.get(membership.getRoleId())))
+                .toList();
     }
 
     @Transactional
@@ -421,6 +469,10 @@ public class AuthService {
         return Boolean.TRUE.equals(user.getActive()) && user.getDeletedAt() == null;
     }
 
+    private boolean isHumanUser(User user) {
+        return user != null && "human".equalsIgnoreCase(user.getAccountType());
+    }
+
     private JsonNode metadataWithVerifiedEmail(JsonNode metadata, Boolean emailVerified) {
         ObjectNode result = objectMapper.createObjectNode();
         if (metadata != null && !metadata.isNull()) {
@@ -553,6 +605,38 @@ public class AuthService {
 
     private String firstText(String preferred, String fallback) {
         return preferred == null || preferred.isBlank() ? fallback : preferred.trim();
+    }
+
+    private String normalizeStatus(String status, String defaultStatus) {
+        if (status == null || status.isBlank()) {
+            return defaultStatus;
+        }
+        return status.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private Map<UUID, Role> rolesById(Collection<UUID> roleIds) {
+        List<UUID> ids = distinctIds(roleIds);
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return roleRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(Role::getId, Function.identity()));
+    }
+
+    private Map<UUID, User> usersById(Collection<UUID> userIds) {
+        List<UUID> ids = distinctIds(userIds);
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return userRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(User::getId, Function.identity()));
+    }
+
+    private List<UUID> distinctIds(Collection<UUID> ids) {
+        return ids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
     }
 
     private record ProjectInviteTarget(UUID projectId, UUID projectRoleId) {

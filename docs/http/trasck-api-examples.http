@@ -4,12 +4,14 @@
 @csrfToken = replace-with-csrf-token
 @workspaceId = replace-with-workspace-id
 @projectId = replace-with-project-id
+@programId = replace-with-program-id
 @roleId = replace-with-workspace-role-id
 @invitationId = replace-with-invitation-id
 @userId = replace-with-user-id
 @teamId = replace-with-team-id
 @iterationId = replace-with-iteration-id
 @workItemId = replace-with-work-item-id
+@notificationId = replace-with-notification-id
 @commentId = replace-with-comment-id
 @workLogId = replace-with-work-log-id
 @attachmentId = replace-with-attachment-id
@@ -286,6 +288,28 @@ Content-Type: application/json
 
 {}
 
+### Create Direct Notification For Workspace Member
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/notifications
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "userId": "{{userId}}",
+  "type": "direct",
+  "title": "Review requested",
+  "body": "Please review the linked work item.",
+  "targetType": "work_item",
+  "targetId": "{{workItemId}}"
+}
+
+### List My Notifications
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/notifications
+Authorization: Bearer {{accessToken}}
+
+### Mark Notification Read
+PATCH {{baseUrl}}/api/v1/notifications/{{notificationId}}/read
+Authorization: Bearer {{accessToken}}
+
 ### Add Attachment Metadata
 POST {{baseUrl}}/api/v1/work-items/{{workItemId}}/attachments
 Authorization: Bearer {{accessToken}}
@@ -326,6 +350,40 @@ Authorization: Bearer {{accessToken}}
 
 ### Reporting: Team Iteration Dashboard Summary
 GET {{baseUrl}}/api/v1/reports/projects/{{projectId}}/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z&teamId={{teamId}}&iterationId={{iterationId}}
+Authorization: Bearer {{accessToken}}
+
+### Create Program
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/programs
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Delivery Platform",
+  "description": "Cross-project delivery program",
+  "status": "active",
+  "roadmapConfig": {
+    "horizon": "quarter"
+  },
+  "reportConfig": {
+    "defaultGranularity": "weekly"
+  }
+}
+
+### List Programs
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/programs
+Authorization: Bearer {{accessToken}}
+
+### Assign Project To Program
+PUT {{baseUrl}}/api/v1/programs/{{programId}}/projects/{{projectId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "position": 0
+}
+
+### Reporting: Program Dashboard Summary
+GET {{baseUrl}}/api/v1/reports/programs/{{programId}}/dashboard-summary?from=2026-04-18T00:00:00Z&to=2026-04-20T00:00:00Z
 Authorization: Bearer {{accessToken}}
 
 ### Reporting: Run Workspace Snapshots

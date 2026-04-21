@@ -28,6 +28,14 @@ public class NotificationController {
         return notificationService.listNotifications(workspaceId);
     }
 
+    @PostMapping("/workspaces/{workspaceId}/notifications")
+    public ResponseEntity<NotificationResponse> createNotification(
+            @PathVariable UUID workspaceId,
+            @RequestBody NotificationRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(notificationService.createNotification(workspaceId, request));
+    }
+
     @PatchMapping("/notifications/{notificationId}/read")
     public NotificationResponse markRead(@PathVariable UUID notificationId) {
         return notificationService.markRead(notificationId);
