@@ -393,7 +393,7 @@ public class WorkItemCollaborationService {
         attachment.setContentType(metadata.contentType());
         attachment.setStorageKey(requiredText(metadata.storageKey(), "storageKey"));
         Long sizeBytes = required(metadata.sizeBytes(), "sizeBytes");
-        contentLimitPolicy.validateAttachmentMetadata(item.getWorkspaceId(), attachment.getFilename(), metadata.contentType(), sizeBytes);
+        contentLimitPolicy.validateAttachmentMetadata(item.getWorkspaceId(), item.getProjectId(), attachment.getFilename(), metadata.contentType(), sizeBytes);
         attachment.setSizeBytes(sizeBytes);
         attachment.setChecksum(metadata.checksum());
         attachment.setVisibility(normalizeAttachmentVisibility(metadata.visibility()));
@@ -419,7 +419,7 @@ public class WorkItemCollaborationService {
         UUID actorId = requireProjectPermission(item, "work_item.update");
         String normalizedFilename = requiredText(filename, "filename");
         byte[] attachmentContent = required(content, "file");
-        contentLimitPolicy.validateAttachmentUpload(item.getWorkspaceId(), normalizedFilename, contentType, attachmentContent);
+        contentLimitPolicy.validateAttachmentUpload(item.getWorkspaceId(), item.getProjectId(), normalizedFilename, contentType, attachmentContent);
         AttachmentStorageConfig storageConfig = resolveActiveStorageConfig(item.getWorkspaceId(), storageConfigId);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
@@ -453,10 +453,10 @@ public class WorkItemCollaborationService {
         WorkItem item = readableWorkItem(workItemId);
         requireProjectPermission(item, "work_item.read");
         Attachment attachment = attachmentForWorkItem(workItemId, attachmentId);
-        contentLimitPolicy.validateAttachmentDownload(item.getWorkspaceId(), attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
+        contentLimitPolicy.validateAttachmentDownload(item.getWorkspaceId(), item.getProjectId(), attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
         AttachmentStorageConfig storageConfig = resolveExistingStorageConfig(item.getWorkspaceId(), attachment.getStorageConfigId());
         byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
-        contentLimitPolicy.validateAttachmentDownload(item.getWorkspaceId(), attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
+        contentLimitPolicy.validateAttachmentDownload(item.getWorkspaceId(), item.getProjectId(), attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
         return new AttachmentFileResponse(attachment.getFilename(), attachment.getContentType(), bytes);
     }
 

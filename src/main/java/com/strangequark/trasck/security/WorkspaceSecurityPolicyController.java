@@ -30,4 +30,17 @@ public class WorkspaceSecurityPolicyController {
     ) {
         return policyService.updateWorkspacePolicy(workspaceId, request);
     }
+
+    @GetMapping("/projects/{projectId}/security-policy")
+    public ProjectSecurityPolicyResponse getProjectPolicy(@PathVariable UUID projectId) {
+        return policyService.getProjectPolicy(projectId);
+    }
+
+    @PatchMapping("/projects/{projectId}/security-policy")
+    public ProjectSecurityPolicyResponse updateProjectPolicy(
+            @PathVariable UUID projectId,
+            @RequestBody(required = false) WorkspaceSecurityPolicyRequest request
+    ) {
+        return policyService.updateProjectPolicy(projectId, request);
+    }
 }

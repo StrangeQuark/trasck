@@ -68,13 +68,13 @@ Highest-risk entry points:
 - Callback JWTs are provider scoped and can be invalidated immediately by callback key rotation.
 - Generic worker endpoints require active encrypted worker-token credentials with `metadata.workerId`.
 - Activity/audit payload redaction covers token, password, secret, credential, authorization, cookie, hash, and private-key shaped fields.
-- Production-like profiles fail startup when known development secrets, weak database passwords, insecure auth-cookie flags, local OAuth success redirects, or local/wildcard CORS origins are active.
+- Production-like profiles fail startup when known development secrets, weak database passwords, insecure auth-cookie flags, local OAuth success redirects, local/wildcard CORS origins, or non-Redis rate-limit stores are active.
 - OpenAPI and Swagger stay public for local/non-production contract work, but production-like profiles require authenticated dedicated system-admin access.
 - CORS is explicitly allowlist-based through `CORS_ALLOWED_ORIGINS`.
 - Configured outbound HTTP targets are protected by a shared default-deny URL policy for localhost, private, link-local, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts, wildcard hosts, or CIDR ranges are allowlisted.
-- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address using database-backed counters by default or Redis-backed counters when enabled, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
+- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address using database-backed counters by default or Redis-backed counters when enabled, production-like profiles require Redis-backed throttling, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
 - Login, agent callback, and generic worker authentication failures write durable security telemetry rows.
-- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce effective workspace byte limits and allowlisted content types.
+- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce effective deployment/workspace/project byte limits and allowlisted content types.
 - API error bodies and production server-error logs pass through centralized redaction for token/password/secret/authorization/private-key shaped text.
 - Saved-filter/query-builder SQL uses whitelisted fields/operators and bind parameters. Raw SQL-shaped keys are rejected in user-configurable report/filter/dashboard paths.
 - Local filesystem attachment storage normalizes paths and rejects storage keys that escape the configured root.
@@ -209,7 +209,7 @@ Regression tests/checks:
 
 Severity: High before public hosting
 
-Status: Resolved for single-node and horizontally scaled counter storage options; production packaging still needs a decision on whether Redis is mandatory.
+Status: Resolved for local database-backed counters and production-like Redis-backed counters; production packaging still needs Redis connectivity/health-check UX.
 
 Affected files:
 
@@ -219,6 +219,7 @@ Affected files:
 Current state:
 
 - Login failures are throttled by identifier plus remote address using configurable database-backed counters by default or Redis-backed counters when `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`, with configurable failure window and lockout duration.
+- Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup unless `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`.
 - Spoofable `X-Forwarded-For` values are ignored by default and only used when `TRASCK_TRUST_FORWARDED_FOR=true` is set behind a trusted reverse proxy.
 - New human passwords are validated for configured minimum length and common development password rejection during setup, invitation registration, and workspace-admin direct user creation.
 - Auth failure events are persisted for login failures, agent callback failures, and generic worker token failures.
@@ -229,7 +230,7 @@ Impact:
 
 Recommended fix:
 
-- Decide whether Redis-backed counters should be mandatory for all production-like profiles, or only for explicitly horizontally scaled deployments.
+- Add deployment health checks or startup connectivity validation so production-like deployments prove Redis is reachable before hosted traffic is accepted.
 - Consider stronger entropy checks once password reset/change flows exist.
 
 Regression tests/checks:
@@ -351,7 +352,7 @@ Current state:
 
 - Attachment storage validates checksum and storage path.
 - Local path traversal is handled.
-- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce effective workspace size and content-type limits. Workspace admins can override deployment defaults through the workspace security policy API/UI.
+- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce effective deployment/workspace/project size and content-type limits. Workspace admins can override deployment defaults through the workspace security policy API/UI, and project admins can apply inherited project overrides through the project security policy API/UI.
 - Multipart request sizes are environment-configurable.
 
 Impact:
@@ -361,7 +362,6 @@ Impact:
 Recommended fix:
 
 - Add antivirus/content scanning hooks as a future provider boundary.
-- Keep content-type/size policies workspace-wide for the first manual test pass, and revisit project-level overrides only if real tenants need them.
 
 Regression tests/checks:
 
@@ -546,8 +546,8 @@ Regression tests/checks:
 
 The next production-packaging hardening work should focus on:
 
-1. Decide whether Redis-backed counters should be mandatory for production-like profiles or only required for horizontally scaled deployments.
-2. Add recent-login or step-up confirmation before system-admin grant/revoke operations in hosted deployments.
+1. Add production packaging checks or health probes proving Redis-backed throttling is reachable before hosted traffic is accepted.
+2. Design the browser UX/API shape for recent-login or step-up confirmation prompts before hosted system-admin operations.
 3. Add broader redaction, authorization denial, tenant-isolation, outbound URL, attachment/export authorization, and frontend secret persistence regression coverage.
 4. Plan the shared external secret-management abstraction for SMTP, S3-compatible storage, and non-stub agent credentials.
 5. Keep the required OWASP Dependency Check gate stable with NVD API key/cache tuning if scanner throttling appears.
@@ -556,26 +556,30 @@ The next production-packaging hardening work should focus on:
 
 - The operational and security changes made in this implementation pass were reviewed for obvious authorization, tenant-boundary, data-exposure, and local-runtime regressions.
 - No hard-coded production credentials were found in source code. Real `.env` files have been removed from the repos and ignored; committed examples remain local-only.
-- Development defaults are now rejected under production-like profiles.
+- Development defaults and non-Redis rate-limit stores are now rejected under production-like profiles.
 - OpenAPI/Swagger production access now requires active system-admin status instead of workspace-admin role membership.
-- System-admin list/grant/revoke APIs and frontend controls are implemented, with last-active-admin revocation protection.
+- System-admin list/grant/revoke APIs and frontend controls are implemented, with last-active-admin revocation protection and production-like recent-login step-up on grant/revoke.
 - `system.admin` is not seeded into workspace/project role permissions, including wildcard workspace-owner roles.
 - Outbound allowlisting now supports exact hosts, host:port entries, wildcard hosts, wildcard host:port entries, and CIDR ranges.
-- Login/callback/worker auth failures now use durable database counters by default, optional Redis counters for shared deployments, and telemetry rows.
-- Attachment/import/export content limits are workspace-admin configurable, and frontend secret-display hardening is implemented.
+- Login/callback/worker auth failures now use durable database counters by default, Redis counters are mandatory in production-like profiles, and telemetry rows persist security-relevant failures.
+- Attachment/import/export content limits are workspace-admin and project-admin configurable, and frontend secret-display hardening is implemented.
 - Centralized API error/log redaction is implemented for production-facing API errors, while common malformed input, access-denial, missing route, unsupported method/media type, and upload-size failures keep explicit non-5xx statuses.
 - No non-documentation `6101` config references were found.
 
 ## Verification Run
 
 - Backend compile passed: `./mvnw -q -DskipTests compile`.
+- Latest production-security follow-up compile passed: `mvn -q -DskipTests compile`.
 - Targeted backend security/persistence rerun passed: `./mvnw -q -Dtest=LoginAttemptServiceTest,SecretTextRedactorTest,ProductionSecurityIntegrationTest,JpaPersistenceTest test`.
+- Latest production-security follow-up tests passed: `mvn -q -Dtest=ProductionSecurityStartupValidatorTest,ProductionSecurityIntegrationTest,JpaPersistenceTest test`.
 - Full backend `./mvnw -q test` passed with 33 tests, 0 failures, 0 errors, and 0 skipped.
 - Frontend `npm test -- --run` passed with 2 files and 11 tests.
+- Latest frontend `npm test` passed with 2 files and 11 tests.
 - Frontend `npm run build` passed; generated Vite `dist/` output is ignored.
 - Frontend `npm audit --audit-level=high` reported zero vulnerabilities.
 - Backend Java dependency-check is a required CI gate through `./mvnw -Psecurity-audit -DskipTests dependency-check:check`; CI uses dependency-check data caching and an optional `NVD_API_KEY` secret.
 - Docker Compose config validation passed with the internal Redis service present and not host-published.
+- Java Playwright harness compile and Docker Compose config validation passed in `../trasck-test`.
 - Only `.env.example` files remain in the two repos.
 - `git diff --check` passed in both repos.
 - No listeners were found on ports `6100` or `6101` after verification.

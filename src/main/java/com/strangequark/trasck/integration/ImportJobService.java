@@ -309,7 +309,13 @@ public class ImportJobService {
         job.setRequestedById(actorId);
         job.setProvider(requiredText(createRequest.provider(), "provider").toLowerCase());
         job.setStatus("queued");
-        job.setConfig(toJsonObject(createRequest.config()));
+        ObjectNode config = toJsonObject(createRequest.config());
+        UUID targetProjectId = targetProjectId(config);
+        if (targetProjectId != null) {
+            activeProjectInWorkspace(targetProjectId, workspaceId);
+            config.put("targetProjectId", targetProjectId.toString());
+        }
+        job.setConfig(config);
         ImportJob saved = importJobRepository.save(job);
         recordJobEvent(saved, "import_job.created", actorId);
         return response(saved);
@@ -947,7 +953,7 @@ public class ImportJobService {
         ImportJob job = mutableImportJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
         String content = requiredText(parseRequest.content(), "content");
-        contentLimitPolicy.validateImportParse(job.getWorkspaceId(), job.getProvider(), parseRequest.sourceType(), parseRequest.contentType(), content);
+        contentLimitPolicy.validateImportParse(job.getWorkspaceId(), targetProjectId(job), job.getProvider(), parseRequest.sourceType(), parseRequest.contentType(), content);
         List<ParsedImportRecord> parsed = parseRecords(job.getProvider(), parseRequest.sourceType(), content);
         List<ImportJobRecordResponse> responses = new ArrayList<>();
         for (ParsedImportRecord parsedRecord : parsed) {
@@ -1727,7 +1733,7 @@ public class ImportJobService {
         byte[] content = "csv".equals(format)
                 ? jobVersionDiffCsvBytes(export.diffs(), exportRequest.filterColumn(), exportRequest.filter())
                 : jsonBytes(export);
-        contentLimitPolicy.validateGeneratedExport(job.getWorkspaceId(), filename, contentType, content);
+        contentLimitPolicy.validateGeneratedExport(job.getWorkspaceId(), targetProjectId(job), filename, contentType, content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, contentType, content, null)
@@ -2958,7 +2964,7 @@ public class ImportJobService {
         return objectMapper.valueToTree(value);
     }
 
-    private JsonNode toJsonObject(Object value) {
+    private ObjectNode toJsonObject(Object value) {
         JsonNode json = toJsonNullable(value);
         if (json == null || json.isNull()) {
             return objectMapper.createObjectNode();
@@ -2966,7 +2972,26 @@ public class ImportJobService {
         if (!json.isObject()) {
             throw badRequest("JSON value must be an object");
         }
-        return json;
+        return (ObjectNode) json;
+    }
+
+    private UUID targetProjectId(ImportJob job) {
+        return targetProjectId(job == null ? null : job.getConfig());
+    }
+
+    private UUID targetProjectId(JsonNode config) {
+        if (config == null || !config.hasNonNull("targetProjectId")) {
+            return null;
+        }
+        String value = config.get("targetProjectId").asText(null);
+        if (!hasText(value)) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value.trim());
+        } catch (IllegalArgumentException ex) {
+            throw badRequest("targetProjectId must be a valid UUID");
+        }
     }
 
     private ArrayNode textArray(String... values) {
@@ -3423,7 +3448,7 @@ public class ImportJobService {
                 + "-"
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".csv";
-        contentLimitPolicy.validateGeneratedExport(workspaceId, filename, "text/csv", content.bytes());
+        contentLimitPolicy.validateGeneratedExport(workspaceId, targetProjectId(exportJob.getRequestPayload()), filename, "text/csv", content.bytes());
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "text/csv", content.bytes(), null)
