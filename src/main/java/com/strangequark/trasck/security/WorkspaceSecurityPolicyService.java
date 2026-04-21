@@ -1,0 +1,184 @@
+package com.strangequark.trasck.security;
+
+import com.strangequark.trasck.access.PermissionService;
+import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.workspace.Workspace;
+import com.strangequark.trasck.workspace.WorkspaceRepository;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class WorkspaceSecurityPolicyService {
+
+    private final WorkspaceSecurityPolicyRepository policyRepository;
+    private final WorkspaceRepository workspaceRepository;
+    private final CurrentUserService currentUserService;
+    private final PermissionService permissionService;
+    private final ContentLimits defaults;
+
+    public WorkspaceSecurityPolicyService(
+            WorkspaceSecurityPolicyRepository policyRepository,
+            WorkspaceRepository workspaceRepository,
+            CurrentUserService currentUserService,
+            PermissionService permissionService,
+            @Value("${trasck.attachments.max-upload-bytes:10485760}") long maxAttachmentUploadBytes,
+            @Value("${trasck.attachments.max-download-bytes:52428800}") long maxAttachmentDownloadBytes,
+            @Value("${trasck.attachments.allowed-content-types:text/plain,text/markdown,text/csv,application/json,application/pdf,image/png,image/jpeg,image/gif,image/webp,application/zip,application/octet-stream}") String attachmentContentTypes,
+            @Value("${trasck.exports.max-artifact-bytes:52428800}") long maxExportArtifactBytes,
+            @Value("${trasck.exports.allowed-content-types:application/json,text/csv,application/octet-stream}") String exportContentTypes,
+            @Value("${trasck.imports.max-parse-bytes:5242880}") long maxImportParseBytes,
+            @Value("${trasck.imports.allowed-content-types:text/csv,application/csv,application/json,text/json,text/plain}") String importContentTypes
+    ) {
+        this.policyRepository = policyRepository;
+        this.workspaceRepository = workspaceRepository;
+        this.currentUserService = currentUserService;
+        this.permissionService = permissionService;
+        this.defaults = new ContentLimits(
+                positive(maxAttachmentUploadBytes),
+                positive(maxAttachmentDownloadBytes),
+                normalizeCsv(attachmentContentTypes),
+                positive(maxExportArtifactBytes),
+                normalizeCsv(exportContentTypes),
+                positive(maxImportParseBytes),
+                normalizeCsv(importContentTypes)
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public WorkspaceSecurityPolicyResponse getWorkspacePolicy(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        WorkspaceSecurityPolicy policy = policyRepository.findById(workspaceId).orElse(null);
+        return response(workspaceId, policy);
+    }
+
+    @Transactional
+    public WorkspaceSecurityPolicyResponse updateWorkspacePolicy(UUID workspaceId, WorkspaceSecurityPolicyRequest request) {
+        WorkspaceSecurityPolicyRequest updateRequest = request == null
+                ? new WorkspaceSecurityPolicyRequest(null, null, null, null, null, null, null)
+                : request;
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
+        WorkspaceSecurityPolicy policy = policyRepository.findById(workspaceId).orElseGet(() -> {
+            WorkspaceSecurityPolicy created = new WorkspaceSecurityPolicy();
+            created.setWorkspaceId(workspaceId);
+            return created;
+        });
+        policy.setAttachmentMaxUploadBytes(nullablePositive(updateRequest.attachmentMaxUploadBytes(), "attachmentMaxUploadBytes"));
+        policy.setAttachmentMaxDownloadBytes(nullablePositive(updateRequest.attachmentMaxDownloadBytes(), "attachmentMaxDownloadBytes"));
+        policy.setAttachmentAllowedContentTypes(nullableCsv(updateRequest.attachmentAllowedContentTypes()));
+        policy.setExportMaxArtifactBytes(nullablePositive(updateRequest.exportMaxArtifactBytes(), "exportMaxArtifactBytes"));
+        policy.setExportAllowedContentTypes(nullableCsv(updateRequest.exportAllowedContentTypes()));
+        policy.setImportMaxParseBytes(nullablePositive(updateRequest.importMaxParseBytes(), "importMaxParseBytes"));
+        policy.setImportAllowedContentTypes(nullableCsv(updateRequest.importAllowedContentTypes()));
+        return response(workspaceId, policyRepository.save(policy));
+    }
+
+    @Transactional(readOnly = true)
+    public ContentLimits limits(UUID workspaceId) {
+        WorkspaceSecurityPolicy policy = workspaceId == null ? null : policyRepository.findById(workspaceId).orElse(null);
+        return new ContentLimits(
+                policy == null || policy.getAttachmentMaxUploadBytes() == null ? defaults.attachmentMaxUploadBytes() : policy.getAttachmentMaxUploadBytes(),
+                policy == null || policy.getAttachmentMaxDownloadBytes() == null ? defaults.attachmentMaxDownloadBytes() : policy.getAttachmentMaxDownloadBytes(),
+                policy == null || policy.getAttachmentAllowedContentTypes() == null ? defaults.attachmentAllowedContentTypes() : policy.getAttachmentAllowedContentTypes(),
+                policy == null || policy.getExportMaxArtifactBytes() == null ? defaults.exportMaxArtifactBytes() : policy.getExportMaxArtifactBytes(),
+                policy == null || policy.getExportAllowedContentTypes() == null ? defaults.exportAllowedContentTypes() : policy.getExportAllowedContentTypes(),
+                policy == null || policy.getImportMaxParseBytes() == null ? defaults.importMaxParseBytes() : policy.getImportMaxParseBytes(),
+                policy == null || policy.getImportAllowedContentTypes() == null ? defaults.importAllowedContentTypes() : policy.getImportAllowedContentTypes()
+        );
+    }
+
+    private WorkspaceSecurityPolicyResponse response(UUID workspaceId, WorkspaceSecurityPolicy policy) {
+        ContentLimits effective = limits(workspaceId);
+        return new WorkspaceSecurityPolicyResponse(
+                workspaceId,
+                effective.attachmentMaxUploadBytes(),
+                effective.attachmentMaxDownloadBytes(),
+                effective.attachmentAllowedContentTypes(),
+                effective.exportMaxArtifactBytes(),
+                effective.exportAllowedContentTypes(),
+                effective.importMaxParseBytes(),
+                effective.importAllowedContentTypes(),
+                policy != null,
+                policy == null ? null : policy.getCreatedAt(),
+                policy == null ? null : policy.getUpdatedAt()
+        );
+    }
+
+    private Workspace activeWorkspace(UUID workspaceId) {
+        Workspace workspace = workspaceRepository.findById(required(workspaceId, "workspaceId"))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found"));
+        if (workspace.getDeletedAt() != null || !"active".equals(workspace.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace not found");
+        }
+        return workspace;
+    }
+
+    private UUID required(UUID value, String fieldName) {
+        if (value == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " is required");
+        }
+        return value;
+    }
+
+    private long positive(long value) {
+        return Math.max(1, value);
+    }
+
+    private Long nullablePositive(Long value, String fieldName) {
+        if (value == null) {
+            return null;
+        }
+        if (value <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " must be greater than 0");
+        }
+        return value;
+    }
+
+    private String nullableCsv(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = normalizeCsv(value);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        return normalized;
+    }
+
+    private String normalizeCsv(String value) {
+        return Arrays.stream((value == null ? "" : value).split(","))
+                .map(this::normalizeContentType)
+                .filter(type -> !type.isBlank())
+                .distinct()
+                .collect(Collectors.joining(","));
+    }
+
+    private String normalizeContentType(String value) {
+        if (value == null) {
+            return "";
+        }
+        int separator = value.indexOf(';');
+        String contentType = separator < 0 ? value : value.substring(0, separator);
+        String normalized = contentType.trim().toLowerCase(Locale.ROOT);
+        int slash = normalized.indexOf('/');
+        boolean invalid = !normalized.isBlank()
+                && (slash <= 0
+                || slash == normalized.length() - 1
+                || normalized.indexOf('/', slash + 1) >= 0
+                || normalized.chars().anyMatch(Character::isWhitespace));
+        if (invalid) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content types must use type/subtype format");
+        }
+        return normalized;
+    }
+}

@@ -4,16 +4,16 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should system-admin management get dedicated install-owner REST/UI flows before hosted deployment, or remain first-setup seeded and manually managed through the first manual test?
-    - Answer: Give REST/UI flows now
-2. Should DB-backed security throttling stay PostgreSQL-backed through the first deployment, or should Redis-backed counters be added before any horizontally scaled deployment?
-    - Answer: Add Redis-backed counters
-3. Should OWASP Dependency Check become a required CI gate immediately, or run as advisory until an NVD API key/cache strategy is configured?
-    - Answer: Make it a required CI gate immediately
-4. Should attachment, import, and export size/content-type limits remain deployment-level environment configuration, or become workspace-admin configurable policies?
-    - Answer: Make them workspace-admin configurable policies
-5. Should centralized production error/log redaction be implemented before broad manual testing, or handled later as production packaging work after the first manual product pass?
-    - Answer: Implement it now
+1. Should Redis-backed throttling become mandatory for production-like profiles now, or stay deployment-optional until horizontal scaling is actually enabled?
+    - Answer: Make it mandatory now
+2. Should system-admin grant/revoke operations require recent-login or step-up confirmation before hosted deployments?
+    - Answer: Yes
+3. Should workspace security policies remain workspace-wide through manual testing, or should project-level overrides be designed before public project hosting?
+    - Answer: Design project-level overrides now
+4. Should the next end-to-end product pass be converted into Playwright browser automation immediately, or remain a human-run checklist while UI flows are still changing quickly?
+    - Answer: Yes, I added a new Playwright repository to the stack
+5. Should the required OWASP Dependency Check gate stay at CVSS 7+, or should production packaging lower the threshold for earlier failure?
+    - Answer: Stay at CVSS 7+
 
 ## Current State
 
@@ -25,7 +25,7 @@ Authentication and authorization foundations are implemented. Username/password 
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team, planning, board, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
+Team, planning, board, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin/security-policy flows, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
 
 Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered, versioned, diffed, materialized, conflicted, resolved, rerun, completed with guarded open-conflict acceptance, and exercised through checked-in CSV/Jira/Rally sample payload flows. Reusable transform presets have immutable version records, clone-from-version recovery, clone-and-retarget preview/apply, template-local overrides, value lookups, type translations, status translations, materialization snapshots, exact/modified reruns, and conflict-resolution worker pickup.
 
@@ -39,26 +39,26 @@ Agent delivery hardening keeps the generic worker protocol as the main extensibi
 
 Queued import review CSV export jobs can now be picked up by the shared scheduled worker through workspace worker settings. Scheduled and manual review export processing writes `import_review_export` worker run and health rows, and operations screens can filter that worker type alongside automation, webhook, email, and import conflict-resolution workers. Agent dispatch attempt retention now has workspace-level defaults and optional automatic scheduled pruning. Codex and Claude Code provider credential creation now validates provider-specific credential types and basic secret/auth-scheme shape before encrypting credentials.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/security-policy screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, stores auth throttling and auth-failure telemetry in the database, rate-limits callback/worker auth failures, enforces attachment/import/export size and content-type limits, masks frontend secret display, templates production nginx CSP, adds Java dependency-check CI wiring, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, centralized production error/log redaction, system-admin management UX, Redis-backed throttling for horizontal scale, dependency-scanner cache/API-key strategy, and broader dedicated security regression coverage.
+The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, supports database-backed or Redis-backed auth throttling while keeping durable auth-failure telemetry, rate-limits callback/worker auth failures, enforces workspace-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, deciding whether Redis must be mandatory for production-like deployments, system-admin step-up safeguards, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Manual End-To-End Product Test Pass
+### 1. Human Manual Test And Bug-Fix Loop
 
-Goal: validate the now-operable automation, webhook, email, import, board, dashboard, and agent surfaces against realistic local data before public testing.
+Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
 Planned work:
 
-- Exercise configured webhook, email, automation, import conflict-resolution, worker retention, generic-worker delivery, board moves, dashboards, and imports through the APIs/UI without database access.
-- Add focused permission, activity, audit, retry/cancel, dead-letter, retention, and frontend route tests where the manual pass finds fragile behavior.
-- Keep SMTP passwords database-encrypted for now, while preserving the secret-cipher abstraction so SMTP and agent credentials can move behind Vault/KMS/Secrets Manager later.
+- Create fresh local data through setup and the UI, then exercise auth, system admin controls, workspace security policy, configuration, work items, planning/boards, dashboards, automation, webhooks, email, imports, export artifacts, audit/export history, and agent dispatch-attempt screens without direct database access.
+- Record the exact bugs or missing ergonomics found during the pass, then add focused backend/frontend regression tests for each fixed issue.
+- Decide from the new question list whether this pass should become Playwright automation immediately or stay human-run until the UI settles.
 
 Done when:
 
-- A local tester can operate delivery workers, inspect failures, retry/cancel jobs, export/prune worker history, create guarded sample imports, review/import conflict outcomes, and inspect agent task dispatch attempts without touching the database.
+- A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, and agent task inspection without touching the database.
 
 ### 2. External Worker And Provider Readiness
 
@@ -81,11 +81,11 @@ Goal: turn the hardened local/manual-test baseline into deployable production co
 
 Planned work:
 
-- Add system-admin management APIs/screens with explicit install-owner safeguards.
-- Decide whether Redis-backed throttling is needed before horizontal scale.
-- Add NVD API key/cache configuration for Java dependency scanning if the CI gate becomes mandatory.
-- Centralize production error/log redaction around outbound HTTP, OAuth, SMTP, agent provider, import, and export failures.
+- Decide whether Redis-backed throttling must be mandatory in production-like profiles or only in horizontally scaled deployments.
+- Add recent-login or step-up confirmation for system-admin grant/revoke before hosted deployment.
+- Tune the required OWASP Dependency Check gate with NVD API key/cache settings if public scanner throttling becomes noisy.
 - Keep secret-bearing deployment config in environment variables and plan the shared Vault/KMS/Secrets Manager abstraction for SMTP, object storage, and non-stub agent credentials.
+- Broaden dedicated redaction, tenant-isolation, authorization-denial, outbound URL, attachment/export authorization, and frontend secret-persistence regression coverage.
 
 Done when:
 

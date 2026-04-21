@@ -5,7 +5,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import com.strangequark.trasck.security.SecurityAuthFailureEvent;
@@ -13,7 +18,9 @@ import com.strangequark.trasck.security.SecurityAuthFailureEventRepository;
 import com.strangequark.trasck.security.SecurityRateLimitAttempt;
 import com.strangequark.trasck.security.SecurityRateLimitAttemptRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -30,14 +37,18 @@ public class LoginAttemptService {
     private final Clock clock;
     private final SecurityRateLimitAttemptRepository attemptRepository;
     private final SecurityAuthFailureEventRepository failureEventRepository;
+    private final String rateLimitStore;
+    private final StringRedisTemplate redisTemplate;
 
     @Autowired
     public LoginAttemptService(
             @Value("${trasck.security.login.max-failures:5}") int maxFailures,
             @Value("${trasck.security.login.failure-window:PT15M}") String failureWindow,
             @Value("${trasck.security.login.lockout-duration:PT15M}") String lockoutDuration,
+            @Value("${trasck.security.rate-limit.store:database}") String rateLimitStore,
             SecurityRateLimitAttemptRepository attemptRepository,
-            SecurityAuthFailureEventRepository failureEventRepository
+            SecurityAuthFailureEventRepository failureEventRepository,
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider
     ) {
         this(
                 maxFailures,
@@ -45,21 +56,25 @@ public class LoginAttemptService {
                 Duration.parse(lockoutDuration),
                 Clock.systemUTC(),
                 attemptRepository,
-                failureEventRepository
+                failureEventRepository,
+                rateLimitStore,
+                redisTemplateProvider.getIfAvailable()
         );
     }
 
     LoginAttemptService(int maxFailures, Duration failureWindow, Duration lockoutDuration, Clock clock) {
-        this(maxFailures, failureWindow, lockoutDuration, clock, null, null);
+        this(maxFailures, failureWindow, lockoutDuration, clock, null, null, "memory", null);
     }
 
-    private LoginAttemptService(
+    LoginAttemptService(
             int maxFailures,
             Duration failureWindow,
             Duration lockoutDuration,
             Clock clock,
             SecurityRateLimitAttemptRepository attemptRepository,
-            SecurityAuthFailureEventRepository failureEventRepository
+            SecurityAuthFailureEventRepository failureEventRepository,
+            String rateLimitStore,
+            StringRedisTemplate redisTemplate
     ) {
         this.maxFailures = Math.max(1, maxFailures);
         this.failureWindow = failureWindow;
@@ -67,7 +82,11 @@ public class LoginAttemptService {
         this.clock = clock;
         this.attemptRepository = attemptRepository;
         this.failureEventRepository = failureEventRepository;
+        this.rateLimitStore = normalized(rateLimitStore == null ? "database" : rateLimitStore);
+        this.redisTemplate = redisTemplate;
+        validateStore();
     }
+
 
     @Transactional(readOnly = true)
     public void assertAllowed(String identifier, String remoteAddress) {
@@ -76,6 +95,14 @@ public class LoginAttemptService {
 
     @Transactional(readOnly = true)
     public void assertAllowed(String realm, String identifier, String remoteAddress) {
+        if (usesRedis()) {
+            Map<Object, Object> values = redisTemplate.opsForHash().entries(redisKey(realm, identifier, remoteAddress));
+            Instant lockedUntil = instantField(values, "lockedUntil");
+            if (lockedUntil != null && lockedUntil.isAfter(now())) {
+                throw tooManyRequests(realm);
+            }
+            return;
+        }
         if (usesDatabase()) {
             SecurityRateLimitAttempt attempt = attemptRepository.findByAttemptKey(key(realm, identifier, remoteAddress)).orElse(null);
             if (attempt != null && attempt.getLockedUntil() != null && attempt.getLockedUntil().toInstant().isAfter(now())) {
@@ -96,6 +123,10 @@ public class LoginAttemptService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordFailure(String realm, String identifier, String remoteAddress, String eventType, String reason) {
+        if (usesRedis()) {
+            recordRedisFailure(realm, identifier, remoteAddress, eventType, reason);
+            return;
+        }
         if (usesDatabase()) {
             recordDatabaseFailure(realm, identifier, remoteAddress, eventType, reason);
             return;
@@ -118,6 +149,10 @@ public class LoginAttemptService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordSuccess(String realm, String identifier, String remoteAddress) {
+        if (usesRedis()) {
+            redisTemplate.delete(redisKey(realm, identifier, remoteAddress));
+            return;
+        }
         if (usesDatabase()) {
             attemptRepository.deleteByAttemptKey(key(realm, identifier, remoteAddress));
             return;
@@ -127,6 +162,36 @@ public class LoginAttemptService {
 
     private Instant now() {
         return clock.instant();
+    }
+
+    private void recordRedisFailure(String realm, String identifier, String remoteAddress, String eventType, String reason) {
+        String attemptKey = redisKey(realm, identifier, remoteAddress);
+        Map<Object, Object> values = redisTemplate.opsForHash().entries(attemptKey);
+        Instant firstFailureAt = instantField(values, "firstFailureAt");
+        boolean expiredWindow = firstFailureAt == null || firstFailureAt.plus(failureWindow).isBefore(now());
+        int failures = expiredWindow ? 0 : intField(values, "failureCount");
+        Instant lockedUntil = expiredWindow ? null : instantField(values, "lockedUntil");
+        if (expiredWindow) {
+            firstFailureAt = now();
+            lockedUntil = null;
+        }
+        failures += 1;
+        if (failures >= maxFailures) {
+            lockedUntil = now().plus(lockoutDuration);
+        }
+
+        redisTemplate.opsForHash().put(attemptKey, "realm", normalized(realm));
+        redisTemplate.opsForHash().put(attemptKey, "identifier", normalized(identifier));
+        redisTemplate.opsForHash().put(attemptKey, "remoteAddress", truncate(trimToNull(remoteAddress), 120));
+        redisTemplate.opsForHash().put(attemptKey, "firstFailureAt", firstFailureAt.toString());
+        redisTemplate.opsForHash().put(attemptKey, "failureCount", Integer.toString(failures));
+        if (lockedUntil == null) {
+            redisTemplate.opsForHash().delete(attemptKey, "lockedUntil");
+        } else {
+            redisTemplate.opsForHash().put(attemptKey, "lockedUntil", lockedUntil.toString());
+        }
+        redisTemplate.expire(attemptKey, failureWindow.plus(lockoutDuration).plusMinutes(1));
+        persistFailureEvent(realm, identifier, remoteAddress, eventType, reason);
     }
 
     private void recordDatabaseFailure(String realm, String identifier, String remoteAddress, String eventType, String reason) {
@@ -156,6 +221,13 @@ public class LoginAttemptService {
         }
         attemptRepository.save(attempt);
 
+        persistFailureEvent(realm, identifier, remoteAddress, eventType, reason);
+    }
+
+    private void persistFailureEvent(String realm, String identifier, String remoteAddress, String eventType, String reason) {
+        if (failureEventRepository == null) {
+            return;
+        }
         SecurityAuthFailureEvent event = new SecurityAuthFailureEvent();
         event.setEventType(truncate(firstText(eventType, "auth.failure"), 120));
         event.setRealm(normalized(realm));
@@ -165,8 +237,21 @@ public class LoginAttemptService {
         failureEventRepository.save(event);
     }
 
+    private boolean usesRedis() {
+        return "redis".equals(rateLimitStore);
+    }
+
     private boolean usesDatabase() {
-        return attemptRepository != null && failureEventRepository != null;
+        return "database".equals(rateLimitStore) && attemptRepository != null && failureEventRepository != null;
+    }
+
+    private void validateStore() {
+        if (!"memory".equals(rateLimitStore) && !"database".equals(rateLimitStore) && !"redis".equals(rateLimitStore)) {
+            throw new IllegalStateException("Unsupported Trasck security rate-limit store: " + rateLimitStore);
+        }
+        if ("redis".equals(rateLimitStore) && redisTemplate == null) {
+            throw new IllegalStateException("Redis rate-limit store requires a StringRedisTemplate bean");
+        }
     }
 
     private String key(String realm, String identifier, String remoteAddress) {
@@ -177,8 +262,37 @@ public class LoginAttemptService {
                 + normalized(remoteAddress);
     }
 
+    private String redisKey(String realm, String identifier, String remoteAddress) {
+        return "trasck:security:rate-limit:" + sha256(key(realm, identifier, remoteAddress));
+    }
+
+    private String sha256(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 digest is unavailable", ex);
+        }
+    }
+
     private String normalized(String value) {
         return (value == null ? "" : value.trim().toLowerCase(Locale.ROOT));
+    }
+
+    private Instant instantField(Map<Object, Object> values, String fieldName) {
+        Object value = values == null ? null : values.get(fieldName);
+        if (value == null || value.toString().isBlank()) {
+            return null;
+        }
+        return Instant.parse(value.toString());
+    }
+
+    private int intField(Map<Object, Object> values, String fieldName) {
+        Object value = values == null ? null : values.get(fieldName);
+        if (value == null || value.toString().isBlank()) {
+            return 0;
+        }
+        return Integer.parseInt(value.toString());
     }
 
     private ResponseStatusException tooManyRequests(String realm) {

@@ -56,6 +56,8 @@ Core local variables:
 - `TRASCK_OUTBOUND_URL_ALLOWED_HOSTS`: comma-separated exact host, host:port, wildcard host, wildcard host:port, or CIDR entries that may bypass the default-deny outbound URL policy for trusted local/private webhook, worker, OAuth side-fetch, or S3-compatible targets.
 - `TRASCK_PASSWORD_MIN_LENGTH`, `TRASCK_LOGIN_MAX_FAILURES`, `TRASCK_LOGIN_FAILURE_WINDOW`, and `TRASCK_LOGIN_LOCKOUT_DURATION`: password and login throttling controls.
 - `TRASCK_TRUST_FORWARDED_FOR`: defaults to `false`. Set only when Trasck is behind a trusted reverse proxy that controls `X-Forwarded-For`.
+- `TRASCK_SECURITY_RATE_LIMIT_STORE`: `database` by default. Set to `redis` to share auth throttling counters across horizontally scaled backend instances.
+- `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, and `SPRING_DATA_REDIS_PASSWORD`: Redis connection settings used only when `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`.
 - `TRASCK_ATTACHMENTS_MAX_UPLOAD_BYTES`, `TRASCK_ATTACHMENTS_MAX_DOWNLOAD_BYTES`, and `TRASCK_ATTACHMENTS_ALLOWED_CONTENT_TYPES`: attachment metadata/upload/download limits and content-type allowlist.
 - `TRASCK_EXPORTS_MAX_ARTIFACT_BYTES` and `TRASCK_EXPORTS_ALLOWED_CONTENT_TYPES`: generated export artifact and export download limits.
 - `TRASCK_IMPORTS_MAX_PARSE_BYTES` and `TRASCK_IMPORTS_ALLOWED_CONTENT_TYPES`: import parser payload size and content-type allowlist.
@@ -70,11 +72,13 @@ Core local variables:
 
 Agent callback private keys and provider credentials are stored encrypted in `agent_provider_credentials.encrypted_secret`. `TRASCK_SECRETS_ENCRYPTION_KEY` can be raw text, hex, standard Base64, or URL-safe Base64. A direct 16, 24, or 32 byte decoded key is used as AES key material; otherwise Trasck derives an AES-256 key with SHA-256.
 
-Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup when known development secrets, weak database passwords, insecure cookie flags, local OAuth redirects, or local/wildcard CORS origins are active. OpenAPI and Swagger remain public in local/non-production profiles, but production-like profiles require authenticated system-admin access.
+Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup when known development secrets, weak database passwords, insecure cookie flags, local OAuth redirects, or local/wildcard CORS origins are active. OpenAPI and Swagger remain public in local/non-production profiles, but production-like profiles require authenticated system-admin access. Active system admins can be managed through `GET/POST/DELETE /api/v1/system-admins`; workspace admins can override deployment attachment/import/export limits through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`.
+
+Docker Compose includes an internal `redis` service for `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`. The Redis service is not published to the host by default.
 
 ## Security Verification
 
-Backend dependency scanning is available through:
+Backend dependency scanning is a required backend CI gate and can be run locally through:
 
 ```bash
 ./mvnw -Psecurity-audit -DskipTests dependency-check:check
@@ -83,7 +87,7 @@ Backend dependency scanning is available through:
 Frontend dependency scanning should continue to use:
 
 ```bash
-npm audit --json
+npm audit --audit-level=high
 ```
 
 ## Health Check

@@ -1342,7 +1342,7 @@ public class AgentService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         byte[] content = dispatchAttemptExportContent(workspaceId, actorId, filter, retentionCutoff, attempts, now);
         String filename = "agent-dispatch-attempts-" + workspaceId + dispatchAttemptExportFilenameSuffix(filter) + "-" + now.format(EXPORT_FILENAME_TIME) + ".json";
-        contentLimitPolicy.validateGeneratedExport(filename, "application/json", content);
+        contentLimitPolicy.validateGeneratedExport(workspaceId, filename, "application/json", content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "application/json", content, null)

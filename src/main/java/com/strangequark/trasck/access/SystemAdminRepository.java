@@ -8,4 +8,6 @@ public interface SystemAdminRepository extends JpaRepository<SystemAdmin, UUID> 
     boolean existsByUserIdAndActiveTrue(UUID userId);
 
     Optional<SystemAdmin> findByUserId(UUID userId);
+
+    long countByActiveTrue();
 }

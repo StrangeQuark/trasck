@@ -7,6 +7,7 @@ services:
     depends_on:
       - trasck-db
       - maildev
+      - redis
     environment:
       SPRING_APPLICATION_NAME: ${SPRING_APPLICATION_NAME:-trasck}
       SERVER_PORT: ${SERVER_PORT:-6100}
@@ -23,6 +24,10 @@ services:
       TRASCK_AUTH_COOKIE_SECURE: ${TRASCK_AUTH_COOKIE_SECURE:-false}
       TRASCK_OAUTH_ASSERTION_SECRET: ${TRASCK_OAUTH_ASSERTION_SECRET:-}
       TRASCK_OAUTH_SUCCESS_REDIRECT: ${TRASCK_OAUTH_SUCCESS_REDIRECT:-http://localhost:8080/auth/callback}
+      TRASCK_SECURITY_RATE_LIMIT_STORE: ${TRASCK_SECURITY_RATE_LIMIT_STORE:-database}
+      SPRING_DATA_REDIS_HOST: ${SPRING_DATA_REDIS_HOST:-redis}
+      SPRING_DATA_REDIS_PORT: ${SPRING_DATA_REDIS_PORT:-6379}
+      SPRING_DATA_REDIS_PASSWORD: ${SPRING_DATA_REDIS_PASSWORD:-}
       TRASCK_TRUST_FORWARDED_FOR: ${TRASCK_TRUST_FORWARDED_FOR:-false}
       TRASCK_OUTBOUND_URL_ALLOWED_HOSTS: ${TRASCK_OUTBOUND_URL_ALLOWED_HOSTS:-}
       SPRING_MAIL_HOST: ${SPRING_MAIL_HOST:-maildev}
@@ -46,6 +51,10 @@ services:
     ports:
       - "1025:1025"
       - "1080:1080"
+  redis:
+    image: 'redis:7-alpine'
+    container_name: trasck-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
 
 volumes:
   trasck-db-data:
