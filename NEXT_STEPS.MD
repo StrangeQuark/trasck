@@ -4,24 +4,24 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should full role management start by creating custom roles from seeded roles while seeded/system roles stay read-only, or should workspace/project admins be able to edit seeded role permissions directly?
-    - Answer: Allow admins to directly edit
-2. Should role management live as Workspace Settings and Project Settings subpanels first, or become a dedicated shared Roles route with workspace/project tabs?
-    - Answer: Live in the subpanels first
-3. Should anonymous public project preview remain metadata-only until public work-item APIs are designed, or should public work-item list/read endpoints be the next public-read expansion?
-    - Answer: Add endpoints now
+1. Should seeded role permission edits require an impacted-member/invitation preview and explicit confirmation before saving, or should the first UI allow direct saves with audit logging only?
+    - Answer: Yes add the preview and confirmation before saving
+2. Should role permission changes keep only current state for now, or should the first role-management pass add role version history and rollback support?
+    - Answer: Yes add history and rollback now
+3. Should public-read expansion stop at project/work-item metadata for now, or should public comments and public attachments become the next anonymous-read surface?
+    - Answer: Make them the next surface
 
 ## Current State
 
 The backend has the full initial relational schema, Flyway migrations, JPA entity model, JPA repositories, and PostgreSQL/Testcontainers verification in place. The schema is designed for the full Trasck product direction, including organizations, workspaces, projects, work item hierarchy, workflows, boards, planning, permissions, automation, reporting, notifications, attachments, imports, exports, audit data, durable domain events, and provider-neutral AI agent execution.
 
-The first-run-only setup API creates an admin user, organization, workspace, project, memberships, deterministic default project configuration, and default local filesystem attachment storage. Public project reads are wired through security and checked against workspace anonymous-read plus project visibility in domain code; those public-read switches can now be changed through workspace/project security-policy APIs and the frontend settings routes.
+The first-run-only setup API creates an admin user, organization, workspace, project, memberships, deterministic default project configuration, and default local filesystem attachment storage. Public project and public work-item reads are wired through security and checked against workspace anonymous-read plus project/work-item visibility in domain code; those public-read switches can now be changed through workspace/project security-policy APIs and the frontend settings routes.
 
 Authentication and authorization foundations are implemented. Username/password login returns a JWT and sets the same value in an HTTP-only cookie. Direct API callers can use JWTs, revocable personal tokens, or revocable workspace service tokens as `Authorization: Bearer`. Cookie-authenticated unsafe browser requests use Spring cookie CSRF protection. Invitation-based registration supports workspace-only and workspace-plus-project membership, pending invitations can be revoked through a public workspace-admin API, and workspace-admin-created users can be removed from a workspace without direct database access. Workspace-admin direct user creation, signed verified OAuth identity linking, full Spring OAuth redirect startup for GitHub/Google/GitLab/Microsoft, provider-specific verified-email resolution, method-level admin permissions, explicit service-layer work item permission checks, enforced API token scopes, token list/revoke flows, dedicated service-token listing, token expiry coverage, and durable hybrid outbox delivery are in place.
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list/delete, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team, planning, board, program/portfolio, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces except the newest program/portfolio follow-ups, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin flows, a Workspace Settings route that now hosts workspace security policy plus member/invitation management with role pickers, a Project Settings route with project security policy, public-read effective state, and an anonymous preview link, a dedicated anonymous public project preview route, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
+Team, planning, board, program/portfolio, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin flows, a Workspace Settings route that now hosts workspace security policy plus member/invitation management with role pickers, a Project Settings route with project security policy, public-read effective state, and an anonymous preview link, a Programs route for program CRUD/project assignment/dashboard summary review, a dedicated anonymous public project/work-item preview route, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
 
 Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered, versioned, diffed, materialized, conflicted, resolved, rerun, completed with guarded open-conflict acceptance, and exercised through checked-in CSV/Jira/Rally sample payload flows. Reusable transform presets have immutable version records, clone-from-version recovery, clone-and-retarget preview/apply, template-local overrides, value lookups, type translations, status translations, materialization snapshots, exact/modified reruns, and conflict-resolution worker pickup.
 
@@ -37,48 +37,30 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client that is refreshed after backend endpoint batches, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy/workspace member-management screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy and public project read boundaries, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, attachment byte upload/download, workspace and work-item label cleanup, team/membership/planning/board/swimlane/release/roadmap resources, reporting history/snapshot reads and snapshot execution controls, program CRUD/project assignment/dashboard summary coverage, team-scoped dashboard/filter/view/report-query lists, repository connections, invitation list/cancellation, workspace-admin human user list/creation/removal, role picker reads, notification preference/default CRUD plus direct and automation-created notification read coverage, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs where public cleanup APIs exist, and browser smoke tests for the frontend shell, Workspace Settings member/invitation flow, workspace/project public-read settings, and public project preview route. The committed baseline currently tracks 230 covered backend routes, 0 ordinary planned routes, and 144 planned high-risk routes. The remaining backend route work is now the high-risk asynchronous worker/import/export/agent/security surfaces.
+The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy and public project/work-item read boundaries, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, attachment byte upload/download, workspace and work-item label cleanup, team/membership/planning/board/swimlane/release/roadmap resources, reporting history/snapshot reads and snapshot execution controls, program CRUD/project assignment/dashboard summary coverage, team-scoped dashboard/filter/view/report-query lists, repository connections, invitation list/cancellation, workspace-admin human user list/creation/removal, role picker reads, notification preference/default CRUD plus direct and automation-created notification read coverage, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs where public cleanup APIs exist, and browser smoke tests for the frontend shell, Workspace Settings member/invitation flow, program/portfolio management, workspace/project public-read settings, and public project/work-item preview route. The committed baseline currently tracks 232 covered backend routes, 0 ordinary planned routes, and 144 planned high-risk routes. The remaining backend route work is now the high-risk asynchronous worker/import/export/agent/security surfaces.
 
 The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, requires Redis-backed auth throttling in production-like profiles and pings Redis on startup, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection and production-like recent-login step-up for grant/revoke, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, rate-limits callback/worker auth failures, enforces workspace-admin and project-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, system-admin step-up UX hardening, production deployment health/observability around Redis-backed throttling, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Program And Portfolio Frontend UI
-
-Goal: expose the new full program API through a lightweight frontend surface so program/reporting behavior can be manually tested.
-
-Planned work:
-
-- Add workspace program list/create/edit/archive UI for `GET/POST /api/v1/workspaces/{workspaceId}/programs` and `GET/PATCH/DELETE /api/v1/programs/{programId}`.
-- Add project assignment/removal and ordering controls for `GET/PUT/DELETE /api/v1/programs/{programId}/projects/{projectId}`.
-- Add editable roadmap/report configuration fields with safe JSON-object validation or purpose-built controls for the first supported keys.
-- Link to or embed `GET /api/v1/reports/programs/{programId}/dashboard-summary` so assigned-project reporting can be reviewed.
-- Add frontend route/component tests and Java Playwright API/browser coverage for program creation, project assignment, summary read, and archive.
-
-Done when:
-
-- Program CRUD, project assignment, and program summary reporting can be exercised without REST-client-only setup.
-
-Note: per the latest planning decision, this should wait for the broader portfolio planning UI pass instead of being rushed in as a small standalone admin screen.
-
-### 2. Full Role Management Screens
+### 1. Full Role Management Screens
 
 Goal: move beyond role pickers by letting admins inspect and manage workspace/project roles without raw IDs or database access.
 
 Planned work:
 
-- Add backend role-management APIs for workspace and project role detail, custom role creation, clone-from-seeded-role, role metadata update, role archival/deactivation where safe, and permission assignment reads/writes.
-- Keep seeded/system roles protected according to the answered role-editing question, and enforce last-admin/safe-permission constraints so admins cannot remove the only route to workspace/project administration.
-- Add frontend role management surfaces under the chosen navigation shape, with permission checklists grouped by scope, seeded-role badges, clone actions, and impacted member/invitation summaries.
+- Add backend role-management APIs for workspace and project role detail, role metadata update, permission assignment reads/writes, custom role creation, and role archival/deactivation where safe.
+- Allow workspace/project admins to edit seeded role permissions directly, while enforcing last-admin/safe-permission constraints so admins cannot remove the only route to workspace/project administration.
+- Add frontend role management subpanels inside Workspace Settings and Project Settings, with permission checklists grouped by scope, seeded-role badges, edit actions, and impacted member/invitation summaries.
 - Wire Workspace Settings and Project Settings role pickers to these managed role surfaces while keeping current list endpoints for simple selection.
 - Add backend integration tests, generated OpenAPI/client updates, frontend component tests, and Java Playwright API/browser coverage for role CRUD, permission denial, and member/invitation picker integration.
 
 Done when:
 
-- Workspace/project admins can create and maintain custom roles through the UI, and member/invitation forms no longer depend on raw role IDs or database inspection.
+- Workspace/project admins can create and maintain roles, including seeded roles, through the UI, and member/invitation forms no longer depend on raw role IDs or database inspection.
 
-### 3. Complete High-Risk Asynchronous Playwright API Coverage
+### 2. Complete High-Risk Asynchronous Playwright API Coverage
 
 Goal: make sure the route-by-route suite covers the surfaces most likely to hide security, tenant-boundary, worker, callback, and durable-state bugs.
 
@@ -94,7 +76,7 @@ Done when:
 
 - High-risk route baseline rows move from `planned-high-risk` to `covered`, with focused denial/security assertions in addition to happy paths.
 
-### 4. Playwright Frontend Workflow Coverage
+### 3. Playwright Frontend Workflow Coverage
 
 Goal: cover the implemented Vite React screens through browser workflows, not only API calls.
 
@@ -108,7 +90,7 @@ Done when:
 
 - The major implemented frontend routes have smoke and core-workflow browser tests that fail on broken navigation, broken forms, missing critical data, or visible runtime errors.
 
-### 5. Playwright Full-Stack Security And Regression Coverage
+### 4. Playwright Full-Stack Security And Regression Coverage
 
 Goal: encode the security audit and production-readiness risks as executable full-stack regression tests.
 
@@ -122,7 +104,7 @@ Done when:
 
 - The `trasck-test` suite can replace the current manual checklist for broad regression confidence while still leaving exploratory testing for usability issues.
 
-### 6. Human Manual Test And Bug-Fix Loop
+### 5. Human Manual Test And Bug-Fix Loop
 
 Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
@@ -136,7 +118,7 @@ Done when:
 
 - A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, and agent task inspection without touching the database.
 
-### 7. External Worker And Provider Readiness
+### 6. External Worker And Provider Readiness
 
 Goal: prepare the provider-neutral worker boundary for the first non-stub external agent execution without weakening normal Jira/Rally-style product behavior.
 
@@ -151,7 +133,7 @@ Done when:
 
 - Admins can preview runtime payloads, rotate/revoke credentials, inspect dispatch attempts, and test a local worker without enabling paid or unmanaged external execution.
 
-### 8. Production Security Packaging Follow-Ups
+### 7. Production Security Packaging Follow-Ups
 
 Goal: turn the hardened local/manual-test baseline into deployable production controls.
 
@@ -216,7 +198,7 @@ The following work should be completed before the application is ready for a mea
 - Use the route-based frontend shell and global toast/error handling as the manual-test surface.
 - Use the checked-in generated TypeScript API client and regenerate it only when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
-- Add program/portfolio management UI and full role-management screens so those implemented/planned admin APIs do not require REST-client-only manual testing. Public-read settings now live in Workspace Settings and Project Settings, and Workspace member/invitation management uses role picker APIs.
+- Add full role-management screens so those planned admin APIs do not require REST-client-only manual testing. Program/portfolio management now has a frontend route, public-read settings live in Workspace Settings and Project Settings, public project preview includes public work items, and Workspace member/invitation management uses role picker APIs.
 - Keep direct workspace-admin notification creation API/test-fixture-only until notification center UX is expanded.
 - Replace remaining raw JSON child editors with field-specific forms for common nested admin/import records.
 - Expand frontend route tests and replace remaining raw ID inputs only after corresponding list endpoints exist.

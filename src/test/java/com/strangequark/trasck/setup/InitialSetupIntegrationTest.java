@@ -97,9 +97,58 @@ class InitialSetupIntegrationTest {
         assertThat(publicProject.at("/id").asText()).isEqualTo(projectId.toString());
         assertThat(publicProject.at("/visibility").asText()).isEqualTo("public");
 
+        UUID publicWorkItemId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                insert into work_items (
+                    id, workspace_id, project_id, type_id, status_id, reporter_id, created_by_id, updated_by_id,
+                    key, sequence_number, workspace_sequence_number, title, description_markdown, visibility, rank
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                publicWorkItemId,
+                workspaceId,
+                projectId,
+                keyedId(publicSetup.at("/seedData/workItemTypes"), "story"),
+                keyedId(publicSetup.at("/seedData/workflow/statuses"), "open"),
+                adminUserId,
+                adminUserId,
+                adminUserId,
+                "PUB-1",
+                1L,
+                1L,
+                "Public work item",
+                "Visible through anonymous public project reads.",
+                "inherited",
+                "0000001000000000"
+        );
+        HttpResponse<String> publicWorkItemsResponse = get("/api/v1/public/projects/" + projectId + "/work-items?limit=1");
+        assertThat(publicWorkItemsResponse.statusCode()).isEqualTo(200);
+        JsonNode publicWorkItems = objectMapper.readTree(publicWorkItemsResponse.body());
+        assertThat(publicWorkItems.at("/items")).hasSize(1);
+        assertThat(publicWorkItems.at("/items/0/id").asText()).isEqualTo(publicWorkItemId.toString());
+        assertThat(publicWorkItems.at("/items/0/title").asText()).isEqualTo("Public work item");
+        assertThat(publicWorkItems.at("/items/0").has("assigneeId")).isFalse();
+        assertThat(publicWorkItems.at("/items/0").has("reporterId")).isFalse();
+
+        HttpResponse<String> publicWorkItemResponse = get("/api/v1/public/projects/" + projectId + "/work-items/" + publicWorkItemId);
+        assertThat(publicWorkItemResponse.statusCode()).isEqualTo(200);
+        JsonNode publicWorkItem = objectMapper.readTree(publicWorkItemResponse.body());
+        assertThat(publicWorkItem.at("/id").asText()).isEqualTo(publicWorkItemId.toString());
+        assertThat(publicWorkItem.at("/key").asText()).isEqualTo("PUB-1");
+
+        jdbcTemplate.update("update work_items set visibility = 'private' where id = ?", publicWorkItemId);
+        HttpResponse<String> privateWorkItemResponse = get("/api/v1/public/projects/" + projectId + "/work-items/" + publicWorkItemId);
+        assertThat(privateWorkItemResponse.statusCode()).isEqualTo(404);
+        HttpResponse<String> privateWorkItemsResponse = get("/api/v1/public/projects/" + projectId + "/work-items");
+        assertThat(privateWorkItemsResponse.statusCode()).isEqualTo(200);
+        assertThat(objectMapper.readTree(privateWorkItemsResponse.body()).at("/items")).isEmpty();
+        jdbcTemplate.update("update work_items set visibility = 'inherited' where id = ?", publicWorkItemId);
+
         jdbcTemplate.update("update projects set visibility = 'private' where id = ?", projectId);
         HttpResponse<String> privateProjectReadResponse = get("/api/v1/public/projects/" + projectId);
         assertThat(privateProjectReadResponse.statusCode()).isEqualTo(404);
+        HttpResponse<String> privateProjectWorkItemsResponse = get("/api/v1/public/projects/" + projectId + "/work-items");
+        assertThat(privateProjectWorkItemsResponse.statusCode()).isEqualTo(404);
 
         jdbcTemplate.update("update projects set visibility = 'public' where id = ?", projectId);
         jdbcTemplate.update("update workspaces set anonymous_read_enabled = false where id = ?", workspaceId);
@@ -164,6 +213,15 @@ class InitialSetupIntegrationTest {
 
     private UUID uuid(JsonNode node, String pointer) {
         return UUID.fromString(node.at(pointer).asText());
+    }
+
+    private UUID keyedId(JsonNode keyedRows, String key) {
+        for (JsonNode row : keyedRows) {
+            if (key.equals(row.path("key").asText())) {
+                return UUID.fromString(row.path("id").asText());
+            }
+        }
+        throw new AssertionError("Missing keyed setup row: " + key);
     }
 
     private int count(String table) {

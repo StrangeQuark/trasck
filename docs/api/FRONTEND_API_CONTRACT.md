@@ -26,6 +26,7 @@ High-volume endpoints return cursor pages:
 - `GET /api/v1/workspaces/{workspaceId}/activity`
 - `GET /api/v1/workspaces/{workspaceId}/audit-log`
 - `GET /api/v1/workspaces/{workspaceId}/export-jobs`
+- `GET /api/v1/public/projects/{projectId}/work-items`
 
 Cursor-page requests accept `limit` and `cursor`. Clients should request the next page with the prior response's `nextCursor` while `hasMore` is true.
 
@@ -106,6 +107,36 @@ export interface WorkItem {
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
   deletedAt?: ISODateTime;
+}
+
+export interface PublicProject {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  key: string;
+  description?: string;
+  visibility: "public";
+}
+
+export interface PublicWorkItem {
+  id: UUID;
+  projectId: UUID;
+  key: string;
+  typeId: UUID;
+  statusId: UUID;
+  priorityId?: UUID;
+  parentId?: UUID;
+  teamId?: UUID;
+  title: string;
+  descriptionMarkdown?: string;
+  descriptionDocument?: JsonObject;
+  visibility: "inherited" | "public";
+  estimatePoints?: number;
+  startDate?: ISODate;
+  dueDate?: ISODate;
+  resolvedAt?: ISODateTime;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 export interface ProjectWorkItemListQuery {
@@ -1046,12 +1077,12 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
 12. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
 13. Program reporting: create or update a workspace program with `GET/POST /api/v1/workspaces/{workspaceId}/programs` and `GET/PATCH/DELETE /api/v1/programs/{programId}`, assign projects with `PUT /api/v1/programs/{programId}/projects/{projectId}`, then read `GET /api/v1/reports/programs/{programId}/dashboard-summary`.
-14. System and workspace/project security: active system admins can list/grant/revoke dedicated system-admin access through `GET/POST/DELETE /api/v1/system-admins`; production-like grant/revoke requires recent authentication; workspace admins can inspect and update effective attachment/import/export limits plus anonymous-read policy through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`; project admins can inspect inherited limits, update project visibility, and apply project overrides through `GET/PATCH /api/v1/projects/{projectId}/security-policy`; public project reads require both workspace anonymous-read and project `public` visibility. Workspace-admin member management can list safe invitation summaries with `GET /api/v1/workspaces/{workspaceId}/invitations?status=pending|accepted|revoked|all`, revoke pending invitations with `DELETE /api/v1/workspaces/{workspaceId}/invitations/{invitationId}`, list safe human workspace member summaries with `GET /api/v1/workspaces/{workspaceId}/users?status=active|removed|all`, create direct users with `POST /api/v1/workspaces/{workspaceId}/users`, remove direct workspace users with `DELETE /api/v1/workspaces/{workspaceId}/users/{userId}`, list workspace role picker options with `GET /api/v1/workspaces/{workspaceId}/roles`, and list project role picker options with `GET /api/v1/projects/{projectId}/roles`.
+14. System and workspace/project security: active system admins can list/grant/revoke dedicated system-admin access through `GET/POST/DELETE /api/v1/system-admins`; production-like grant/revoke requires recent authentication; workspace admins can inspect and update effective attachment/import/export limits plus anonymous-read policy through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`; project admins can inspect inherited limits, update project visibility, and apply project overrides through `GET/PATCH /api/v1/projects/{projectId}/security-policy`; public project and public work-item reads require both workspace anonymous-read and project `public` visibility. Anonymous work-item responses are intentionally narrower than authenticated work-item responses and omit user IDs such as reporter/assignee. Workspace-admin member management can list safe invitation summaries with `GET /api/v1/workspaces/{workspaceId}/invitations?status=pending|accepted|revoked|all`, revoke pending invitations with `DELETE /api/v1/workspaces/{workspaceId}/invitations/{invitationId}`, list safe human workspace member summaries with `GET /api/v1/workspaces/{workspaceId}/users?status=active|removed|all`, create direct users with `POST /api/v1/workspaces/{workspaceId}/users`, remove direct workspace users with `DELETE /api/v1/workspaces/{workspaceId}/users/{userId}`, list workspace role picker options with `GET /api/v1/workspaces/{workspaceId}/roles`, and list project role picker options with `GET /api/v1/projects/{projectId}/roles`.
 
 ## Endpoint Coverage
 
 - Setup: `POST /setup`
-- Auth/security: login, current user, CSRF, personal tokens, workspace service tokens, invitations and invitation list/cancellation, human workspace user list/creation/removal, workspace/project role picker reads, system-admin list/grant/revoke, workspace security-policy read/update including anonymous read, project security-policy read/update including visibility, and public project reads.
+- Auth/security: login, current user, CSRF, personal tokens, workspace service tokens, invitations and invitation list/cancellation, human workspace user list/creation/removal, workspace/project role picker reads, system-admin list/grant/revoke, workspace security-policy read/update including anonymous read, project security-policy read/update including visibility, and public project/work-item reads.
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, workspace labels create/list/delete, work-item labels add/remove/list, attachments.
 - Product configuration: custom field/context/value CRUD, field configuration CRUD with project/type overrides, screen/field/assignment CRUD.
 - Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, saved-filter-ID and inline-query board swimlanes, board work item columns/swimlanes, board-scoped rank/transition/move commands with target column/status transition derivation and card-level relative insertion, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
