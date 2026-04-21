@@ -892,6 +892,8 @@ class WorkItemApiIntegrationTest {
         assertThat(getJson("/api/v1/work-items/" + storyId + "/attachments")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/labels/" + labelId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/labels")).isEmpty();
+        assertThat(delete("/api/v1/workspaces/" + workspaceId + "/labels/" + labelId).statusCode()).isEqualTo(204);
+        assertThat(getJson("/api/v1/workspaces/" + workspaceId + "/labels")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/watchers/" + actorId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/watchers")).isEmpty();
         assertThat(delete("/api/v1/work-items/" + storyId + "/work-logs/" + workLogId).statusCode()).isEqualTo(204);

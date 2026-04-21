@@ -847,6 +847,23 @@ public class AgentService {
     }
 
     @Transactional
+    public void deactivateRepositoryConnection(UUID workspaceId, UUID connectionId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "repository_connection.manage");
+        RepositoryConnection connection = repositoryConnectionRepository.findByIdAndWorkspaceIdAndActiveTrue(connectionId, workspaceId)
+                .orElseThrow(() -> notFound("Repository connection not found"));
+        connection.setActive(false);
+        RepositoryConnection saved = repositoryConnectionRepository.save(connection);
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("repositoryConnectionId", saved.getId().toString())
+                .put("provider", saved.getProvider())
+                .put("repositoryUrl", saved.getRepositoryUrl())
+                .put("actorUserId", actorId.toString());
+        recordWorkspaceEvent(workspaceId, "repository_connection", saved.getId(), "repository_connection.deactivated", actorId, payload);
+    }
+
+    @Transactional
     public AgentTaskResponse assignAgent(UUID workItemId, AgentTaskAssignRequest request) {
         AgentTaskAssignRequest assignRequest = required(request, "request");
         UUID actorId = currentUserService.requireUserId();

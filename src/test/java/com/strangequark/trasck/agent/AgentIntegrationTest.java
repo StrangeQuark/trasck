@@ -538,6 +538,10 @@ class AgentIntegrationTest {
         assertThat(eventTypes(activity)).contains("work_item.agent_assigned", "agent.task.review_requested", "work_item.comment_created", "work_item.agent_acceptance_transitioned");
         JsonNode audit = read(get("/api/v1/workspaces/" + workspaceId + "/audit-log?limit=100", accessToken));
         assertThat(eventTypes(audit, "action")).contains("agent.provider.created", "agent.provider.credential_created", "agent.profile.created", "agent.task.completed");
+
+        assertThat(read(get("/api/v1/workspaces/" + workspaceId + "/repository-connections", accessToken))).hasSize(1);
+        assertThat(delete("/api/v1/workspaces/" + workspaceId + "/repository-connections/" + repositoryConnectionId, accessToken).statusCode()).isEqualTo(204);
+        assertThat(read(get("/api/v1/workspaces/" + workspaceId + "/repository-connections", accessToken))).isEmpty();
     }
 
     private JsonNode postSetup() throws Exception {
@@ -610,6 +614,12 @@ class AgentIntegrationTest {
 
     private HttpResponse<String> get(String path, String accessToken) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> delete(String path, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).DELETE();
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }

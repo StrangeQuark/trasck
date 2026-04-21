@@ -326,6 +326,16 @@ public class WorkItemCollaborationService {
         return LabelResponse.from(label.label());
     }
 
+    @Transactional
+    public void deleteWorkspaceLabel(UUID workspaceId, UUID labelId) {
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "work_item.update");
+        Label label = labelRepository.findByIdAndWorkspaceId(labelId, workspaceId)
+                .orElseThrow(() -> notFound("Label not found"));
+        labelRepository.delete(label);
+        recordLabelEvent(label, "label.deleted", actorId);
+    }
+
     @Transactional(readOnly = true)
     public List<LabelResponse> listWorkItemLabels(UUID workItemId) {
         WorkItem item = readableWorkItem(workItemId);

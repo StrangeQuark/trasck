@@ -36,9 +36,9 @@ docker compose up --build
 <br>
 
 ### Environment Variables
-The `.env` file is required to provide necessary configuration such as encryption secrets and database credentials. Default values are provided in `.env` file so the application can run out-of-the-box for testing.
+Copy `.env.example` to `.env` for local overrides. Environment variables provide configuration such as encryption secrets and database credentials.
 
-⚠️ **Warning**: Do not deploy this application to production without properly changing your environment variables. The provided `.env` is not safe to use past local deployments!
+⚠️ **Warning**: Do not deploy this application to production without replacing every development secret, password, local URL, and insecure cookie setting with production values.
 <br><br>
 
 ## API Documentation
