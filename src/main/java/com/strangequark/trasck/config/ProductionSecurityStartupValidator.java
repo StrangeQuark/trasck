@@ -4,7 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.env.Environment;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -23,10 +27,25 @@ public class ProductionSecurityStartupValidator implements InitializingBean {
 
     private final Environment environment;
     private final RuntimeSecurityProfile runtimeSecurityProfile;
+    private final RedisConnectionFactory redisConnectionFactory;
 
-    public ProductionSecurityStartupValidator(Environment environment, RuntimeSecurityProfile runtimeSecurityProfile) {
+    @Autowired
+    public ProductionSecurityStartupValidator(
+            Environment environment,
+            RuntimeSecurityProfile runtimeSecurityProfile,
+            ObjectProvider<RedisConnectionFactory> redisConnectionFactoryProvider
+    ) {
+        this(environment, runtimeSecurityProfile, redisConnectionFactoryProvider.getIfAvailable());
+    }
+
+    ProductionSecurityStartupValidator(
+            Environment environment,
+            RuntimeSecurityProfile runtimeSecurityProfile,
+            RedisConnectionFactory redisConnectionFactory
+    ) {
         this.environment = environment;
         this.runtimeSecurityProfile = runtimeSecurityProfile;
+        this.redisConnectionFactory = redisConnectionFactory;
     }
 
     @Override
@@ -74,6 +93,19 @@ public class ProductionSecurityStartupValidator implements InitializingBean {
     private void validateRateLimitStore(List<String> failures) {
         if (!"redis".equals(environment.getProperty("trasck.security.rate-limit.store", "database").trim().toLowerCase(Locale.ROOT))) {
             failures.add("trasck.security.rate-limit.store must be redis for production-like profiles");
+            return;
+        }
+        if (redisConnectionFactory == null) {
+            failures.add("trasck.security.rate-limit.store=redis requires a reachable Redis connection");
+            return;
+        }
+        try (RedisConnection connection = redisConnectionFactory.getConnection()) {
+            String pong = connection.ping();
+            if (pong == null || pong.isBlank()) {
+                failures.add("trasck.security.rate-limit.store=redis requires a reachable Redis connection");
+            }
+        } catch (RuntimeException ex) {
+            failures.add("trasck.security.rate-limit.store=redis requires a reachable Redis connection");
         }
     }
 

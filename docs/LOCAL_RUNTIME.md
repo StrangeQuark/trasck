@@ -57,7 +57,7 @@ Core local variables:
 - `TRASCK_PASSWORD_MIN_LENGTH`, `TRASCK_LOGIN_MAX_FAILURES`, `TRASCK_LOGIN_FAILURE_WINDOW`, and `TRASCK_LOGIN_LOCKOUT_DURATION`: password and login throttling controls.
 - `TRASCK_TRUST_FORWARDED_FOR`: defaults to `false`. Set only when Trasck is behind a trusted reverse proxy that controls `X-Forwarded-For`.
 - `TRASCK_SECURITY_RATE_LIMIT_STORE`: `database` by default. Set to `redis` to share auth throttling counters across horizontally scaled backend instances.
-- `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, and `SPRING_DATA_REDIS_PASSWORD`: Redis connection settings used when `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`. Production-like profiles require the Redis-backed rate-limit store.
+- `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, and `SPRING_DATA_REDIS_PASSWORD`: Redis connection settings used when `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`. Production-like profiles require the Redis-backed rate-limit store and fail startup if Redis cannot be pinged.
 - `TRASCK_ATTACHMENTS_MAX_UPLOAD_BYTES`, `TRASCK_ATTACHMENTS_MAX_DOWNLOAD_BYTES`, and `TRASCK_ATTACHMENTS_ALLOWED_CONTENT_TYPES`: attachment metadata/upload/download limits and content-type allowlist.
 - `TRASCK_EXPORTS_MAX_ARTIFACT_BYTES` and `TRASCK_EXPORTS_ALLOWED_CONTENT_TYPES`: generated export artifact and export download limits.
 - `TRASCK_IMPORTS_MAX_PARSE_BYTES` and `TRASCK_IMPORTS_ALLOWED_CONTENT_TYPES`: import parser payload size and content-type allowlist.
@@ -72,7 +72,7 @@ Core local variables:
 
 Agent callback private keys and provider credentials are stored encrypted in `agent_provider_credentials.encrypted_secret`. `TRASCK_SECRETS_ENCRYPTION_KEY` can be raw text, hex, standard Base64, or URL-safe Base64. A direct 16, 24, or 32 byte decoded key is used as AES key material; otherwise Trasck derives an AES-256 key with SHA-256.
 
-Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup when known development secrets, weak database passwords, insecure cookie flags, local OAuth redirects, local/wildcard CORS origins, or non-Redis rate-limit stores are active. OpenAPI and Swagger remain public in local/non-production profiles, but production-like profiles require authenticated system-admin access. Active system admins can be managed through `GET/POST/DELETE /api/v1/system-admins`; production-like grant/revoke requires recent authentication. Workspace admins can override deployment attachment/import/export limits through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`, and project admins can apply project-level overrides through `GET/PATCH /api/v1/projects/{projectId}/security-policy`.
+Production-like `prod`, `production`, `staging`, and `hosted` profiles fail startup when known development secrets, weak database passwords, insecure cookie flags, local OAuth redirects, local/wildcard CORS origins, non-Redis rate-limit stores, or unreachable Redis-backed throttling are active. OpenAPI and Swagger remain public in local/non-production profiles, but production-like profiles require authenticated system-admin access. Active system admins can be managed through `GET/POST/DELETE /api/v1/system-admins`; production-like grant/revoke requires recent authentication. Workspace admins can override deployment attachment/import/export limits through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`, and project admins can apply project-level overrides through `GET/PATCH /api/v1/projects/{projectId}/security-policy`.
 
 Docker Compose includes an internal `redis` service for `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`. The Redis service is not published to the host by default.
 
@@ -106,7 +106,7 @@ The test repo defaults to:
 - Frontend: `http://localhost:8080`
 - Browser: `chromium`
 
-Override these with `TRASCK_BACKEND_BASE_URL`, `TRASCK_FRONTEND_BASE_URL`, `TRASCK_E2E_BROWSER`, `TRASCK_E2E_HEADLESS`, and `TRASCK_E2E_TIMEOUT_MS`. The test repo also supports `docker compose run --rm trasck-test` for running the Java Playwright suite from its container against services on the host.
+Override these with `TRASCK_BACKEND_BASE_URL`, `TRASCK_FRONTEND_BASE_URL`, `TRASCK_E2E_BROWSER`, `TRASCK_E2E_HEADLESS`, and `TRASCK_E2E_TIMEOUT_MS`. Authenticated API coverage also supports `TRASCK_E2E_LOGIN_IDENTIFIER`, `TRASCK_E2E_LOGIN_PASSWORD`, `TRASCK_E2E_WORKSPACE_ID`, and `TRASCK_E2E_PROJECT_ID`; those tests create uniquely named resources and clean them up through public APIs. The test repo also supports `docker compose run --rm trasck-test` for running the Java Playwright suite from its container against services on the host.
 
 ## Health Check
 
