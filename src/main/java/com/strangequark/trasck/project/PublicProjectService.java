@@ -2,6 +2,14 @@ package com.strangequark.trasck.project;
 
 import com.strangequark.trasck.api.CursorPageResponse;
 import com.strangequark.trasck.api.PageCursorCodec;
+import com.strangequark.trasck.activity.Attachment;
+import com.strangequark.trasck.activity.AttachmentRepository;
+import com.strangequark.trasck.activity.AttachmentStorageConfig;
+import com.strangequark.trasck.activity.AttachmentStorageConfigRepository;
+import com.strangequark.trasck.activity.CommentRepository;
+import com.strangequark.trasck.activity.storage.AttachmentStorageService;
+import com.strangequark.trasck.security.ContentLimitPolicy;
+import com.strangequark.trasck.workitem.AttachmentFileResponse;
 import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
 import com.strangequark.trasck.workspace.Workspace;
@@ -19,15 +27,33 @@ public class PublicProjectService {
     private final ProjectRepository projectRepository;
     private final WorkspaceRepository workspaceRepository;
     private final WorkItemRepository workItemRepository;
+    private final CommentRepository commentRepository;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentStorageConfigRepository attachmentStorageConfigRepository;
+    private final AttachmentStorageService attachmentStorageService;
+    private final PublicAttachmentDownloadTokenService publicAttachmentDownloadTokenService;
+    private final ContentLimitPolicy contentLimitPolicy;
 
     public PublicProjectService(
             ProjectRepository projectRepository,
             WorkspaceRepository workspaceRepository,
-            WorkItemRepository workItemRepository
+            WorkItemRepository workItemRepository,
+            CommentRepository commentRepository,
+            AttachmentRepository attachmentRepository,
+            AttachmentStorageConfigRepository attachmentStorageConfigRepository,
+            AttachmentStorageService attachmentStorageService,
+            PublicAttachmentDownloadTokenService publicAttachmentDownloadTokenService,
+            ContentLimitPolicy contentLimitPolicy
     ) {
         this.projectRepository = projectRepository;
         this.workspaceRepository = workspaceRepository;
         this.workItemRepository = workItemRepository;
+        this.commentRepository = commentRepository;
+        this.attachmentRepository = attachmentRepository;
+        this.attachmentStorageConfigRepository = attachmentStorageConfigRepository;
+        this.attachmentStorageService = attachmentStorageService;
+        this.publicAttachmentDownloadTokenService = publicAttachmentDownloadTokenService;
+        this.contentLimitPolicy = contentLimitPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -67,13 +93,41 @@ public class PublicProjectService {
 
     @Transactional(readOnly = true)
     public PublicWorkItemResponse getPublicWorkItem(UUID projectId, UUID workItemId) {
-        Project project = publicProject(projectId);
-        WorkItem item = workItemRepository.findByIdAndDeletedAtIsNull(workItemId)
+        return PublicWorkItemResponse.from(publicWorkItem(projectId, workItemId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<PublicWorkItemCommentResponse> listPublicWorkItemComments(UUID projectId, UUID workItemId) {
+        WorkItem item = publicWorkItem(projectId, workItemId);
+        return commentRepository.findPublicByWorkItemIdOrderByCreatedAtAsc(item.getId()).stream()
+                .map(PublicWorkItemCommentResponse::from)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<PublicWorkItemAttachmentResponse> listPublicWorkItemAttachments(UUID projectId, UUID workItemId) {
+        WorkItem item = publicWorkItem(projectId, workItemId);
+        return attachmentRepository.findPublicByWorkItemIdOrderByCreatedAtAsc(item.getId()).stream()
+                .map(attachment -> PublicWorkItemAttachmentResponse.from(
+                        projectId,
+                        item.getId(),
+                        attachment,
+                        publicAttachmentDownloadTokenService.issue(projectId, item.getId(), attachment.getId())
+                ))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public AttachmentFileResponse downloadPublicWorkItemAttachment(UUID projectId, UUID workItemId, UUID attachmentId, String token) {
+        WorkItem item = publicWorkItem(projectId, workItemId);
+        publicAttachmentDownloadTokenService.verify(token, projectId, item.getId(), attachmentId);
+        Attachment attachment = attachmentRepository.findPublicByWorkItemIdAndId(item.getId(), attachmentId)
                 .orElseThrow(this::publicProjectNotFound);
-        if (!project.getId().equals(item.getProjectId()) || !isPubliclyReadable(item)) {
-            throw publicProjectNotFound();
-        }
-        return PublicWorkItemResponse.from(item);
+        contentLimitPolicy.validateAttachmentDownload(item.getWorkspaceId(), item.getProjectId(), attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
+        AttachmentStorageConfig storageConfig = resolveExistingStorageConfig(item.getWorkspaceId(), attachment.getStorageConfigId());
+        byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
+        contentLimitPolicy.validateAttachmentDownload(item.getWorkspaceId(), item.getProjectId(), attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
+        return new AttachmentFileResponse(attachment.getFilename(), attachment.getContentType(), bytes);
     }
 
     private Project publicProject(UUID projectId) {
@@ -86,6 +140,16 @@ public class PublicProjectService {
             throw publicProjectNotFound();
         }
         return project;
+    }
+
+    private WorkItem publicWorkItem(UUID projectId, UUID workItemId) {
+        Project project = publicProject(projectId);
+        WorkItem item = workItemRepository.findByIdAndDeletedAtIsNull(workItemId)
+                .orElseThrow(this::publicProjectNotFound);
+        if (!project.getId().equals(item.getProjectId()) || !isPubliclyReadable(item)) {
+            throw publicProjectNotFound();
+        }
+        return item;
     }
 
     private boolean isPubliclyReadable(Workspace workspace, Project project) {
@@ -110,6 +174,14 @@ public class PublicProjectService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private AttachmentStorageConfig resolveExistingStorageConfig(UUID workspaceId, UUID storageConfigId) {
+        if (storageConfigId == null) {
+            throw publicProjectNotFound();
+        }
+        return attachmentStorageConfigRepository.findByIdAndWorkspaceId(storageConfigId, workspaceId)
+                .orElseThrow(this::publicProjectNotFound);
     }
 
     private ResponseStatusException publicProjectNotFound() {

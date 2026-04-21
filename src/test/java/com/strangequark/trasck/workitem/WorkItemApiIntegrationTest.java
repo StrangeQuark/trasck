@@ -304,6 +304,17 @@ class WorkItemApiIntegrationTest {
         JsonNode updatedComment = patch("/api/v1/work-items/" + storyId + "/comments/" + commentId, objectMapper.createObjectNode()
                 .put("bodyMarkdown", "Updated collaboration note."));
         assertThat(updatedComment.at("/bodyMarkdown").asText()).isEqualTo("Updated collaboration note.");
+        JsonNode privateComment = postJson("/api/v1/work-items/" + storyId + "/comments", objectMapper.createObjectNode()
+                .put("bodyMarkdown", "Internal implementation note.")
+                .put("visibility", "private"));
+        UUID privateCommentId = uuid(privateComment, "/id");
+        HttpResponse<String> publicCommentsResponse = getAnonymous("/api/v1/public/projects/" + projectId + "/work-items/" + storyId + "/comments");
+        assertThat(publicCommentsResponse.statusCode()).isEqualTo(200);
+        JsonNode publicComments = objectMapper.readTree(publicCommentsResponse.body());
+        assertThat(publicComments).hasSize(1);
+        assertThat(publicComments.at("/0/bodyMarkdown").asText()).isEqualTo("Updated collaboration note.");
+        assertThat(publicComments.at("/0").has("authorId")).isFalse();
+        assertThat(publicComments.at("/0").has("updatedAt")).isFalse();
 
         JsonNode link = postJson("/api/v1/work-items/" + storyId + "/links", objectMapper.createObjectNode()
                 .put("targetWorkItemId", secondEpicId.toString())
@@ -883,9 +894,37 @@ class WorkItemApiIntegrationTest {
         assertThat(downloadResponse.body()).isEqualTo(attachmentBytes);
         assertThat(downloadResponse.headers().firstValue("Content-Disposition"))
                 .hasValueSatisfying(value -> assertThat(value).contains("implementation-notes.txt"));
+        byte[] publicAttachmentBytes = "Public implementation note\n".getBytes(StandardCharsets.UTF_8);
+        JsonNode publicUploadedAttachment = uploadAttachmentFile(storyId, "public-implementation-note.txt", "text/plain", publicAttachmentBytes, "public");
+        UUID publicUploadedAttachmentId = uuid(publicUploadedAttachment, "/id");
+        String publicUploadedStorageKey = publicUploadedAttachment.at("/storageKey").asText();
+        assertThat(getJson("/api/v1/work-items/" + storyId + "/attachments")).hasSize(3);
+        HttpResponse<String> publicAttachmentsResponse = getAnonymous("/api/v1/public/projects/" + projectId + "/work-items/" + storyId + "/attachments");
+        assertThat(publicAttachmentsResponse.statusCode()).isEqualTo(200);
+        JsonNode publicAttachments = objectMapper.readTree(publicAttachmentsResponse.body());
+        assertThat(publicAttachments).hasSize(1);
+        assertThat(publicAttachments.at("/0/id").asText()).isEqualTo(publicUploadedAttachmentId.toString());
+        assertThat(publicAttachments.at("/0/filename").asText()).isEqualTo("public-implementation-note.txt");
+        assertThat(publicAttachments.at("/0/downloadUrl").asText()).contains("/api/v1/public/projects/" + projectId + "/work-items/" + storyId + "/attachments/" + publicUploadedAttachmentId + "/download?token=");
+        assertThat(publicAttachments.at("/0").has("storageKey")).isFalse();
+        assertThat(publicAttachments.at("/0").has("uploaderId")).isFalse();
+        HttpResponse<byte[]> publicDownloadResponse = getBytesAnonymous(publicAttachments.at("/0/downloadUrl").asText());
+        assertThat(publicDownloadResponse.statusCode()).isEqualTo(200);
+        assertThat(publicDownloadResponse.body()).isEqualTo(publicAttachmentBytes);
+        assertThat(getBytesAnonymous("/api/v1/public/projects/" + projectId + "/work-items/" + storyId + "/attachments/" + publicUploadedAttachmentId + "/download?token=invalid").statusCode()).isEqualTo(403);
+
+        patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
+                .put("visibility", "private"));
+        assertThat(getAnonymous("/api/v1/public/projects/" + projectId + "/work-items/" + storyId + "/comments").statusCode()).isEqualTo(404);
+        assertThat(getAnonymous("/api/v1/public/projects/" + projectId + "/work-items/" + storyId + "/attachments").statusCode()).isEqualTo(404);
+        patch("/api/v1/work-items/" + storyId, objectMapper.createObjectNode()
+                .put("visibility", "inherited"));
+
         assertThat(uploadAttachmentFileResponse(storyId, "oversized.txt", "text/plain", "x".repeat(65).getBytes(StandardCharsets.UTF_8)).statusCode()).isEqualTo(413);
         assertThat(uploadAttachmentFileResponse(storyId, "page.html", "text/html", "<html></html>".getBytes(StandardCharsets.UTF_8)).statusCode()).isEqualTo(415);
 
+        assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + publicUploadedAttachmentId).statusCode()).isEqualTo(204);
+        assertThat(Files.exists(ATTACHMENT_ROOT.resolve(publicUploadedStorageKey))).isFalse();
         assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + uploadedAttachmentId).statusCode()).isEqualTo(204);
         assertThat(Files.exists(ATTACHMENT_ROOT.resolve(uploadedStorageKey))).isFalse();
         assertThat(delete("/api/v1/work-items/" + storyId + "/attachments/" + attachmentId).statusCode()).isEqualTo(204);
@@ -903,17 +942,18 @@ class WorkItemApiIntegrationTest {
         assertThat(softDeleted("work_logs", memberWorkLogId)).isTrue();
         assertThat(delete("/api/v1/work-items/" + storyId + "/links/" + linkId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/links")).isEmpty();
+        assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + privateCommentId).statusCode()).isEqualTo(204);
         assertThat(delete("/api/v1/work-items/" + storyId + "/comments/" + commentId).statusCode()).isEqualTo(204);
         assertThat(getJson("/api/v1/work-items/" + storyId + "/comments")).isEmpty();
 
         for (int i = 0; i < 3; i++) {
             domainEventOutboxDispatcher.dispatchPending();
         }
-        JsonNode workItemActivity = getJson("/api/v1/work-items/" + storyId + "/activity");
+        JsonNode workItemActivity = getJson("/api/v1/work-items/" + storyId + "/activity?limit=100");
         assertThat(eventTypes(workItemActivity)).contains("work_item.created", "work_item.comment_created", "work_item.work_logged", "work_item.attachment_removed");
-        JsonNode projectActivity = getJson("/api/v1/workspaces/" + workspaceId + "/projects/" + projectId + "/activity");
+        JsonNode projectActivity = getJson("/api/v1/workspaces/" + workspaceId + "/projects/" + projectId + "/activity?limit=100");
         assertThat(eventTypes(projectActivity)).contains("work_item.created", "work_item.updated");
-        JsonNode workspaceActivity = getJson("/api/v1/workspaces/" + workspaceId + "/activity");
+        JsonNode workspaceActivity = getJson("/api/v1/workspaces/" + workspaceId + "/activity?limit=100");
         assertThat(eventTypes(workspaceActivity)).contains("work_item.created", "label.created");
 
         ObjectNode replayRequest = objectMapper.createObjectNode()
@@ -1159,14 +1199,22 @@ class WorkItemApiIntegrationTest {
     }
 
     private JsonNode uploadAttachmentFile(UUID workItemId, String filename, String contentType, byte[] content) throws Exception {
-        HttpResponse<String> response = uploadAttachmentFileResponse(workItemId, filename, contentType, content);
+        return uploadAttachmentFile(workItemId, filename, contentType, content, "restricted");
+    }
+
+    private JsonNode uploadAttachmentFile(UUID workItemId, String filename, String contentType, byte[] content, String visibility) throws Exception {
+        HttpResponse<String> response = uploadAttachmentFileResponse(workItemId, filename, contentType, content, visibility);
         assertThat(response.statusCode()).isEqualTo(201);
         return objectMapper.readTree(response.body());
     }
 
     private HttpResponse<String> uploadAttachmentFileResponse(UUID workItemId, String filename, String contentType, byte[] content) throws Exception {
+        return uploadAttachmentFileResponse(workItemId, filename, contentType, content, "restricted");
+    }
+
+    private HttpResponse<String> uploadAttachmentFileResponse(UUID workItemId, String filename, String contentType, byte[] content, String visibility) throws Exception {
         String boundary = "----trasck-" + UUID.randomUUID();
-        byte[] body = multipartBody(boundary, filename, contentType, content);
+        byte[] body = multipartBody(boundary, filename, contentType, content, visibility);
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri("/api/v1/work-items/" + workItemId + "/attachments/files"))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body));
@@ -1174,10 +1222,10 @@ class WorkItemApiIntegrationTest {
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private byte[] multipartBody(String boundary, String filename, String contentType, byte[] content) {
+    private byte[] multipartBody(String boundary, String filename, String contentType, byte[] content, String visibility) {
         try {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
-            writeMultipartText(output, boundary, "visibility", "restricted");
+            writeMultipartText(output, boundary, "visibility", visibility);
             output.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
             output.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n").getBytes(StandardCharsets.UTF_8));
             output.write(("Content-Type: " + contentType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
@@ -1203,10 +1251,20 @@ class WorkItemApiIntegrationTest {
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
+    private HttpResponse<String> getAnonymous(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri(path)).GET().build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
     private HttpResponse<byte[]> getBytes(String path) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
         authorize(builder);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
+    }
+
+    private HttpResponse<byte[]> getBytesAnonymous(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri(path)).GET().build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
     }
 
     private HttpResponse<String> delete(String path) throws Exception {
