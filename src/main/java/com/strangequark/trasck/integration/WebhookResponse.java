@@ -9,6 +9,7 @@ public record WebhookResponse(
         String name,
         String url,
         Boolean secretConfigured,
+        String secretKeyId,
         Object eventTypes,
         Boolean enabled
 ) {
@@ -20,6 +21,7 @@ public record WebhookResponse(
                 webhook.getUrl(),
                 (webhook.getSecretHash() != null && !webhook.getSecretHash().isBlank())
                         || (webhook.getSecretEncrypted() != null && !webhook.getSecretEncrypted().isBlank()),
+                webhook.getSecretKeyId(),
                 JsonValues.toJavaValue(webhook.getEventTypes()),
                 webhook.getEnabled()
         );

@@ -39,6 +39,9 @@ public class Webhook {
     @Column(name = "secret_encrypted")
     private String secretEncrypted;
 
+    @Column(name = "secret_key_id")
+    private String secretKeyId;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "event_types")
     private JsonNode eventTypes;
@@ -93,6 +96,14 @@ public class Webhook {
 
     public void setSecretEncrypted(String secretEncrypted) {
         this.secretEncrypted = secretEncrypted;
+    }
+
+    public String getSecretKeyId() {
+        return secretKeyId;
+    }
+
+    public void setSecretKeyId(String secretKeyId) {
+        this.secretKeyId = secretKeyId;
     }
 
     public JsonNode getEventTypes() {
