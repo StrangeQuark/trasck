@@ -31,6 +31,9 @@ public class WebhookDelivery {
     @Column(name = "event_type")
     private String eventType;
 
+    @Column(name = "signature_key_id")
+    private String signatureKeyId;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payload")
     private JsonNode payload;
@@ -76,6 +79,14 @@ public class WebhookDelivery {
 
     public void setEventType(String eventType) {
         this.eventType = eventType;
+    }
+
+    public String getSignatureKeyId() {
+        return signatureKeyId;
+    }
+
+    public void setSignatureKeyId(String signatureKeyId) {
+        this.signatureKeyId = signatureKeyId;
     }
 
     public JsonNode getPayload() {

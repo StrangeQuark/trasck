@@ -1,6 +1,7 @@
 package com.strangequark.trasck.integration;
 
 import com.strangequark.trasck.JsonValues;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public record WebhookResponse(
@@ -10,6 +11,9 @@ public record WebhookResponse(
         String url,
         Boolean secretConfigured,
         String secretKeyId,
+        String previousSecretKeyId,
+        OffsetDateTime secretRotatedAt,
+        OffsetDateTime previousSecretExpiresAt,
         Object eventTypes,
         Boolean enabled
 ) {
@@ -22,6 +26,9 @@ public record WebhookResponse(
                 (webhook.getSecretHash() != null && !webhook.getSecretHash().isBlank())
                         || (webhook.getSecretEncrypted() != null && !webhook.getSecretEncrypted().isBlank()),
                 webhook.getSecretKeyId(),
+                webhook.getPreviousSecretKeyId(),
+                webhook.getSecretRotatedAt(),
+                webhook.getPreviousSecretExpiresAt(),
                 JsonValues.toJavaValue(webhook.getEventTypes()),
                 webhook.getEnabled()
         );

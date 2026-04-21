@@ -4,12 +4,12 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should the next high-risk Playwright API batch cover the import lifecycle/review-export routes first, or should auth/logout/register/OAuth routes move ahead of imports?
-    - Answer: Implement both
-2. Should webhook signing rotation add first-class dual-secret overlap metadata in Trasck before external customer webhook testing, or is the current per-secret key ID plus receiver-managed overlap enough for now?
-    - Answer: Add first-class dual-secret overlap now
-3. Should the next frontend browser coverage pass focus on import review/export workflows, or on auth/token/system-admin screens?
-    - Answer: Both
+1. Should the next frontend Playwright pass prioritize real-backend browser workflows that require seeded local data, or keep using mocked browser API routes until the UI flows stabilize further?
+    - Answer: Use real workflows and seed data
+2. Should the webhook previous-secret overlap duration remain fixed at 72 hours, or become workspace/webhook-configurable before external customer webhook testing?
+    - Answer: Make it configurable but default to 72 hours
+3. Should the first dedicated security regression pass prioritize tenant-isolation/authorization denial across all covered APIs, or production-profile startup and admin-gating checks?
+    - Answer: Production startup and admin-gating checks
 
 ## Current State
 
@@ -31,7 +31,7 @@ Import review operations now have backend-generated export-job artifacts for job
 
 Import demo job endpoints remain workspace-admin-only. Local/default runtimes default sample jobs on for developer walkthroughs but workspace admins can toggle `sampleJobsEnabled` per workspace through import settings; production-like `prod`, `production`, `staging`, and `hosted` profiles require both the workspace setting and explicit deployment enablement with `TRASCK_IMPORT_SAMPLE_JOBS_ENABLED=true`.
 
-Automation, webhook, email, and import conflict-resolution worker executions write dedicated `automation_worker_runs` and `automation_worker_health` rows. Operations screens can filter run/health previews by worker type. Manual worker-run retention export and pruning accept `workerType`, `triggerType`, `status`, and start-time range filters, so admins can export/prune targeted worker history without deleting unrelated run records. Automatic retention pruning remains all-worker-type by design. Webhook secrets are stored encrypted for signing and as hashes for redacted configured-state checks; real outbound webhook deliveries include `X-Trasck-Webhook-Id`, `X-Trasck-Webhook-Delivery-Id`, `X-Trasck-Webhook-Timestamp`, `X-Trasck-Webhook-Signature-Key-Id`, and `X-Trasck-Webhook-Signature` headers using HMAC-SHA256 over `timestamp + "." + body`. Webhook secret writes rotate the non-secret `secretKeyId`, existing signable webhook rows are backfilled with key IDs, and receiver verification/rotation guidance is documented in `docs/WEBHOOK_SIGNATURES.md`. External Java Playwright coverage now exercises automation rules/jobs/workers, webhook configuration/deliveries, signed real local-receiver webhook processing including rotated key IDs, Maildev dry-run email delivery processing, worker settings, worker run/health reads, and worker run retention export/prune.
+Automation, webhook, email, and import conflict-resolution worker executions write dedicated `automation_worker_runs` and `automation_worker_health` rows. Operations screens can filter run/health previews by worker type. Manual worker-run retention export and pruning accept `workerType`, `triggerType`, `status`, and start-time range filters, so admins can export/prune targeted worker history without deleting unrelated run records. Automatic retention pruning remains all-worker-type by design. Webhook secrets are stored encrypted for signing and as hashes for redacted configured-state checks; real outbound webhook deliveries include `X-Trasck-Webhook-Id`, `X-Trasck-Webhook-Delivery-Id`, `X-Trasck-Webhook-Timestamp`, `X-Trasck-Webhook-Signature-Key-Id`, and `X-Trasck-Webhook-Signature` headers using HMAC-SHA256 over `timestamp + "." + body`. Webhook secret writes rotate the non-secret `secretKeyId`, retain the immediately previous encrypted secret/key/hash for a 72-hour overlap window, expose previous-key expiry metadata, and store the selected `signatureKeyId` on each queued delivery so old queued deliveries can still be signed during rotation overlap. Receiver verification/rotation guidance is documented in `docs/WEBHOOK_SIGNATURES.md`. External Java Playwright coverage now exercises automation rules/jobs/workers, webhook configuration/deliveries, signed real local-receiver webhook processing including dual-secret rotation overlap, Maildev dry-run email delivery processing, worker settings, worker run/health reads, and worker run retention export/prune.
 
 Agent delivery hardening keeps the generic worker protocol as the main extensibility path while Codex and Claude Code adapters expose explicit `stub`, `hosted_api`, and hardened `cli_worker` runtime modes behind the provider-neutral adapter contract. External execution must be intentionally enabled in provider config; CLI-worker config accepts named allowlisted command profiles instead of raw shell commands. Provider runtime preview lets admins inspect non-stub payloads without dispatching work. Dispatch, retry, and cancel boundaries are persisted in first-class `agent_dispatch_attempts` rows, included in `AgentTaskResponse.dispatchAttempts`, and exposed through workspace admin list/export/prune endpoints so admins and tests have a durable view of idempotency keys, payloads, external task IDs, transport, provider type, and failure messages before real external execution is enabled. Repository connections can now be deactivated through the public workspace admin API so test and admin flows can clean up connection records without direct database access.
 
@@ -39,58 +39,44 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client that is refreshed after backend endpoint batches, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy/workspace member-management screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, a local HTTP receiver for webhook/worker delivery assertions, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy and public project/work-item/comment/attachment read boundaries with signed public attachment downloads, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads and mutation coverage, domain-event replay coverage, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, attachment byte upload/download, workspace and work-item label cleanup, team/membership/planning/board/swimlane/release/roadmap resources, reporting history/snapshot reads and snapshot execution controls, program CRUD/project assignment/dashboard summary coverage, team-scoped dashboard/filter/view/report-query lists, repository connections, invitation list/cancellation, workspace-admin human user list/creation/removal, full workspace/project role management API coverage, notification preference/default CRUD plus direct and automation-created notification read coverage, automation async rule/job/webhook/email/worker API coverage, provider-neutral agent provider/profile/credential/task/callback/worker-token/dispatch-attempt API coverage, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs where public cleanup APIs exist, and browser smoke tests for the frontend shell, Workspace Settings member/invitation flow, program/portfolio management, automation async worker controls, agent provider/profile/repository/task/dispatch-attempt controls, workspace/project public-read settings, and public project/work-item/comment/attachment preview route. The committed baseline currently tracks 330 covered backend routes, 0 ordinary planned routes, and 67 planned high-risk routes. The remaining backend route work is now the high-risk import/export/auth security surfaces.
+The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, a local HTTP receiver for webhook/worker delivery assertions, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy and public project/work-item/comment/attachment read boundaries with signed public attachment downloads, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads and mutation coverage, domain-event replay coverage, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, attachment byte upload/download, workspace and work-item label cleanup, team/membership/planning/board/swimlane/release/roadmap resources, reporting history/snapshot reads and snapshot execution controls, program CRUD/project assignment/dashboard summary coverage, team-scoped dashboard/filter/view/report-query lists, repository connections, invitation list/cancellation, workspace-admin human user list/creation/removal, full workspace/project role management API coverage, notification preference/default CRUD plus direct and automation-created notification read coverage, automation async rule/job/webhook/email/worker API coverage with dual-secret webhook rotation assertions, high-risk import lifecycle/review-export/report API coverage, auth/logout/register/OAuth unsafe-input coverage, provider-neutral agent provider/profile/credential/task/callback/worker-token/dispatch-attempt API coverage, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs where public cleanup APIs exist, and browser smoke tests for the frontend shell, Workspace Settings member/invitation flow, program/portfolio management, automation async worker controls, auth/token/system-admin controls, import review/export worker controls, agent provider/profile/repository/task/dispatch-attempt controls, workspace/project public-read settings, and public project/work-item/comment/attachment preview route. The committed baseline currently tracks 397 covered backend routes, 0 ordinary planned routes, and 0 planned high-risk routes.
 
 The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, requires Redis-backed auth throttling in production-like profiles and pings Redis on startup, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection and production-like recent-login step-up for grant/revoke, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, rate-limits callback/worker auth failures, enforces workspace-admin and project-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, system-admin step-up UX hardening, production deployment health/observability around Redis-backed throttling, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Complete High-Risk Import Playwright API Coverage
-
-Goal: make sure the route-by-route suite covers the import surfaces most likely to hide security, tenant-boundary, worker, export-artifact, and durable-state bugs.
-
-Planned work:
-
-- Cover import jobs, import records, import mapping templates, import transform presets, import samples/settings, conflict resolution, queued conflict-resolution jobs, review CSV export jobs, and import completion reporting.
-- Verify authorization denial, tenant boundaries, size/content policy errors, redaction, export artifact download access, sample job gating, worker pickup, conflict-resolution idempotency, and completion guard behavior.
-- Extend AI agent Playwright coverage later for repository deactivation edge cases, webhook-push local receiver assertions, Codex/Claude-specific credential validation, and deeper live-backend frontend Agent workflows; provider/profile/credential/task/callback/worker-token/dispatch-attempt API routes and mocked browser agent screens are now covered without paid or unmanaged external execution.
-- Keep pairing each high-risk backend route batch with matching frontend browser workflow coverage when the implemented UI surface already exists.
-- Continue treating import and OAuth/register/logout routes as `planned-high-risk` until their durable side effects and denial paths are covered.
-
-Done when:
-
-- High-risk route baseline rows move from `planned-high-risk` to `covered`, with focused denial/security assertions in addition to happy paths.
-
-### 2. Playwright Frontend Workflow Coverage
+### 1. Playwright Frontend Workflow Coverage
 
 Goal: cover the implemented Vite React screens through browser workflows, not only API calls.
 
 Planned work:
 
-- Cover setup, login/logout/current user, workspace settings member/invitation flows, project/work item CRUD, collaboration panels, team/planning/board flows, dashboards/reports/saved filters/views, configuration screens, notification preferences/defaults, automation/webhook/email operations, import review/export flows, system-admin/workspace-project-security-policy screens, token screens, and AI agent provider/profile/task/dispatch-attempt screens.
+- Extend browser coverage beyond the current shell, Workspace Settings member/invitation, program/portfolio, automation async worker, auth/token/system-admin, import review/export, agent, public-read settings, and anonymous public preview tests.
+- Cover setup, login/logout/current user, project/work item CRUD, collaboration panels, team/planning/board flows, dashboards/reports/saved filters/views, configuration screens, notification preferences/defaults, workspace/project security policy, and deeper AI agent provider/profile/task/dispatch-attempt screens.
 - Prefer stable role/text/test-id selectors and add frontend test IDs only where accessible selectors are not stable enough.
+- Decide whether the next browser pass should use mocked API routes for fast UI coverage or a real backend with seeded data for higher confidence.
 - Exercise realistic cross-screen flows such as creating data through setup, navigating to admin screens, creating work, moving board cards, running workers, creating import artifacts, and inspecting results through the UI.
 
 Done when:
 
 - The major implemented frontend routes have smoke and core-workflow browser tests that fail on broken navigation, broken forms, missing critical data, or visible runtime errors.
 
-### 3. Playwright Full-Stack Security And Regression Coverage
+### 2. Playwright Full-Stack Security And Regression Coverage
 
 Goal: encode the security audit and production-readiness risks as executable full-stack regression tests.
 
 Planned work:
 
-- Add tests for tenant isolation, authorization denial, CSRF/cookie behavior, token scope enforcement, service-token behavior, system-admin gates, public-read boundaries, redacted API errors, frontend secret masking, attachment/import/export limits, outbound/worker callback authentication surfaces, and no browser access-token local storage.
-- Add regression scenarios for import materialization/conflict resolution, queued export artifacts, worker run retention, agent dispatch attempts, dashboard/report rollups, and automation/webhook/email workers.
+- Add focused tests for tenant isolation, authorization denial, CSRF/cookie behavior, token scope enforcement, service-token behavior, system-admin gates, public-read boundaries, redacted API errors, frontend secret masking, attachment/import/export limits, outbound/worker callback authentication surfaces, and no browser access-token local storage.
+- Add regression scenarios for import materialization/conflict resolution at larger fixture sizes, queued export artifacts, worker run retention, agent dispatch attempts, dashboard/report rollups, webhook dual-secret overlap, and automation/webhook/email workers.
 - Keep long-running scenarios tagged separately from fast smoke checks so CI can run quick gates and scheduled full coverage differently.
 
 Done when:
 
 - The `trasck-test` suite can replace the current manual checklist for broad regression confidence while still leaving exploratory testing for usability issues.
 
-### 4. Human Manual Test And Bug-Fix Loop
+### 3. Human Manual Test And Bug-Fix Loop
 
 Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
@@ -104,7 +90,7 @@ Done when:
 
 - A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, and agent task inspection without touching the database.
 
-### 5. External Worker And Provider Readiness
+### 4. External Worker And Provider Readiness
 
 Goal: prepare the provider-neutral worker boundary for the first non-stub external agent execution without weakening normal Jira/Rally-style product behavior.
 
@@ -119,7 +105,7 @@ Done when:
 
 - Admins can preview runtime payloads, rotate/revoke credentials, inspect dispatch attempts, and test a local worker without enabling paid or unmanaged external execution.
 
-### 6. Production Security Packaging Follow-Ups
+### 5. Production Security Packaging Follow-Ups
 
 Goal: turn the hardened local/manual-test baseline into deployable production controls.
 
@@ -163,7 +149,7 @@ The following work should be completed before the application is ready for a mea
 ### Test Readiness
 
 - Use the Java Playwright `trasck-test` repository as the full-stack automation home for backend API, frontend browser, and cross-system regression coverage.
-- Use the committed OpenAPI route coverage baseline, `coverageOwner` column, and generated route inventory to track backend API coverage status until route-by-route Playwright coverage is complete.
+- Keep the committed OpenAPI route coverage baseline, `coverageOwner` column, and generated route inventory as the contract gate for new backend routes now that the current route set is fully marked `covered`.
 - Keep setup bootstrap minimal and use separate opt-in sample-data fixtures for richer browser workflows.
 - Keep `TRASCK_E2E_ALLOW_SETUP=true` limited to disposable local stacks; normal reused stacks should continue using explicit login/workspace/project env values.
 - Add a dedicated security regression suite mapped to `SECURITY_AUDIT.MD` for tenant isolation, permission denial, public-read boundaries including signed public attachment downloads, token/callback validation, production secret/config validation, Swagger/OpenAPI gating, CSRF/cookie behavior, CORS expectations, outbound URL denial, redaction, attachment/export access, and frontend token/secret persistence.
@@ -171,8 +157,8 @@ The following work should be completed before the application is ready for a mea
 - Add repository/query tests for high-use list screens and detail pages.
 - Expand permission tests for hierarchy, workflow, collaboration APIs, user management, team/planning edge cases, public read access, dashboard/search/personalization sharing, notification defaults, automation workers, worker history/health, import materialization/conflicts/record editing/history, agent dispatch attempts, and attachment byte APIs.
 - Add provider-specific OAuth callback tests, token revocation edge cases, and invitation expiry tests.
-- Expand automation tests for queued delivery retries, dead-letter handling, scheduled workers, worker settings, scheduled import review export pickup, manual and automatic worker run retention schedule/window/throttle behavior, worker-type/trigger/status/date-range retention filters, SMTP provider settings, and Maildev/SMTP email delivery.
-- Expand import tests from parser/materialization/sample-fixture/backend-sample coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, conflict update semantics, production-profile sample gating, guarded completion reporting screens, durable review CSV export jobs, and field-specific import review UI assertions.
+- Expand automation tests for queued delivery retries after previous-secret overlap expiry, dead-letter handling, scheduled workers, worker settings, scheduled import review export pickup, manual and automatic worker run retention schedule/window/throttle behavior, worker-type/trigger/status/date-range retention filters, SMTP provider settings, and Maildev/SMTP email delivery.
+- Expand import tests beyond route coverage into disabled rule behavior, invalid transform arguments, update-existing edge cases, conflict update semantics, production-profile sample gating, larger real-world fixture sizes, and field-specific import review UI assertions.
 - Expand agent adapter contract tests covering provider-specific credential validation, automatic dispatch-attempt retention pruning, callback validation, messages, artifacts, failure, completion, and idempotency without invoking paid or external execution.
 - Expand agent permission tests across custom roles and project-scoped profiles.
 - Add secret-redaction tests proving provider credentials and callback private keys do not leak into context snapshots, dispatch attempts, comments, activity events, audit entries, or API responses.

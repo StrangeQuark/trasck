@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.DynamicInsert;
 import org.hibernate.annotations.DynamicUpdate;
@@ -41,6 +42,21 @@ public class Webhook {
 
     @Column(name = "secret_key_id")
     private String secretKeyId;
+
+    @Column(name = "previous_secret_hash")
+    private String previousSecretHash;
+
+    @Column(name = "previous_secret_encrypted")
+    private String previousSecretEncrypted;
+
+    @Column(name = "previous_secret_key_id")
+    private String previousSecretKeyId;
+
+    @Column(name = "secret_rotated_at")
+    private OffsetDateTime secretRotatedAt;
+
+    @Column(name = "previous_secret_expires_at")
+    private OffsetDateTime previousSecretExpiresAt;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "event_types")
@@ -104,6 +120,46 @@ public class Webhook {
 
     public void setSecretKeyId(String secretKeyId) {
         this.secretKeyId = secretKeyId;
+    }
+
+    public String getPreviousSecretHash() {
+        return previousSecretHash;
+    }
+
+    public void setPreviousSecretHash(String previousSecretHash) {
+        this.previousSecretHash = previousSecretHash;
+    }
+
+    public String getPreviousSecretEncrypted() {
+        return previousSecretEncrypted;
+    }
+
+    public void setPreviousSecretEncrypted(String previousSecretEncrypted) {
+        this.previousSecretEncrypted = previousSecretEncrypted;
+    }
+
+    public String getPreviousSecretKeyId() {
+        return previousSecretKeyId;
+    }
+
+    public void setPreviousSecretKeyId(String previousSecretKeyId) {
+        this.previousSecretKeyId = previousSecretKeyId;
+    }
+
+    public OffsetDateTime getSecretRotatedAt() {
+        return secretRotatedAt;
+    }
+
+    public void setSecretRotatedAt(OffsetDateTime secretRotatedAt) {
+        this.secretRotatedAt = secretRotatedAt;
+    }
+
+    public OffsetDateTime getPreviousSecretExpiresAt() {
+        return previousSecretExpiresAt;
+    }
+
+    public void setPreviousSecretExpiresAt(OffsetDateTime previousSecretExpiresAt) {
+        this.previousSecretExpiresAt = previousSecretExpiresAt;
     }
 
     public JsonNode getEventTypes() {

@@ -84,6 +84,7 @@ public class AutomationService {
     private static final int MAX_WORKER_RUN_RETENTION_EXPORT_ROWS = 10_000;
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
     private static final String WEBHOOK_SIGNATURE_ALGORITHM = "HmacSHA256";
+    private static final Duration WEBHOOK_SECRET_OVERLAP = Duration.ofHours(72);
 
     private final ObjectMapper objectMapper;
     private final AutomationRuleRepository automationRuleRepository;
@@ -869,7 +870,7 @@ public class AutomationService {
                     .header("X-Trasck-Event-Type", delivery.getEventType())
                     .header("X-Trasck-Webhook-Id", webhook.getId().toString())
                     .header("X-Trasck-Webhook-Delivery-Id", delivery.getId().toString());
-            addWebhookSignatureHeaders(requestBuilder, webhook, body);
+            addWebhookSignatureHeaders(requestBuilder, webhook, delivery, body);
             HttpRequest request = requestBuilder
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
@@ -1005,6 +1006,9 @@ public class AutomationService {
         WebhookDelivery delivery = new WebhookDelivery();
         delivery.setWebhookId(webhook.getId());
         delivery.setEventType(text(config, "eventType", rule.getTriggerType()));
+        if (hasText(webhook.getSecretEncrypted())) {
+            delivery.setSignatureKeyId(currentWebhookSigningKeyId(webhook));
+        }
         delivery.setPayload(payload);
         delivery.setStatus("queued");
         delivery.setAttemptCount(0);
@@ -1075,9 +1079,7 @@ public class AutomationService {
             webhook.setUrl(url);
         }
         if (hasText(request.secret())) {
-            webhook.setSecretHash(sha256(request.secret()));
-            webhook.setSecretEncrypted(secretCipherService.encrypt(request.secret()));
-            webhook.setSecretKeyId(newWebhookSecretKeyId());
+            rotateWebhookSecret(webhook, request.secret(), create);
         }
         if (create || request.eventTypes() != null) {
             webhook.setEventTypes(toJsonArray(request.eventTypes(), "eventTypes"));
@@ -1852,16 +1854,56 @@ public class AutomationService {
         }
     }
 
-    private void addWebhookSignatureHeaders(HttpRequest.Builder requestBuilder, Webhook webhook, String body) {
-        if (!hasText(webhook.getSecretEncrypted())) {
+    private void rotateWebhookSecret(Webhook webhook, String secret, boolean create) {
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        if (!create && hasText(webhook.getSecretEncrypted())) {
+            webhook.setPreviousSecretHash(webhook.getSecretHash());
+            webhook.setPreviousSecretEncrypted(webhook.getSecretEncrypted());
+            webhook.setPreviousSecretKeyId(currentWebhookSigningKeyId(webhook));
+            webhook.setSecretRotatedAt(now);
+            webhook.setPreviousSecretExpiresAt(now.plus(WEBHOOK_SECRET_OVERLAP));
+        } else {
+            webhook.setPreviousSecretHash(null);
+            webhook.setPreviousSecretEncrypted(null);
+            webhook.setPreviousSecretKeyId(null);
+            webhook.setSecretRotatedAt(null);
+            webhook.setPreviousSecretExpiresAt(null);
+        }
+        webhook.setSecretHash(sha256(secret));
+        webhook.setSecretEncrypted(secretCipherService.encrypt(secret));
+        webhook.setSecretKeyId(newWebhookSecretKeyId());
+    }
+
+    private void addWebhookSignatureHeaders(HttpRequest.Builder requestBuilder, Webhook webhook, WebhookDelivery delivery, String body) {
+        WebhookSigningSecret signingSecret = webhookSigningSecret(webhook, delivery.getSignatureKeyId(), OffsetDateTime.now(ZoneOffset.UTC));
+        if (signingSecret == null) {
             return;
         }
         String timestamp = String.valueOf(OffsetDateTime.now(ZoneOffset.UTC).toEpochSecond());
-        String signature = hmacSha256(secretCipherService.decrypt(webhook.getSecretEncrypted()), timestamp + "." + body);
+        String signature = hmacSha256(secretCipherService.decrypt(signingSecret.encryptedSecret()), timestamp + "." + body);
         requestBuilder
                 .header("X-Trasck-Webhook-Timestamp", timestamp)
-                .header("X-Trasck-Webhook-Signature-Key-Id", webhookSigningKeyId(webhook))
+                .header("X-Trasck-Webhook-Signature-Key-Id", signingSecret.keyId())
                 .header("X-Trasck-Webhook-Signature", "sha256=" + signature);
+    }
+
+    private WebhookSigningSecret webhookSigningSecret(Webhook webhook, String requestedKeyId, OffsetDateTime now) {
+        if (!hasText(webhook.getSecretEncrypted())) {
+            return null;
+        }
+        String currentKeyId = currentWebhookSigningKeyId(webhook);
+        String requested = hasText(requestedKeyId) ? requestedKeyId : currentKeyId;
+        if (requested.equals(currentKeyId)) {
+            return new WebhookSigningSecret(currentKeyId, webhook.getSecretEncrypted());
+        }
+        if (hasText(webhook.getPreviousSecretEncrypted()) && requested.equals(webhook.getPreviousSecretKeyId())) {
+            OffsetDateTime expiresAt = webhook.getPreviousSecretExpiresAt();
+            if (expiresAt == null || !now.isBefore(expiresAt)) {
+                throw new IllegalStateException("Webhook signing secret key has expired");
+            }
+            return new WebhookSigningSecret(requested, webhook.getPreviousSecretEncrypted());
+        }
+        throw new IllegalStateException("Webhook signing secret key is not available");
     }
 
     private String hmacSha256(String secret, String value) {
@@ -1874,12 +1916,15 @@ public class AutomationService {
         }
     }
 
-    private String webhookSigningKeyId(Webhook webhook) {
+    private String currentWebhookSigningKeyId(Webhook webhook) {
         return hasText(webhook.getSecretKeyId()) ? webhook.getSecretKeyId() : "legacy";
     }
 
     private String newWebhookSecretKeyId() {
         return "whsec_" + UUID.randomUUID();
+    }
+
+    private record WebhookSigningSecret(String keyId, String encryptedSecret) {
     }
 
     private int nonNegative(Integer value, String fieldName) {

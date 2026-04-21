@@ -415,7 +415,7 @@ class AuthIntegrationTest {
         assertThat(retentionExport.at("/exportJobId").asText()).isNotBlank();
         assertThat(retentionExport.at("/fileAttachmentId").asText()).isNotBlank();
         assertThat(retentionExport.at("/filename").asText()).startsWith("audit-retention-");
-        assertThat(retentionExport.at("/storageKey").asText()).contains("audit-retention-");
+        assertThat(retentionExport.at("/storageKey").isNull()).isTrue();
         assertThat(retentionExport.at("/checksum").asText()).startsWith("sha256:");
         assertThat(retentionExport.at("/sizeBytes").asLong()).isGreaterThan(0);
         UUID exportAttachmentId = uuid(retentionExport, "/fileAttachmentId");
