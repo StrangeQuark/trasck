@@ -4,12 +4,12 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should the next Playwright API coverage pass prioritize high-risk feature families first, such as tokens, permissions, imports, exports, automation, workers, agents, and audit, or build a generated route inventory first and close gaps in endpoint order?
-    - Answer: Both
-2. Should the Java Playwright suite be allowed to initialize a disposable first-run local stack through `/api/v1/setup` when setup is open, or should workspace/project IDs remain explicit environment inputs until normal workspace/project CRUD exists?
-    - Answer: Allow it to initialize via the setup endpoint, we need to test this endpoint anyways, follow up with a test that confirms the endpoint cannot be hit twice
-3. Should the new project settings route become the home for all project-admin settings as those APIs are added, or remain limited to project security policy until broader project settings APIs exist?
-    - Answer: Yes make it the home for all project-admin settings
+1. Should the generated OpenAPI route inventory remain a runtime artifact for planning, or should `trasck-test` add a committed coverage baseline that fails when a backend route is missing an explicit coverage status?
+    - Answer: Add a committed coverage baseline
+2. Should the next Playwright backend API pass prioritize high-risk asynchronous surfaces first, such as imports, exports, automation, webhooks, email, agent workers, and callbacks, or start with configuration/custom-field/screen/reporting CRUD because those are easier to isolate and clean up?
+    - Answer: Start with CRUD, but make sure we add steps in NEXT_STEPS.MD to complete the full coverage
+3. Should setup bootstrap mode stay limited to the default first-run admin/workspace/project seed, or should it optionally create broader sample data for frontend browser workflows once those tests expand?
+    - Answer: Keep the bootstrap minimal, but add a separate optional sample-data fixture
 
 ## Current State
 
@@ -21,7 +21,7 @@ Authentication and authorization foundations are implemented. Username/password 
 
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project.
 
-Team, planning, board, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin and workspace security-policy flows, a dedicated project security-policy route, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
+Team, planning, board, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin and workspace security-policy flows, a Project Settings route that currently hosts project security-policy controls and is the planned home for future project-admin settings, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
 
 Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import records can be created, edited, filtered, versioned, diffed, materialized, conflicted, resolved, rerun, completed with guarded open-conflict acceptance, and exercised through checked-in CSV/Jira/Rally sample payload flows. Reusable transform presets have immutable version records, clone-from-version recovery, clone-and-retarget preview/apply, template-local overrides, value lookups, type translations, status translations, materialization snapshots, exact/modified reruns, and conflict-resolution worker pickup.
 
@@ -37,26 +37,27 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client that is refreshed after backend endpoint batches, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy, work item collaboration, team/planning/board resources, dashboards, saved filters, saved views, favorites, recent items, resource cleanup through public APIs, and a browser smoke test for the frontend shell. The next testing work should expand that repo into the primary full-stack regression suite instead of relying on ad hoc manual browser passes.
+The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, work item collaboration, team/planning/board resources, dashboards, saved filters, saved views, favorites, recent items, resource cleanup through public APIs, and a browser smoke test for the frontend shell. The next testing work should expand that repo into the primary full-stack regression suite instead of relying on ad hoc manual browser passes.
 
 The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, requires Redis-backed auth throttling in production-like profiles and pings Redis on startup, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection and production-like recent-login step-up for grant/revoke, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, rate-limits callback/worker auth failures, enforces workspace-admin and project-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, system-admin step-up UX hardening, production deployment health/observability around Redis-backed throttling, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Continue Playwright Backend API Coverage
+### 1. Expand Playwright API Coverage From The Route Inventory
 
-Goal: expand the Java Playwright API suite from the first implemented coverage slice into route-by-route backend coverage.
+Goal: use the generated OpenAPI route inventory and the first high-risk token/audit coverage slice to drive the remaining backend Playwright API work route by route.
 
 Planned work:
 
-- Continue from the current smoke/auth/security-policy/work-item/planning/board/dashboard/search/personalization coverage and cover system-admin, users/tokens, configuration, custom fields/screens, reports, notifications, automation, webhooks, email, imports, exports, audit/activity, domain-event administration, and AI agent endpoints.
+- Decide whether the route inventory becomes a committed gating baseline or remains a generated planning artifact for the next few passes.
+- Continue closing `planned-high-risk` and `planned` route families from `test-results/api/backend-route-inventory.tsv`, starting with the next selected slice from imports/exports/automation/agents or configuration/custom-fields/screens/reporting.
 - Validate both success paths and important denial paths, including tenant boundaries, project/workspace permissions, token scopes, public read behavior, redaction, upload/export limits, worker authentication, and agent callback authentication.
 - Keep API tests data-driven and isolated so they create uniquely named data, clean up through public APIs, and do not depend on direct database access.
 
 Done when:
 
-- Every implemented backend route has at least one Playwright API test for its expected local/manual-test behavior and a focused set of negative/security checks.
+- Every implemented backend route has at least one Playwright API test for its expected local/manual-test behavior and a focused set of negative/security checks, and the route inventory shows no untriaged route family.
 
 ### 2. Playwright Frontend Workflow Coverage
 
@@ -159,6 +160,8 @@ The following work should be completed before the application is ready for a mea
 ### Test Readiness
 
 - Use the Java Playwright `trasck-test` repository as the full-stack automation home for backend API, frontend browser, and cross-system regression coverage.
+- Use the generated OpenAPI route inventory to track backend API coverage status until route-by-route Playwright coverage is complete.
+- Keep `TRASCK_E2E_ALLOW_SETUP=true` limited to disposable local stacks; normal reused stacks should continue using explicit login/workspace/project env values.
 - Add a dedicated security regression suite mapped to `SECURITY_AUDIT.MD` for tenant isolation, permission denial, public-read boundaries, token/callback validation, production secret/config validation, Swagger/OpenAPI gating, CSRF/cookie behavior, CORS expectations, outbound URL denial, redaction, attachment/export access, and frontend token/secret persistence.
 - Add migration tests whenever the schema changes.
 - Add repository/query tests for high-use list screens and detail pages.
