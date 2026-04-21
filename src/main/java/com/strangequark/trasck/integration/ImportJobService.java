@@ -947,7 +947,7 @@ public class ImportJobService {
         ImportJob job = mutableImportJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
         String content = requiredText(parseRequest.content(), "content");
-        contentLimitPolicy.validateImportParse(job.getProvider(), parseRequest.sourceType(), parseRequest.contentType(), content);
+        contentLimitPolicy.validateImportParse(job.getWorkspaceId(), job.getProvider(), parseRequest.sourceType(), parseRequest.contentType(), content);
         List<ParsedImportRecord> parsed = parseRecords(job.getProvider(), parseRequest.sourceType(), content);
         List<ImportJobRecordResponse> responses = new ArrayList<>();
         for (ParsedImportRecord parsedRecord : parsed) {
@@ -1727,7 +1727,7 @@ public class ImportJobService {
         byte[] content = "csv".equals(format)
                 ? jobVersionDiffCsvBytes(export.diffs(), exportRequest.filterColumn(), exportRequest.filter())
                 : jsonBytes(export);
-        contentLimitPolicy.validateGeneratedExport(filename, contentType, content);
+        contentLimitPolicy.validateGeneratedExport(job.getWorkspaceId(), filename, contentType, content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, contentType, content, null)
@@ -3423,7 +3423,7 @@ public class ImportJobService {
                 + "-"
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".csv";
-        contentLimitPolicy.validateGeneratedExport(filename, "text/csv", content.bytes());
+        contentLimitPolicy.validateGeneratedExport(workspaceId, filename, "text/csv", content.bytes());
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "text/csv", content.bytes(), null)

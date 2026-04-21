@@ -247,14 +247,14 @@ public class AuditService {
         requireWorkspaceAdmin(workspaceId);
         ExportJob job = exportJob(workspaceId, exportJobId);
         Attachment attachment = exportAttachment(job, true);
-        contentLimitPolicy.validateExportDownload(attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
+        contentLimitPolicy.validateExportDownload(workspaceId, attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
         AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findByIdAndWorkspaceId(
                         attachment.getStorageConfigId(),
                         workspaceId
                 )
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file storage config not found"));
         byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
-        contentLimitPolicy.validateExportDownload(attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
+        contentLimitPolicy.validateExportDownload(workspaceId, attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
         return new ExportFileResponse(attachment.getFilename(), attachment.getContentType(), attachment.getChecksum(), bytes);
     }
 
@@ -316,7 +316,7 @@ public class AuditService {
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".json";
         byte[] content = retentionExportContent(workspaceId, actorId, snapshot, now);
-        contentLimitPolicy.validateGeneratedExport(filename, "application/json", content);
+        contentLimitPolicy.validateGeneratedExport(workspaceId, filename, "application/json", content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "application/json", content, null)

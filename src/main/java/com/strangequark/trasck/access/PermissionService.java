@@ -59,6 +59,13 @@ public class PermissionService {
     }
 
     @Transactional(readOnly = true)
+    public void requireSystemAdmin(UUID userId) {
+        if (!currentPrincipalAllows("system.admin") || !systemAdminRepository.existsByUserIdAndActiveTrue(userId)) {
+            throw forbidden();
+        }
+    }
+
+    @Transactional(readOnly = true)
     public boolean canUseWorkspace(Authentication authentication, UUID workspaceId, String permissionKey) {
         return principal(authentication)
                 .filter(principal -> principal.allowsScope(permissionKey))

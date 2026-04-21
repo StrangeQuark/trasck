@@ -26,6 +26,10 @@
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
 		<dependency>
@@ -137,6 +141,7 @@
 						<version>${dependency-check.version}</version>
 						<configuration>
 							<failBuildOnCVSS>7</failBuildOnCVSS>
+							<failOnError>true</failOnError>
 							<suppressionFiles>
 								<suppressionFile>${project.basedir}/dependency-check-suppressions.xml</suppressionFile>
 							</suppressionFiles>

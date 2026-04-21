@@ -25,4 +25,18 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: ./mvnw -B -Psecurity-audit -DskipTests dependency-check:check
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: dependency-check-data-${{ runner.os }}-${{ hashFiles('pom.xml', 'dependency-check-suppressions.xml') }}
+          restore-keys: |
+            dependency-check-data-${{ runner.os }}-
+      - name: Required OWASP Dependency Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          if [ -n "$NVD_API_KEY" ]; then
+            ./mvnw -B -Psecurity-audit -DskipTests -DnvdApiKey="$NVD_API_KEY" dependency-check:check
+          else
+            ./mvnw -B -Psecurity-audit -DskipTests dependency-check:check
+          fi

@@ -66,6 +66,8 @@ class ProductionSecurityIntegrationTest {
         assertThat(get("/v3/api-docs", null).statusCode()).isIn(401, 403);
 
         JsonNode setup = postSetup();
+        UUID workspaceId = UUID.fromString(setup.at("/workspace/id").asText());
+        UUID adminUserId = UUID.fromString(setup.at("/adminUser/id").asText());
         String accessToken = login(setup);
         assertThat(jdbcTemplate.queryForObject(
                 """
@@ -82,11 +84,50 @@ class ProductionSecurityIntegrationTest {
         JsonNode openApi = objectMapper.readTree(authenticatedOpenApi.body());
         assertThat(openApi.at("/openapi").asText()).startsWith("3.");
 
-        jdbcTemplate.update(
-                "update system_admins set active = false, revoked_at = now() where user_id = cast(? as uuid)",
-                setup.at("/adminUser/id").asText()
-        );
+        JsonNode admins = read(get("/api/v1/system-admins", accessToken));
+        assertThat(admins).hasSize(1);
+        assertThat(admins.get(0).at("/userId").asText()).isEqualTo(adminUserId.toString());
+        assertThat(admins.get(0).at("/active").asBoolean()).isTrue();
+        assertThat(delete("/api/v1/system-admins/not-a-uuid", accessToken).statusCode()).isEqualTo(400);
+
+        JsonNode policy = read(get("/api/v1/workspaces/" + workspaceId + "/security-policy", accessToken));
+        assertThat(policy.at("/customPolicy").asBoolean()).isFalse();
+
+        JsonNode updatedPolicy = read(patch("/api/v1/workspaces/" + workspaceId + "/security-policy", objectMapper.createObjectNode()
+                .put("importMaxParseBytes", 8)
+                .put("importAllowedContentTypes", "text/plain"), accessToken));
+        assertThat(updatedPolicy.at("/customPolicy").asBoolean()).isTrue();
+        assertThat(updatedPolicy.at("/importMaxParseBytes").asLong()).isEqualTo(8);
+
+        JsonNode importJob = read(post("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
+                .put("provider", "csv"), accessToken));
+        assertThat(post("/api/v1/import-jobs/" + importJob.at("/id").asText() + "/parse", objectMapper.createObjectNode()
+                .put("sourceType", "csv")
+                .put("contentType", "text/plain")
+                .put("content", "123456789"), accessToken).statusCode()).isEqualTo(413);
+
+        assertThat(patch("/api/v1/workspaces/" + workspaceId + "/security-policy", objectMapper.createObjectNode()
+                .put("attachmentMaxUploadBytes", 0), accessToken).statusCode()).isEqualTo(400);
+
+        UUID viewerRoleId = roleId(setup, "viewer");
+        JsonNode viewer = read(post("/api/v1/workspaces/" + workspaceId + "/users", objectMapper.createObjectNode()
+                .put("email", "prod-viewer-" + UUID.randomUUID() + "@example.com")
+                .put("username", "prod-viewer-" + UUID.randomUUID())
+                .put("displayName", "Production Viewer")
+                .put("password", "correct-horse-battery-staple")
+                .put("roleId", viewerRoleId.toString()), accessToken));
+        String viewerToken = login(viewer.at("/email").asText(), "correct-horse-battery-staple");
+        assertThat(get("/api/v1/workspaces/" + workspaceId + "/security-policy", viewerToken).statusCode()).isEqualTo(403);
+
+        JsonNode grantedViewer = read(post("/api/v1/system-admins", objectMapper.createObjectNode()
+                .put("userId", viewer.at("/id").asText()), accessToken));
+        assertThat(grantedViewer.at("/active").asBoolean()).isTrue();
+        assertThat(get("/v3/api-docs", viewerToken).statusCode()).isEqualTo(200);
+
+        JsonNode revokedOriginal = read(delete("/api/v1/system-admins/" + adminUserId, accessToken));
+        assertThat(revokedOriginal.at("/active").asBoolean()).isFalse();
         assertThat(get("/v3/api-docs", accessToken).statusCode()).isEqualTo(403);
+        assertThat(delete("/api/v1/system-admins/" + viewer.at("/id").asText(), viewerToken).statusCode()).isEqualTo(409);
     }
 
     private JsonNode postSetup() throws Exception {
@@ -117,9 +158,13 @@ class ProductionSecurityIntegrationTest {
     }
 
     private String login(JsonNode setup) throws Exception {
+        return login(setup.at("/adminUser/email").asText(), "correct-horse-battery-staple");
+    }
+
+    private String login(String identifier, String password) throws Exception {
         HttpResponse<String> response = post("/api/v1/auth/login", objectMapper.createObjectNode()
-                .put("identifier", setup.at("/adminUser/email").asText())
-                .put("password", "correct-horse-battery-staple"), null);
+                .put("identifier", identifier)
+                .put("password", password), null);
         assertThat(response.statusCode()).isEqualTo(200);
         return objectMapper.readTree(response.body()).at("/accessToken").asText();
     }
@@ -132,10 +177,38 @@ class ProductionSecurityIntegrationTest {
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
+    private HttpResponse<String> patch(String path, JsonNode body, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
     private HttpResponse<String> get(String path, String accessToken) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> delete(String path, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).DELETE();
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private JsonNode read(HttpResponse<String> response) throws Exception {
+        assertThat(response.statusCode()).isBetween(200, 299);
+        return objectMapper.readTree(response.body());
+    }
+
+    private UUID roleId(JsonNode setup, String key) {
+        for (JsonNode role : setup.at("/seedData/roles")) {
+            if (key.equals(role.at("/key").asText())) {
+                return UUID.fromString(role.at("/id").asText());
+            }
+        }
+        throw new IllegalArgumentException("Role not found: " + key);
     }
 
     private void authorize(HttpRequest.Builder builder, String accessToken) {

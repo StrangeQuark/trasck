@@ -1,13 +1,13 @@
 # Trasck Security Audit
 
-Date: 2026-04-20
+Date: 2026-04-21
 
 ## Scope
 
 This audit covers the current Trasck backend repo and Vite React frontend repo before broader manual product testing.
 
-- Backend tracked files reviewed: 658
-- Frontend tracked files reviewed: 84
+- Backend tracked and pending source files reviewed: 696
+- Frontend tracked and pending source files reviewed: 86
 - Excluded from scope: `.git`, `target`, `node_modules`, `dist`, generated runtime data, and other build output directories.
 - Included in scope: Java source, React source, generated OpenAPI/client artifacts, Flyway migrations, tests, Docker/nginx/build config, Jenkinsfiles, checked-in `.env.example` files, local runtime docs, HTTP examples, and import samples.
 
@@ -24,7 +24,7 @@ Commands and inspections used during this pass:
 - SQL and query scans for native SQL, string-built query fragments, sort/order handling, and raw-SQL escape hatches.
 - URL, webhook, storage, and file scans for outbound HTTP, URI construction, local path handling, multipart uploads, attachment storage, and delete/read/write operations.
 - Port scan for `6100` and `6101`; no non-documentation `6101` runtime/config references were found.
-- `npm audit --json` in the frontend returned zero reported vulnerabilities.
+- `npm audit --audit-level=high` in the frontend returned zero reported vulnerabilities.
 - Java dependency vulnerability automation is wired through the OWASP Dependency Check Maven profile and backend CI workflow.
 - Follow-up hardening verification ran the targeted security/auth tests, the full backend Maven test suite, frontend Vitest suite, frontend production build, frontend `npm audit`, `.env` inventory, `6101` config scan, whitespace checks, and local listener/container checks.
 
@@ -72,9 +72,10 @@ Highest-risk entry points:
 - OpenAPI and Swagger stay public for local/non-production contract work, but production-like profiles require authenticated dedicated system-admin access.
 - CORS is explicitly allowlist-based through `CORS_ALLOWED_ORIGINS`.
 - Configured outbound HTTP targets are protected by a shared default-deny URL policy for localhost, private, link-local, carrier-grade NAT, unique-local IPv6, multicast, and metadata-like local destinations unless exact hosts, wildcard hosts, or CIDR ranges are allowlisted.
-- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address using database-backed counters, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
+- Human password creation now enforces a minimum length and rejects common development passwords; login failures are throttled by identifier plus remote address using database-backed counters by default or Redis-backed counters when enabled, and `X-Forwarded-For` is ignored unless explicitly trusted behind a controlled proxy.
 - Login, agent callback, and generic worker authentication failures write durable security telemetry rows.
-- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce configured byte limits and allowlisted content types.
+- Attachment metadata/upload/download, import parser payloads, and generated export artifacts enforce effective workspace byte limits and allowlisted content types.
+- API error bodies and production server-error logs pass through centralized redaction for token/password/secret/authorization/private-key shaped text.
 - Saved-filter/query-builder SQL uses whitelisted fields/operators and bind parameters. Raw SQL-shaped keys are rejected in user-configurable report/filter/dashboard paths.
 - Local filesystem attachment storage normalizes paths and rejects storage keys that escape the configured root.
 - The frontend does not persist access tokens in local storage. Current local storage is limited to API base URL and selected UI/entity IDs.
@@ -208,7 +209,7 @@ Regression tests/checks:
 
 Severity: High before public hosting
 
-Status: Resolved for a single-node/shared-database deployment baseline; Redis-backed counters remain a horizontal-scaling decision.
+Status: Resolved for single-node and horizontally scaled counter storage options; production packaging still needs a decision on whether Redis is mandatory.
 
 Affected files:
 
@@ -217,7 +218,7 @@ Affected files:
 
 Current state:
 
-- Login failures are throttled by identifier plus remote address using configurable database-backed counters, failure window, and lockout duration.
+- Login failures are throttled by identifier plus remote address using configurable database-backed counters by default or Redis-backed counters when `TRASCK_SECURITY_RATE_LIMIT_STORE=redis`, with configurable failure window and lockout duration.
 - Spoofable `X-Forwarded-For` values are ignored by default and only used when `TRASCK_TRUST_FORWARDED_FOR=true` is set behind a trusted reverse proxy.
 - New human passwords are validated for configured minimum length and common development password rejection during setup, invitation registration, and workspace-admin direct user creation.
 - Auth failure events are persisted for login failures, agent callback failures, and generic worker token failures.
@@ -228,12 +229,12 @@ Impact:
 
 Recommended fix:
 
-- Decide whether Redis-backed counters are needed before horizontally scaled deployments.
+- Decide whether Redis-backed counters should be mandatory for all production-like profiles, or only for explicitly horizontally scaled deployments.
 - Consider stronger entropy checks once password reset/change flows exist.
 
 Regression tests/checks:
 
-- Keep tests for weak password rejection, login throttling/lockout boundaries, DB failure telemetry, and trusted-proxy forwarding behavior.
+- Keep tests for weak password rejection, login throttling/lockout boundaries, database and Redis counter paths, durable failure telemetry, and trusted-proxy forwarding behavior.
 
 ### SEC-006: Outbound HTTP targets need SSRF and egress controls
 
@@ -337,7 +338,7 @@ Regression tests/checks:
 
 Severity: Medium
 
-Status: Resolved for configured byte/content-type limits; antivirus/content scanning remains a future provider boundary.
+Status: Resolved for deployment defaults plus workspace-admin configurable byte/content-type limits; antivirus/content scanning remains a future provider boundary.
 
 Affected files:
 
@@ -350,7 +351,7 @@ Current state:
 
 - Attachment storage validates checksum and storage path.
 - Local path traversal is handled.
-- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce configured size and content-type limits.
+- Attachment metadata, file uploads, attachment downloads, generated export artifacts, export downloads, and import parser payloads enforce effective workspace size and content-type limits. Workspace admins can override deployment defaults through the workspace security policy API/UI.
 - Multipart request sizes are environment-configurable.
 
 Impact:
@@ -360,7 +361,7 @@ Impact:
 Recommended fix:
 
 - Add antivirus/content scanning hooks as a future provider boundary.
-- Review whether content-type/size policies should become workspace-admin configurable or remain deployment-level environment configuration.
+- Keep content-type/size policies workspace-wide for the first manual test pass, and revisit project-level overrides only if real tenants need them.
 
 Regression tests/checks:
 
@@ -469,9 +470,9 @@ Affected files:
 
 Current state:
 
-- Frontend `npm audit --json` currently reports zero vulnerabilities.
+- Frontend `npm audit --audit-level=high` currently reports zero vulnerabilities.
 - Maven dependency tree resolves successfully.
-- OWASP Dependency Check is wired through the backend `security-audit` Maven profile and GitHub Actions workflow.
+- OWASP Dependency Check is wired through the backend `security-audit` Maven profile and required GitHub Actions workflow gate, with cache support and optional `NVD_API_KEY`.
 - The Maven wrapper is executable so CI can invoke `./mvnw`.
 
 Impact:
@@ -480,7 +481,7 @@ Impact:
 
 Recommended fix:
 
-- Decide whether the dependency-check job is advisory or mandatory before an NVD API key/cache strategy is configured.
+- Keep the dependency-check gate mandatory, and configure an `NVD_API_KEY` secret if public scanner data throttling becomes noisy.
 - Keep `npm audit` or equivalent in frontend CI.
 
 Regression tests/checks:
@@ -491,6 +492,8 @@ Regression tests/checks:
 
 Severity: Medium-low
 
+Status: Resolved for centralized API error bodies and production server-error log messages; outbound-library-specific logs should continue to use the same redactor.
+
 Affected files:
 
 - Controllers and services that throw `ResponseStatusException`
@@ -499,8 +502,9 @@ Affected files:
 
 Current state:
 
-- Many service errors are clear and useful for local testing.
-- Broad error/log redaction exists for activity/audit payloads, but production error-body and log redaction policy is not centralized.
+- Many service errors remain clear and useful for local testing.
+- Activity/audit payloads and centralized API errors/log messages redact token, password, secret, credential, authorization, and private-key shaped values.
+- Production-like 5xx API responses use a generic message instead of exposing exception details.
 
 Impact:
 
@@ -508,8 +512,7 @@ Impact:
 
 Recommended fix:
 
-- Centralize API error response shaping for production.
-- Add log redaction around outbound HTTP failures, OAuth provider failures, SMTP failures, and agent provider failures.
+- Keep outbound HTTP, OAuth provider, SMTP, and agent provider failures on the centralized redaction path when those call sites add dedicated logging.
 
 Regression tests/checks:
 
@@ -543,12 +546,11 @@ Regression tests/checks:
 
 The next production-packaging hardening work should focus on:
 
-1. Add system-admin management APIs/screens before hosted deployment.
-2. Decide whether PostgreSQL-backed security throttling is enough through first deployment or whether Redis-backed counters are needed for horizontal scale.
-3. Decide whether OWASP Dependency Check is a hard CI gate immediately or advisory until NVD API key/cache configuration exists.
-4. Centralize production error/log redaction for outbound HTTP, OAuth, SMTP, agent provider, import, export, and worker failures.
-5. Add broader redaction, authorization denial, tenant-isolation, outbound URL, attachment/export authorization, and frontend secret persistence regression coverage.
-6. Plan the shared external secret-management abstraction for SMTP, S3-compatible storage, and non-stub agent credentials.
+1. Decide whether Redis-backed counters should be mandatory for production-like profiles or only required for horizontally scaled deployments.
+2. Add recent-login or step-up confirmation before system-admin grant/revoke operations in hosted deployments.
+3. Add broader redaction, authorization denial, tenant-isolation, outbound URL, attachment/export authorization, and frontend secret persistence regression coverage.
+4. Plan the shared external secret-management abstraction for SMTP, S3-compatible storage, and non-stub agent credentials.
+5. Keep the required OWASP Dependency Check gate stable with NVD API key/cache tuning if scanner throttling appears.
 
 ## Review Notes
 
@@ -556,23 +558,26 @@ The next production-packaging hardening work should focus on:
 - No hard-coded production credentials were found in source code. Real `.env` files have been removed from the repos and ignored; committed examples remain local-only.
 - Development defaults are now rejected under production-like profiles.
 - OpenAPI/Swagger production access now requires active system-admin status instead of workspace-admin role membership.
+- System-admin list/grant/revoke APIs and frontend controls are implemented, with last-active-admin revocation protection.
 - `system.admin` is not seeded into workspace/project role permissions, including wildcard workspace-owner roles.
 - Outbound allowlisting now supports exact hosts, host:port entries, wildcard hosts, wildcard host:port entries, and CIDR ranges.
-- Login/callback/worker auth failures now use durable database counters and telemetry rows.
-- Attachment/import/export content limits and frontend secret-display hardening are implemented.
+- Login/callback/worker auth failures now use durable database counters by default, optional Redis counters for shared deployments, and telemetry rows.
+- Attachment/import/export content limits are workspace-admin configurable, and frontend secret-display hardening is implemented.
+- Centralized API error/log redaction is implemented for production-facing API errors, while common malformed input, access-denial, missing route, unsupported method/media type, and upload-size failures keep explicit non-5xx statuses.
 - No non-documentation `6101` config references were found.
 
 ## Verification Run
 
 - Backend compile passed: `./mvnw -q -DskipTests compile`.
-- Targeted backend security/persistence rerun passed: `./mvnw -q -Dtest=ProductionSecurityIntegrationTest,JpaPersistenceTest test`.
-- Full backend `./mvnw -q test` passed with 31 tests, 0 failures, 0 errors, and 0 skipped.
-- Frontend `npm test -- --run` passed with 2 files and 10 tests.
-- Frontend `npm run build` passed; generated `dist/` output was removed afterward.
-- Frontend `npm audit --json` reported zero vulnerabilities.
-- Backend Java dependency-check is wired through `./mvnw -Psecurity-audit -DskipTests dependency-check:check`, but the local run was stopped after it produced no output while updating scanner data; configure NVD API key/cache before making it a hard local/CI gate.
+- Targeted backend security/persistence rerun passed: `./mvnw -q -Dtest=LoginAttemptServiceTest,SecretTextRedactorTest,ProductionSecurityIntegrationTest,JpaPersistenceTest test`.
+- Full backend `./mvnw -q test` passed with 33 tests, 0 failures, 0 errors, and 0 skipped.
+- Frontend `npm test -- --run` passed with 2 files and 11 tests.
+- Frontend `npm run build` passed; generated Vite `dist/` output is ignored.
+- Frontend `npm audit --audit-level=high` reported zero vulnerabilities.
+- Backend Java dependency-check is a required CI gate through `./mvnw -Psecurity-audit -DskipTests dependency-check:check`; CI uses dependency-check data caching and an optional `NVD_API_KEY` secret.
+- Docker Compose config validation passed with the internal Redis service present and not host-published.
 - Only `.env.example` files remain in the two repos.
 - `git diff --check` passed in both repos.
 - No listeners were found on ports `6100` or `6101` after verification.
-- No containers were exposing `6100`, `6101`, `5432`, or `55432` after verification.
+- No containers were exposing `6100`, `6101`, `5432`, or `55432` after verification when checked through `DOCKER_HOST=unix:///var/run/docker.sock`.
 - No non-documentation `6101` runtime/config references were found.

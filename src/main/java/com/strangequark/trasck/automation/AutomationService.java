@@ -1351,7 +1351,7 @@ public class AutomationService {
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".json";
         byte[] content = workerRunRetentionExportContent(workspaceId, actorId, snapshot, now);
-        contentLimitPolicy.validateGeneratedExport(filename, "application/json", content);
+        contentLimitPolicy.validateGeneratedExport(workspaceId, filename, "application/json", content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "application/json", content, null)

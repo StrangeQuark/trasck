@@ -217,11 +217,12 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(134);
+        assertThat(tableCount).isEqualTo(135);
         assertThat(permissionCount).isEqualTo(32);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(131);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(132);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
         assertThat(tableExists("system_admins")).isTrue();
+        assertThat(tableExists("workspace_security_policies")).isTrue();
         assertThat(tableExists("security_rate_limit_attempts")).isTrue();
         assertThat(tableExists("security_auth_failure_events")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();

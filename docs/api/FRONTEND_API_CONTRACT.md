@@ -1016,11 +1016,12 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 10. Agent assignment: create provider/profile/repository connection, assign a work item with `POST /api/v1/work-items/{workItemId}/assign-agent`, then show task messages/artifacts/status and `dispatchAttempts` until review or completion.
 11. Audit retention: update policy, export candidates to storage, then prune. Pruning writes a stored export before deleting eligible audit rows. Admin export history uses `GET /api/v1/workspaces/{workspaceId}/export-jobs`, metadata uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}`, and artifact download uses `GET /api/v1/workspaces/{workspaceId}/export-jobs/{exportJobId}/download`.
 12. Reporting snapshots: run or backfill raw snapshots, optionally update `snapshot-retention-policy`, run/backfill rollups, then read `GET /api/v1/reports/projects/{projectId}/snapshots` for raw `series` plus additive `rollupSeries`.
+13. System and workspace security: active system admins can list/grant/revoke dedicated system-admin access through `GET/POST/DELETE /api/v1/system-admins`; workspace admins can inspect and update effective attachment/import/export limits through `GET/PATCH /api/v1/workspaces/{workspaceId}/security-policy`.
 
 ## Endpoint Coverage
 
 - Setup: `POST /setup`
-- Auth: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation.
+- Auth/security: login, current user, CSRF, personal tokens, workspace service tokens, invitations, direct user creation, system-admin list/grant/revoke, workspace security-policy read/update.
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, labels, attachments.
 - Product configuration: custom field/context/value CRUD, field configuration CRUD with project/type overrides, screen/field/assignment CRUD.
 - Teams/planning: team CRUD, memberships, project-team assignment, board/column/swimlane CRUD, saved-filter-ID and inline-query board swimlanes, board work item columns/swimlanes, board-scoped rank/transition/move commands with target column/status transition derivation and card-level relative insertion, iteration CRUD, scope, commit, close, carryover, release CRUD/scope, roadmap CRUD/items.
