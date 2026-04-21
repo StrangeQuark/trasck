@@ -214,6 +214,12 @@ public class WorkItemController {
         return ResponseEntity.status(HttpStatus.CREATED).body(collaborationService.createWorkspaceLabel(workspaceId, request));
     }
 
+    @DeleteMapping("/workspaces/{workspaceId}/labels/{labelId}")
+    public ResponseEntity<Void> deleteWorkspaceLabel(@PathVariable UUID workspaceId, @PathVariable UUID labelId) {
+        collaborationService.deleteWorkspaceLabel(workspaceId, labelId);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/work-items/{workItemId}/labels")
     public List<LabelResponse> listWorkItemLabels(@PathVariable UUID workItemId) {
         return collaborationService.listWorkItemLabels(workItemId);
