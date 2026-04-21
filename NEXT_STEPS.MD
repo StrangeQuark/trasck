@@ -4,12 +4,12 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should the next Playwright API coverage slice move to high-risk asynchronous surfaces now, starting with imports/exports/automation/webhooks/email/agents, or finish remaining lower-risk CRUD/list gaps first, such as board details, planning updates, notifications, public reads, activity, and labels?
-    - Answer: Finish the remaining lower-risk work first
-2. Should the committed route coverage baseline keep simple statuses only, or should covered rows include the owning Playwright test class/method so missing or duplicated coverage is easier to audit?
-    - Answer: Allow covered rows to include the owning Playwright test class/method
-3. Should optional Playwright sample-data fixtures clean up after every test by default, or should they support a persistent seeded local workspace mode for manual browser exploration?
-    - Answer: Clean up after every test by default
+1. Should the next lower-risk Playwright API slice prioritize reporting read/snapshot endpoints, or team-scoped dashboard/filter/view/report-query lists plus repository connections, invitations, and user creation?
+    - Answer: Both
+2. Should label API coverage wait until the backend exposes a workspace label archive/delete endpoint, or may Playwright create uniquely named labels even though only the work-item label association can be cleaned up through public APIs today?
+    - Answer: Expose the backend endpoint now
+3. Should public project read coverage use disposable first-run setup with public project and anonymous-read settings, or wait until normal workspace/project settings APIs can toggle public visibility on an existing test stack?
+    - Answer: Wait
 
 ## Current State
 
@@ -37,27 +37,28 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client that is refreshed after backend endpoint batches, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, committed OpenAPI route coverage baseline enforcement, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration, team/planning/board resources, dashboards, saved filters, saved views, favorites, recent items, resource cleanup through public APIs, and a browser smoke test for the frontend shell. The next testing work should expand that repo into the primary full-stack regression suite instead of relying on ad hoc manual browser passes.
+The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support that cleans up after each test by default, Docker support, reusable API/browser fixtures, unique-data helpers, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests for backend health, CSRF metadata, setup endpoint reachability, setup first-run-only conflict behavior, unauthenticated current-user denial, optional login/current-user cookie and Bearer sessions, local OpenAPI availability, authenticated API coverage for workspace/project security policy, personal and service API token scope/redaction/revocation behavior, system-admin/audit/export reads, configuration/custom-field/screen/report-query/reporting-retention CRUD, work item collaboration/activity and command routes, team/membership/planning/board/swimlane/release/roadmap resources, notification preference/default CRUD, dashboards/widgets, saved filters, saved views, favorites, recent items, resource cleanup through public APIs, and a browser smoke test for the frontend shell. The committed baseline currently tracks 181 covered backend routes, 91 planned lower-risk routes, and 85 planned high-risk routes. The next testing work should finish the lower-risk route gaps before moving into high-risk asynchronous worker/import/export/agent surfaces.
 
 The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, requires Redis-backed auth throttling in production-like profiles and pings Redis on startup, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, exposes system-admin REST/UI management with last-active-admin protection and production-like recent-login step-up for grant/revoke, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, rate-limits callback/worker auth failures, enforces workspace-admin and project-admin configurable attachment/import/export size and content-type limits, masks frontend secret display, centralizes redacted production API error/log handling while preserving explicit client-error statuses, templates production nginx CSP, makes Java dependency-check a required CI gate with cache/API-key support, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, system-admin step-up UX hardening, production deployment health/observability around Redis-backed throttling, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Continue Route-Baseline Playwright API Coverage
+### 1. Finish Remaining Lower-Risk Route-Baseline Playwright API Coverage
 
-Goal: continue closing backend API gaps from the committed route coverage baseline and generated OpenAPI route inventory.
+Goal: finish the non-worker, non-external, lower-risk backend API gaps from the committed route coverage baseline before moving to high-risk asynchronous surfaces.
 
 Planned work:
 
-- Continue closing `planned-high-risk` and `planned` route families from `src/test/resources/backend-route-coverage.tsv` and `test-results/api/backend-route-inventory.tsv`.
-- Add explicit Playwright API coverage for the next selected surface, then update covered rows in the committed baseline.
-- Validate both success paths and important denial paths, including tenant boundaries, project/workspace permissions, token scopes, public read behavior, redaction, upload/export limits, worker authentication, and agent callback authentication.
+- Continue closing `planned` route families from `src/test/resources/backend-route-coverage.tsv` and `test-results/api/backend-route-inventory.tsv` before taking on `planned-high-risk`.
+- Add explicit Playwright API coverage for the next selected lower-risk surface, then update covered rows and `coverageOwner` values in the committed baseline.
+- Cover remaining reporting read/snapshot routes, team-scoped dashboard/filter/view/report-query list routes, public project reads, label routes, repository connection CRUD, invitation/user creation, and attachment byte upload/download where cleanup and deterministic fixtures are available.
+- Validate both success paths and important denial paths, including tenant boundaries, project/workspace permissions, token scopes, public read behavior, redaction, and upload/download limits.
 - Keep API tests data-driven and isolated so they create uniquely named data, clean up through public APIs, and do not depend on direct database access.
 
 Done when:
 
-- Every implemented backend route has at least one Playwright API test for its expected local/manual-test behavior and a focused set of negative/security checks, and the route inventory shows no untriaged route family.
+- Every lower-risk implemented backend route has at least one Playwright API test for its expected local/manual-test behavior and a focused set of negative/security checks, and all remaining baseline gaps are intentionally high-risk asynchronous or external-boundary routes.
 
 ### 2. Complete High-Risk Asynchronous Playwright API Coverage
 
@@ -175,7 +176,7 @@ The following work should be completed before the application is ready for a mea
 ### Test Readiness
 
 - Use the Java Playwright `trasck-test` repository as the full-stack automation home for backend API, frontend browser, and cross-system regression coverage.
-- Use the committed OpenAPI route coverage baseline and generated route inventory to track backend API coverage status until route-by-route Playwright coverage is complete.
+- Use the committed OpenAPI route coverage baseline, `coverageOwner` column, and generated route inventory to track backend API coverage status until route-by-route Playwright coverage is complete.
 - Keep setup bootstrap minimal and use separate opt-in sample-data fixtures for richer browser workflows.
 - Keep `TRASCK_E2E_ALLOW_SETUP=true` limited to disposable local stacks; normal reused stacks should continue using explicit login/workspace/project env values.
 - Add a dedicated security regression suite mapped to `SECURITY_AUDIT.MD` for tenant isolation, permission denial, public-read boundaries, token/callback validation, production secret/config validation, Swagger/OpenAPI gating, CSRF/cookie behavior, CORS expectations, outbound URL denial, redaction, attachment/export access, and frontend token/secret persistence.
