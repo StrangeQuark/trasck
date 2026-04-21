@@ -182,12 +182,18 @@ public class ApiTokenService {
     }
 
     private Role resolveWorkspaceRole(UUID workspaceId, UUID roleId) {
+        Role role;
         if (roleId != null) {
-            return roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
+            role = roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Workspace role not found"));
+        } else {
+            role = roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default workspace member role not found"));
         }
-        return roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default workspace member role not found"));
+        if (!"active".equalsIgnoreCase(role.getStatus() == null ? "active" : role.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Workspace role not found");
+        }
+        return role;
     }
 
     private User activeUser(UUID userId) {

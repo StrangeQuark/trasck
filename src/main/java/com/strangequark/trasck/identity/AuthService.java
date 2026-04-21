@@ -432,12 +432,15 @@ public class AuthService {
     }
 
     private Role resolveWorkspaceRole(UUID workspaceId, UUID roleId) {
+        Role role;
         if (roleId != null) {
-            return roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
+            role = roleRepository.findByIdAndWorkspaceIdAndProjectIdIsNull(roleId, workspaceId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Workspace role not found"));
+        } else {
+            role = roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default workspace member role not found"));
         }
-        return roleRepository.findByWorkspaceIdAndKeyIgnoreCaseAndProjectIdIsNull(workspaceId, "member")
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Default workspace member role not found"));
+        return activeRole(role, "Workspace role not found");
     }
 
     private ProjectInviteTarget resolveProjectInviteTarget(UUID workspaceId, UUID projectId, UUID projectRoleId) {
@@ -454,7 +457,14 @@ public class AuthService {
         }
         Role projectRole = roleRepository.findByIdAndProjectId(projectRoleId, projectId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project role not found"));
-        return new ProjectInviteTarget(project.getId(), projectRole.getId());
+        return new ProjectInviteTarget(project.getId(), activeRole(projectRole, "Project role not found").getId());
+    }
+
+    private Role activeRole(Role role, String message) {
+        if (!"active".equalsIgnoreCase(role.getStatus() == null ? "active" : role.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+        }
+        return role;
     }
 
     private User activeUser(UUID userId) {

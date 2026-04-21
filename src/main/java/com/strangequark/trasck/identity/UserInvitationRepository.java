@@ -13,4 +13,8 @@ public interface UserInvitationRepository extends JpaRepository<UserInvitation, 
     List<UserInvitation> findByWorkspaceIdOrderByCreatedAtDesc(UUID workspaceId);
 
     List<UserInvitation> findByWorkspaceIdAndStatusIgnoreCaseOrderByCreatedAtDesc(UUID workspaceId, String status);
+
+    long countByWorkspaceIdAndRoleIdAndStatusIgnoreCase(UUID workspaceId, UUID roleId, String status);
+
+    long countByProjectIdAndProjectRoleIdAndStatusIgnoreCase(UUID projectId, UUID projectRoleId, String status);
 }
