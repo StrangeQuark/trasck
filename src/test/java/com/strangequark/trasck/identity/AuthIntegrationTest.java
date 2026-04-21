@@ -158,6 +158,12 @@ class AuthIntegrationTest {
         JsonNode revokedInvitation = read(post("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
                 .put("email", "revoked-invite@example.com"), admin.accessToken()));
         assertThat(delete("/api/v1/workspaces/" + workspaceId + "/invitations/" + uuid(revokedInvitation, "/id"), admin.accessToken()).statusCode()).isEqualTo(204);
+        JsonNode allInvitations = read(get("/api/v1/workspaces/" + workspaceId + "/invitations?status=all", admin.accessToken()));
+        assertThat(allInvitations).anySatisfy(listed -> {
+            assertThat(uuid((JsonNode) listed, "/id")).isEqualTo(uuid(revokedInvitation, "/id"));
+            assertThat(((JsonNode) listed).has("token")).isFalse();
+            assertThat(((JsonNode) listed).has("tokenHash")).isFalse();
+        });
         assertThat(jdbcTemplate.queryForObject(
                 "select status from user_invitations where id = ?",
                 String.class,
@@ -174,6 +180,13 @@ class AuthIntegrationTest {
         JsonNode invitation = read(post("/api/v1/workspaces/" + workspaceId + "/invitations", objectMapper.createObjectNode()
                 .put("email", "invited@example.com"), admin.accessToken()));
         assertThat(invitation.at("/token").asText()).isNotBlank();
+        JsonNode pendingInvitations = read(get("/api/v1/workspaces/" + workspaceId + "/invitations", admin.accessToken()));
+        assertThat(pendingInvitations).anySatisfy(listed -> {
+            assertThat(uuid((JsonNode) listed, "/id")).isEqualTo(uuid(invitation, "/id"));
+            assertThat(((JsonNode) listed).at("/email").asText()).isEqualTo("invited@example.com");
+            assertThat(((JsonNode) listed).at("/status").asText()).isEqualTo("pending");
+            assertThat(((JsonNode) listed).has("token")).isFalse();
+        });
 
         JsonNode registered = read(post("/api/v1/auth/register", objectMapper.createObjectNode()
                 .put("email", "invited@example.com")
@@ -205,6 +218,13 @@ class AuthIntegrationTest {
                 .put("password", "correct-horse-battery-staple")
                 .put("roleId", viewerRoleId.toString()), admin.accessToken()));
         assertThat(uuid(viewer, "/id")).isNotNull();
+        JsonNode workspaceUsers = read(get("/api/v1/workspaces/" + workspaceId + "/users", admin.accessToken()));
+        assertThat(workspaceUsers).anySatisfy(listed -> {
+            assertThat(uuid((JsonNode) listed, "/userId")).isEqualTo(uuid(viewer, "/id"));
+            assertThat(((JsonNode) listed).at("/email").asText()).isEqualTo("viewer@example.com");
+            assertThat(((JsonNode) listed).at("/roleKey").asText()).isEqualTo("viewer");
+            assertThat(((JsonNode) listed).has("passwordHash")).isFalse();
+        });
 
         AuthSession viewerSession = login("viewer@example.com", "correct-horse-battery-staple");
         assertThat(get("/api/v1/projects/" + projectId + "/work-items", viewerSession.accessToken()).statusCode()).isEqualTo(200);
@@ -253,6 +273,9 @@ class AuthIntegrationTest {
         JsonNode listedServiceTokens = read(get("/api/v1/workspaces/" + workspaceId + "/service-tokens", admin.accessToken()));
         assertThat(listedServiceTokens).hasSize(1);
         assertThat(listedServiceTokens.get(0).at("/token").isNull()).isTrue();
+        JsonNode usersAfterServiceToken = read(get("/api/v1/workspaces/" + workspaceId + "/users?status=all", admin.accessToken()));
+        assertThat(usersAfterServiceToken).noneSatisfy(listed ->
+                assertThat(uuid((JsonNode) listed, "/userId")).isEqualTo(uuid(serviceToken, "/userId")));
 
         JsonNode expiredServiceToken = read(post("/api/v1/workspaces/" + workspaceId + "/service-tokens", objectMapper.createObjectNode()
                 .put("name", "Expired automation reader")

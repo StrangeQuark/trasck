@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -109,6 +110,15 @@ public class AuthController {
                 .body(authService.inviteUser(workspaceId, currentUserService.requireUserId(), request));
     }
 
+    @GetMapping("/workspaces/{workspaceId}/invitations")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public List<WorkspaceInvitationResponse> listInvitations(
+            @PathVariable UUID workspaceId,
+            @RequestParam(defaultValue = "pending") String status
+    ) {
+        return authService.listInvitations(workspaceId, status);
+    }
+
     @DeleteMapping("/workspaces/{workspaceId}/invitations/{invitationId}")
     @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
     public ResponseEntity<Void> cancelInvitation(
@@ -127,6 +137,15 @@ public class AuthController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(authService.createUserInWorkspace(workspaceId, currentUserService.requireUserId(), request));
+    }
+
+    @GetMapping("/workspaces/{workspaceId}/users")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public List<WorkspaceMemberResponse> listWorkspaceUsers(
+            @PathVariable UUID workspaceId,
+            @RequestParam(defaultValue = "active") String status
+    ) {
+        return authService.listWorkspaceUsers(workspaceId, status);
     }
 
     @DeleteMapping("/workspaces/{workspaceId}/users/{userId}")
