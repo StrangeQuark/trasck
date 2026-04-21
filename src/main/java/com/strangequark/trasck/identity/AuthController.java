@@ -109,6 +109,16 @@ public class AuthController {
                 .body(authService.inviteUser(workspaceId, currentUserService.requireUserId(), request));
     }
 
+    @DeleteMapping("/workspaces/{workspaceId}/invitations/{invitationId}")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public ResponseEntity<Void> cancelInvitation(
+            @PathVariable UUID workspaceId,
+            @PathVariable UUID invitationId
+    ) {
+        authService.cancelInvitation(workspaceId, invitationId, currentUserService.requireUserId());
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/workspaces/{workspaceId}/users")
     @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
     public ResponseEntity<AuthUserResponse> createUser(
@@ -117,6 +127,16 @@ public class AuthController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(authService.createUserInWorkspace(workspaceId, currentUserService.requireUserId(), request));
+    }
+
+    @DeleteMapping("/workspaces/{workspaceId}/users/{userId}")
+    @PreAuthorize("@permissionService.canManageUsers(authentication, #workspaceId)")
+    public ResponseEntity<Void> removeWorkspaceUser(
+            @PathVariable UUID workspaceId,
+            @PathVariable UUID userId
+    ) {
+        authService.removeUserFromWorkspace(workspaceId, userId, currentUserService.requireUserId());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/workspaces/{workspaceId}/service-tokens")

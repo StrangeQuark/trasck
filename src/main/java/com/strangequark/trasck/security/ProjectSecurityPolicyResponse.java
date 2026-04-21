@@ -6,6 +6,9 @@ import java.util.UUID;
 public record ProjectSecurityPolicyResponse(
         UUID projectId,
         UUID workspaceId,
+        String visibility,
+        Boolean workspaceAnonymousReadEnabled,
+        Boolean publicReadEnabled,
         Long attachmentMaxUploadBytes,
         Long attachmentMaxDownloadBytes,
         String attachmentAllowedContentTypes,

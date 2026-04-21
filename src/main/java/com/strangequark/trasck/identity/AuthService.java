@@ -191,6 +191,59 @@ public class AuthService {
     }
 
     @Transactional
+    public void cancelInvitation(UUID workspaceId, UUID invitationId, UUID actorId) {
+        UUID workspace = required(workspaceId, "workspaceId");
+        UUID invitation = required(invitationId, "invitationId");
+        UserInvitation userInvitation = userInvitationRepository.findByIdAndWorkspaceId(invitation, workspace)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invitation not found"));
+        String status = userInvitation.getStatus() == null ? "" : userInvitation.getStatus().toLowerCase(Locale.ROOT);
+        if ("accepted".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Accepted invitations cannot be revoked");
+        }
+        if (!"revoked".equals(status)) {
+            userInvitation.setStatus("revoked");
+            userInvitationRepository.save(userInvitation);
+            ObjectNode payload = invitationPayload(userInvitation).put("revokedById", required(actorId, "actorId").toString());
+            domainEventService.record(workspace, "user_invitation", userInvitation.getId(), "auth.user_invitation_revoked", payload);
+        }
+    }
+
+    @Transactional
+    public void removeUserFromWorkspace(UUID workspaceId, UUID userId, UUID actorId) {
+        UUID workspace = required(workspaceId, "workspaceId");
+        UUID userToRemove = required(userId, "userId");
+        UUID actor = required(actorId, "actorId");
+        if (actor.equals(userToRemove)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Current user cannot remove themselves from the workspace");
+        }
+
+        User user = userRepository.findById(userToRemove)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        WorkspaceMembership membership = workspaceMembershipRepository
+                .findByWorkspaceIdAndUserIdAndStatusIgnoreCase(workspace, userToRemove, "active")
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workspace user not found"));
+        membership.setStatus("removed");
+        workspaceMembershipRepository.save(membership);
+
+        projectMembershipRepository.findByWorkspaceIdAndUserIdAndStatusIgnoreCase(workspace, userToRemove, "active")
+                .forEach(projectMembership -> {
+                    projectMembership.setStatus("removed");
+                    projectMembershipRepository.save(projectMembership);
+                });
+
+        if (workspaceMembershipRepository.findByUserIdAndStatusIgnoreCase(userToRemove, "active").isEmpty()) {
+            user.setActive(false);
+            user.setDeletedAt(OffsetDateTime.now());
+            userRepository.save(user);
+        }
+
+        ObjectNode payload = userPayload(user)
+                .put("workspaceId", workspace.toString())
+                .put("removedById", actor.toString());
+        domainEventService.record(workspace, "user", user.getId(), "auth.user_removed_from_workspace", payload);
+    }
+
+    @Transactional
     public AuthResponse oauthLogin(OAuthLoginRequest request) {
         OAuthLoginRequest oauth = required(request, "request");
         String provider = requiredText(oauth.provider(), "provider").toLowerCase(Locale.ROOT);
@@ -304,10 +357,11 @@ public class AuthService {
     }
 
     private void createWorkspaceMembership(UUID workspaceId, UUID userId, UUID roleId) {
-        if (workspaceMembershipRepository.existsByWorkspaceIdAndUserIdAndStatusIgnoreCase(workspaceId, userId, "active")) {
+        WorkspaceMembership membership = workspaceMembershipRepository.findByWorkspaceIdAndUserId(workspaceId, userId)
+                .orElseGet(WorkspaceMembership::new);
+        if ("active".equalsIgnoreCase(membership.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "User is already an active workspace member");
         }
-        WorkspaceMembership membership = new WorkspaceMembership();
         membership.setWorkspaceId(workspaceId);
         membership.setUserId(userId);
         membership.setRoleId(roleId);
@@ -317,10 +371,11 @@ public class AuthService {
     }
 
     private void createProjectMembership(UUID projectId, UUID userId, UUID roleId) {
-        if (projectMembershipRepository.existsByProjectIdAndUserIdAndStatusIgnoreCase(projectId, userId, "active")) {
+        ProjectMembership membership = projectMembershipRepository.findByProjectIdAndUserId(projectId, userId)
+                .orElseGet(ProjectMembership::new);
+        if ("active".equalsIgnoreCase(membership.getStatus())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "User is already an active project member");
         }
-        ProjectMembership membership = new ProjectMembership();
         membership.setProjectId(projectId);
         membership.setUserId(userId);
         membership.setRoleId(roleId);
@@ -390,6 +445,10 @@ public class AuthService {
     }
 
     private void recordInvitationEvent(UserInvitation invitation, String eventType) {
+        domainEventService.record(invitation.getWorkspaceId(), "user_invitation", invitation.getId(), eventType, invitationPayload(invitation));
+    }
+
+    private ObjectNode invitationPayload(UserInvitation invitation) {
         ObjectNode payload = objectMapper.createObjectNode()
                 .put("workspaceId", invitation.getWorkspaceId().toString())
                 .put("email", invitation.getEmail())
@@ -406,7 +465,7 @@ public class AuthService {
         if (invitation.getProjectRoleId() != null) {
             payload.put("projectRoleId", invitation.getProjectRoleId().toString());
         }
-        domainEventService.record(invitation.getWorkspaceId(), "user_invitation", invitation.getId(), eventType, payload);
+        return payload;
     }
 
     private ObjectNode userPayload(User user) {

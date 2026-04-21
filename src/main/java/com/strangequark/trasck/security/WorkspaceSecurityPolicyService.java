@@ -8,6 +8,7 @@ import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.util.Arrays;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
@@ -62,33 +63,38 @@ public class WorkspaceSecurityPolicyService {
     @Transactional(readOnly = true)
     public WorkspaceSecurityPolicyResponse getWorkspacePolicy(UUID workspaceId) {
         UUID actorId = currentUserService.requireUserId();
-        activeWorkspace(workspaceId);
+        Workspace workspace = activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
         WorkspaceSecurityPolicy policy = policyRepository.findById(workspaceId).orElse(null);
-        return response(workspaceId, policy);
+        return response(workspace, policy);
     }
 
     @Transactional
     public WorkspaceSecurityPolicyResponse updateWorkspacePolicy(UUID workspaceId, WorkspaceSecurityPolicyRequest request) {
         WorkspaceSecurityPolicyRequest updateRequest = request == null
-                ? new WorkspaceSecurityPolicyRequest(null, null, null, null, null, null, null)
+                ? new WorkspaceSecurityPolicyRequest(null, null, null, null, null, null, null, null, null)
                 : request;
         UUID actorId = currentUserService.requireUserId();
-        activeWorkspace(workspaceId);
+        Workspace workspace = activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "workspace.admin");
-        WorkspaceSecurityPolicy policy = policyRepository.findById(workspaceId).orElseGet(() -> {
-            WorkspaceSecurityPolicy created = new WorkspaceSecurityPolicy();
-            created.setWorkspaceId(workspaceId);
-            return created;
-        });
-        policy.setAttachmentMaxUploadBytes(nullablePositive(updateRequest.attachmentMaxUploadBytes(), "attachmentMaxUploadBytes"));
-        policy.setAttachmentMaxDownloadBytes(nullablePositive(updateRequest.attachmentMaxDownloadBytes(), "attachmentMaxDownloadBytes"));
-        policy.setAttachmentAllowedContentTypes(nullableCsv(updateRequest.attachmentAllowedContentTypes()));
-        policy.setExportMaxArtifactBytes(nullablePositive(updateRequest.exportMaxArtifactBytes(), "exportMaxArtifactBytes"));
-        policy.setExportAllowedContentTypes(nullableCsv(updateRequest.exportAllowedContentTypes()));
-        policy.setImportMaxParseBytes(nullablePositive(updateRequest.importMaxParseBytes(), "importMaxParseBytes"));
-        policy.setImportAllowedContentTypes(nullableCsv(updateRequest.importAllowedContentTypes()));
-        return response(workspaceId, policyRepository.save(policy));
+        if (updateRequest.anonymousReadEnabled() != null) {
+            workspace.setAnonymousReadEnabled(updateRequest.anonymousReadEnabled());
+            workspace = workspaceRepository.save(workspace);
+        }
+        WorkspaceSecurityPolicy policy = policyRepository.findById(workspaceId).orElse(null);
+        if (hasContentPolicyUpdate(updateRequest)) {
+            WorkspaceSecurityPolicy updatedPolicy = policy == null ? new WorkspaceSecurityPolicy() : policy;
+            updatedPolicy.setWorkspaceId(workspaceId);
+            updatedPolicy.setAttachmentMaxUploadBytes(nullablePositive(updateRequest.attachmentMaxUploadBytes(), "attachmentMaxUploadBytes"));
+            updatedPolicy.setAttachmentMaxDownloadBytes(nullablePositive(updateRequest.attachmentMaxDownloadBytes(), "attachmentMaxDownloadBytes"));
+            updatedPolicy.setAttachmentAllowedContentTypes(nullableCsv(updateRequest.attachmentAllowedContentTypes()));
+            updatedPolicy.setExportMaxArtifactBytes(nullablePositive(updateRequest.exportMaxArtifactBytes(), "exportMaxArtifactBytes"));
+            updatedPolicy.setExportAllowedContentTypes(nullableCsv(updateRequest.exportAllowedContentTypes()));
+            updatedPolicy.setImportMaxParseBytes(nullablePositive(updateRequest.importMaxParseBytes(), "importMaxParseBytes"));
+            updatedPolicy.setImportAllowedContentTypes(nullableCsv(updateRequest.importAllowedContentTypes()));
+            policy = policyRepository.save(updatedPolicy);
+        }
+        return response(workspace, policy);
     }
 
     @Transactional(readOnly = true)
@@ -103,24 +109,29 @@ public class WorkspaceSecurityPolicyService {
     @Transactional
     public ProjectSecurityPolicyResponse updateProjectPolicy(UUID projectId, WorkspaceSecurityPolicyRequest request) {
         WorkspaceSecurityPolicyRequest updateRequest = request == null
-                ? new WorkspaceSecurityPolicyRequest(null, null, null, null, null, null, null)
+                ? new WorkspaceSecurityPolicyRequest(null, null, null, null, null, null, null, null, null)
                 : request;
         UUID actorId = currentUserService.requireUserId();
         Project project = activeProject(projectId);
         permissionService.requireProjectPermission(actorId, project.getId(), "project.admin");
-        ProjectSecurityPolicy policy = projectPolicyRepository.findById(project.getId()).orElseGet(() -> {
-            ProjectSecurityPolicy created = new ProjectSecurityPolicy();
-            created.setProjectId(project.getId());
-            return created;
-        });
-        policy.setAttachmentMaxUploadBytes(nullablePositive(updateRequest.attachmentMaxUploadBytes(), "attachmentMaxUploadBytes"));
-        policy.setAttachmentMaxDownloadBytes(nullablePositive(updateRequest.attachmentMaxDownloadBytes(), "attachmentMaxDownloadBytes"));
-        policy.setAttachmentAllowedContentTypes(nullableCsv(updateRequest.attachmentAllowedContentTypes()));
-        policy.setExportMaxArtifactBytes(nullablePositive(updateRequest.exportMaxArtifactBytes(), "exportMaxArtifactBytes"));
-        policy.setExportAllowedContentTypes(nullableCsv(updateRequest.exportAllowedContentTypes()));
-        policy.setImportMaxParseBytes(nullablePositive(updateRequest.importMaxParseBytes(), "importMaxParseBytes"));
-        policy.setImportAllowedContentTypes(nullableCsv(updateRequest.importAllowedContentTypes()));
-        return projectResponse(project, projectPolicyRepository.save(policy));
+        if (updateRequest.visibility() != null) {
+            project.setVisibility(normalizeProjectVisibility(updateRequest.visibility()));
+            project = projectRepository.save(project);
+        }
+        ProjectSecurityPolicy policy = projectPolicyRepository.findById(project.getId()).orElse(null);
+        if (hasContentPolicyUpdate(updateRequest)) {
+            ProjectSecurityPolicy updatedPolicy = policy == null ? new ProjectSecurityPolicy() : policy;
+            updatedPolicy.setProjectId(project.getId());
+            updatedPolicy.setAttachmentMaxUploadBytes(nullablePositive(updateRequest.attachmentMaxUploadBytes(), "attachmentMaxUploadBytes"));
+            updatedPolicy.setAttachmentMaxDownloadBytes(nullablePositive(updateRequest.attachmentMaxDownloadBytes(), "attachmentMaxDownloadBytes"));
+            updatedPolicy.setAttachmentAllowedContentTypes(nullableCsv(updateRequest.attachmentAllowedContentTypes()));
+            updatedPolicy.setExportMaxArtifactBytes(nullablePositive(updateRequest.exportMaxArtifactBytes(), "exportMaxArtifactBytes"));
+            updatedPolicy.setExportAllowedContentTypes(nullableCsv(updateRequest.exportAllowedContentTypes()));
+            updatedPolicy.setImportMaxParseBytes(nullablePositive(updateRequest.importMaxParseBytes(), "importMaxParseBytes"));
+            updatedPolicy.setImportAllowedContentTypes(nullableCsv(updateRequest.importAllowedContentTypes()));
+            policy = projectPolicyRepository.save(updatedPolicy);
+        }
+        return projectResponse(project, policy);
     }
 
     @Transactional(readOnly = true)
@@ -160,10 +171,12 @@ public class WorkspaceSecurityPolicyService {
         );
     }
 
-    private WorkspaceSecurityPolicyResponse response(UUID workspaceId, WorkspaceSecurityPolicy policy) {
+    private WorkspaceSecurityPolicyResponse response(Workspace workspace, WorkspaceSecurityPolicy policy) {
+        UUID workspaceId = workspace.getId();
         ContentLimits effective = limits(workspaceId);
         return new WorkspaceSecurityPolicyResponse(
                 workspaceId,
+                Boolean.TRUE.equals(workspace.getAnonymousReadEnabled()),
                 effective.attachmentMaxUploadBytes(),
                 effective.attachmentMaxDownloadBytes(),
                 effective.attachmentAllowedContentTypes(),
@@ -178,10 +191,16 @@ public class WorkspaceSecurityPolicyService {
     }
 
     private ProjectSecurityPolicyResponse projectResponse(Project project, ProjectSecurityPolicy policy) {
+        Workspace workspace = activeWorkspace(project.getWorkspaceId());
         ContentLimits effective = limits(project.getWorkspaceId(), project.getId());
+        boolean workspaceAnonymousReadEnabled = Boolean.TRUE.equals(workspace.getAnonymousReadEnabled());
+        String visibility = project.getVisibility();
         return new ProjectSecurityPolicyResponse(
                 project.getId(),
                 project.getWorkspaceId(),
+                visibility,
+                workspaceAnonymousReadEnabled,
+                workspaceAnonymousReadEnabled && "public".equals(visibility),
                 effective.attachmentMaxUploadBytes(),
                 effective.attachmentMaxDownloadBytes(),
                 effective.attachmentAllowedContentTypes(),
@@ -194,6 +213,16 @@ public class WorkspaceSecurityPolicyService {
                 policy == null ? null : policy.getCreatedAt(),
                 policy == null ? null : policy.getUpdatedAt()
         );
+    }
+
+    private boolean hasContentPolicyUpdate(WorkspaceSecurityPolicyRequest request) {
+        return request.attachmentMaxUploadBytes() != null
+                || request.attachmentMaxDownloadBytes() != null
+                || request.attachmentAllowedContentTypes() != null
+                || request.exportMaxArtifactBytes() != null
+                || request.exportAllowedContentTypes() != null
+                || request.importMaxParseBytes() != null
+                || request.importAllowedContentTypes() != null;
     }
 
     private Workspace activeWorkspace(UUID workspaceId) {
@@ -269,6 +298,14 @@ public class WorkspaceSecurityPolicyService {
                 || normalized.chars().anyMatch(Character::isWhitespace));
         if (invalid) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content types must use type/subtype format");
+        }
+        return normalized;
+    }
+
+    private String normalizeProjectVisibility(String visibility) {
+        String normalized = visibility == null ? "" : visibility.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("private", "workspace", "public").contains(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "visibility must be private, workspace, or public");
         }
         return normalized;
     }
