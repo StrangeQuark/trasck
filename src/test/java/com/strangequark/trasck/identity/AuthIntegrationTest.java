@@ -119,6 +119,23 @@ class AuthIntegrationTest {
         HttpResponse<String> meByCookie = getWithCookie("/api/v1/auth/me", admin.cookie());
         assertThat(meByCookie.statusCode()).isEqualTo(200);
 
+        JsonNode workspaceRoles = read(get("/api/v1/workspaces/" + workspaceId + "/roles", admin.accessToken()));
+        assertThat(workspaceRoles).anySatisfy(role -> {
+            JsonNode listedRole = (JsonNode) role;
+            assertThat(uuid(listedRole, "/id")).isEqualTo(viewerRoleId);
+            assertThat(listedRole.at("/key").asText()).isEqualTo("viewer");
+            assertThat(listedRole.at("/scope").asText()).isEqualTo("workspace");
+            assertThat(listedRole.at("/projectId").isNull()).isTrue();
+        });
+        JsonNode projectRoles = read(get("/api/v1/projects/" + projectId + "/roles", admin.accessToken()));
+        assertThat(projectRoles).anySatisfy(role -> {
+            JsonNode listedRole = (JsonNode) role;
+            assertThat(uuid(listedRole, "/id")).isEqualTo(projectAdminRoleId);
+            assertThat(listedRole.at("/key").asText()).isEqualTo("project_admin");
+            assertThat(listedRole.at("/scope").asText()).isEqualTo("project");
+            assertThat(uuid(listedRole, "/projectId")).isEqualTo(projectId);
+        });
+
         HttpResponse<String> unsafeCookiePostWithoutCsrf = postWithCookies(
                 "/api/v1/auth/tokens/personal",
                 objectMapper.createObjectNode().put("name", "Browser token without CSRF"),
@@ -228,6 +245,8 @@ class AuthIntegrationTest {
 
         AuthSession viewerSession = login("viewer@example.com", "correct-horse-battery-staple");
         assertThat(get("/api/v1/projects/" + projectId + "/work-items", viewerSession.accessToken()).statusCode()).isEqualTo(200);
+        assertThat(get("/api/v1/workspaces/" + workspaceId + "/roles", viewerSession.accessToken()).statusCode()).isEqualTo(403);
+        assertThat(get("/api/v1/projects/" + projectId + "/roles", viewerSession.accessToken()).statusCode()).isEqualTo(403);
         assertThat(delete("/api/v1/workspaces/" + workspaceId + "/users/" + adminUserId, admin.accessToken()).statusCode()).isEqualTo(409);
         JsonNode removableUser = read(post("/api/v1/workspaces/" + workspaceId + "/users", objectMapper.createObjectNode()
                 .put("email", "removable@example.com")
