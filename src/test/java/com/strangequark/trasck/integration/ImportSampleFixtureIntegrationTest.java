@@ -69,6 +69,18 @@ class ImportSampleFixtureIntegrationTest {
         UUID projectId = uuid(setup, "/project/id");
         accessToken = login(setup);
 
+        JsonNode guardedImportJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
+                .put("provider", "csv"));
+        UUID guardedImportJobId = uuid(guardedImportJob, "/id");
+        assertThat(post("/api/v1/import-jobs/" + guardedImportJobId + "/parse", objectMapper.createObjectNode()
+                .put("content", "key,title\nGUARD-1,Rejected content type")
+                .put("sourceType", "row")
+                .put("contentType", "text/html")).statusCode()).isEqualTo(415);
+        assertThat(post("/api/v1/import-jobs/" + guardedImportJobId + "/parse", objectMapper.createObjectNode()
+                .put("content", "x".repeat(5_242_881))
+                .put("sourceType", "row")
+                .put("contentType", "text/csv")).statusCode()).isEqualTo(413);
+
         JsonNode initialImportSettings = getJson("/api/v1/workspaces/" + workspaceId + "/import-settings");
         assertThat(initialImportSettings.at("/sampleJobsEnabled").asBoolean()).isTrue();
         assertThat(initialImportSettings.at("/sampleJobsAvailable").asBoolean()).isTrue();

@@ -217,10 +217,13 @@ class JpaPersistenceTest {
         Integer permissionCount = jdbcTemplate.queryForObject("select count(*) from permissions", Integer.class);
         Map<String, Repository> repositories = applicationContext.getBeansOfType(Repository.class);
 
-        assertThat(tableCount).isEqualTo(131);
-        assertThat(permissionCount).isEqualTo(31);
-        assertThat(entityManager.getMetamodel().getEntities()).hasSize(128);
+        assertThat(tableCount).isEqualTo(134);
+        assertThat(permissionCount).isEqualTo(32);
+        assertThat(entityManager.getMetamodel().getEntities()).hasSize(131);
         assertThat(repositories).hasSizeGreaterThanOrEqualTo(105);
+        assertThat(tableExists("system_admins")).isTrue();
+        assertThat(tableExists("security_rate_limit_attempts")).isTrue();
+        assertThat(tableExists("security_auth_failure_events")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_retention_days")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_automatic_enabled")).isTrue();
         assertThat(columnExists("automation_worker_settings", "worker_run_pruning_interval_minutes")).isTrue();
@@ -705,6 +708,20 @@ class JpaPersistenceTest {
                 Integer.class,
                 tableName,
                 columnName
+        );
+        return count != null && count > 0;
+    }
+
+    private boolean tableExists(String tableName) {
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                        select count(*)
+                        from information_schema.tables
+                        where table_schema = 'public'
+                          and table_name = ?
+                        """,
+                Integer.class,
+                tableName
         );
         return count != null && count > 0;
     }

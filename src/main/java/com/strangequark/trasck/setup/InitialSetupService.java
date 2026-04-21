@@ -1,10 +1,13 @@
 package com.strangequark.trasck.setup;
 
+import com.strangequark.trasck.access.SystemAdmin;
+import com.strangequark.trasck.access.SystemAdminRepository;
 import com.strangequark.trasck.identity.User;
 import com.strangequark.trasck.identity.UserRepository;
 import com.strangequark.trasck.organization.Organization;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.workspace.Workspace;
+import java.time.OffsetDateTime;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +22,7 @@ public class InitialSetupService {
     private final ProjectSetupService projectSetupService;
     private final WorkspaceSeedService workspaceSeedService;
     private final UserRepository userRepository;
+    private final SystemAdminRepository systemAdminRepository;
 
     public InitialSetupService(
             IdentitySetupService identitySetupService,
@@ -26,7 +30,8 @@ public class InitialSetupService {
             WorkspaceSetupService workspaceSetupService,
             ProjectSetupService projectSetupService,
             WorkspaceSeedService workspaceSeedService,
-            UserRepository userRepository
+            UserRepository userRepository,
+            SystemAdminRepository systemAdminRepository
     ) {
         this.identitySetupService = identitySetupService;
         this.organizationSetupService = organizationSetupService;
@@ -34,6 +39,7 @@ public class InitialSetupService {
         this.projectSetupService = projectSetupService;
         this.workspaceSeedService = workspaceSeedService;
         this.userRepository = userRepository;
+        this.systemAdminRepository = systemAdminRepository;
     }
 
     @Transactional
@@ -46,6 +52,7 @@ public class InitialSetupService {
         Organization organization = organizationSetupService.createOrganization(setupRequest.organization(), adminUser.getId());
         Workspace workspace = workspaceSetupService.createWorkspace(setupRequest.workspace(), organization.getId());
         Project project = projectSetupService.createProject(setupRequest.project(), workspace.getId(), adminUser.getId());
+        grantSystemAdmin(adminUser);
         InitialSetupResponse.SeedDataSummary seedData = workspaceSeedService.seed(workspace, project, adminUser);
 
         return new InitialSetupResponse(
@@ -77,5 +84,14 @@ public class InitialSetupService {
                 ),
                 seedData
         );
+    }
+
+    private void grantSystemAdmin(User adminUser) {
+        SystemAdmin systemAdmin = new SystemAdmin();
+        systemAdmin.setUserId(adminUser.getId());
+        systemAdmin.setActive(true);
+        systemAdmin.setGrantedById(adminUser.getId());
+        systemAdmin.setGrantedAt(OffsetDateTime.now());
+        systemAdminRepository.save(systemAdmin);
     }
 }

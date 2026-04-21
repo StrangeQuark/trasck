@@ -4,16 +4,16 @@
 
 Answer these as we start each implementation task. These are the remaining decisions that affect the next backend/frontend slices.
 
-1. Should production OpenAPI/Swagger admin access remain available to any active workspace admin, or should it move to a dedicated system-admin/global permission before hosted multi-tenant deployments?
-    - Answer: Move to a dedicated system-admin/global permission
-2. Should outbound URL allowlisting remain exact host/host:port entries for now, or should the next hardening pass add CIDR ranges and wildcard host patterns for self-hosted deployments?
-    - Answer: Add CIDR ranged and wildcard host patterns now
-3. Should login throttling stay in-memory for the first manual test, or move to database/Redis-backed counters before any shared deployment?
-    - Answer: Move to database/Redis-backed counters
-4. Should the next security hardening task prioritize upload/import size and content-type limits first, or frontend secret-display masking and one-time token reveal cleanup first?
-    - Answer: Implement them both
-5. Should the frontend production nginx CSP be templated from the deployed API/browser origins, or stay as the current static local/default baseline until deployment packaging is finalized?
-    - Answer: Yes, template it now
+1. Should system-admin management get dedicated install-owner REST/UI flows before hosted deployment, or remain first-setup seeded and manually managed through the first manual test?
+    - Answer: Give REST/UI flows now
+2. Should DB-backed security throttling stay PostgreSQL-backed through the first deployment, or should Redis-backed counters be added before any horizontally scaled deployment?
+    - Answer: Add Redis-backed counters
+3. Should OWASP Dependency Check become a required CI gate immediately, or run as advisory until an NVD API key/cache strategy is configured?
+    - Answer: Make it a required CI gate immediately
+4. Should attachment, import, and export size/content-type limits remain deployment-level environment configuration, or become workspace-admin configurable policies?
+    - Answer: Make them workspace-admin configurable policies
+5. Should centralized production error/log redaction be implemented before broad manual testing, or handled later as production packaging work after the first manual product pass?
+    - Answer: Implement it now
 
 ## Current State
 
@@ -41,32 +41,12 @@ Queued import review CSV export jobs can now be picked up by the shared schedule
 
 Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth without access-token local storage, global toast/error handling, admin/API token screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, agent runtime preview and dispatch-attempt admin controls, and Vitest/Testing Library coverage.
 
-The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The first hardening pass removed checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, gates Swagger/OpenAPI behind authenticated admin access in production-like profiles, enables explicit CORS, adds default-deny outbound URL/SSRF policy and HTTP timeouts for configured outbound calls, tightens password/login protections including default-untrusted `X-Forwarded-For`, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks remaining production work: upload/import size and content-type controls, frontend secret-display polish, Java dependency vulnerability automation, callback/worker auth-failure rate/audit controls, stronger secret-management/KMS abstraction, centralized production error/log redaction, and a broader dedicated security regression suite.
+The full production-minded backend/frontend security audit is recorded in `SECURITY_AUDIT.MD`. The current hardening baseline removes checked-in `.env` files in favor of `.env.example`, rejects unsafe production-like startup defaults, gates Swagger/OpenAPI behind dedicated system-admin access in production-like profiles, enables explicit CORS, adds default-deny outbound URL/SSRF policy with exact host, wildcard host, and CIDR allowlisting, tightens password/login protections with default-untrusted `X-Forwarded-For`, stores auth throttling and auth-failure telemetry in the database, rate-limits callback/worker auth failures, enforces attachment/import/export size and content-type limits, masks frontend secret display, templates production nginx CSP, adds Java dependency-check CI wiring, keeps frontend `npm audit` in verification, updates frontend container builds to `npm ci`, and adds baseline nginx security headers. The audit still tracks production follow-ups: stronger secret-management/KMS abstraction, centralized production error/log redaction, system-admin management UX, Redis-backed throttling for horizontal scale, dependency-scanner cache/API-key strategy, and broader dedicated security regression coverage.
 
 
 ## Primary Next Steps
 
-### 1. Complete Remaining Security Hardening And Regression Coverage
-
-Goal: finish the remaining security findings that still matter before broad manual end-to-end testing.
-
-Planned work:
-
-- Add explicit upload/download, attachment metadata, export-artifact, and import parser size/content-type limits with rejection tests.
-- Harden frontend secret presentation: masked webhook/credential fields, dedicated one-time token reveal UI, and safer JSON preview behavior for secret-shaped fields.
-- Add Java dependency vulnerability automation in CI and keep frontend `npm audit` in the normal verification path.
-- Add callback/generic-worker authentication failure rate limiting and audit logging before any external worker is enabled.
-- Expand redaction tests so provider credentials, callback private keys, worker tokens, SMTP passwords, webhook secrets, API tokens, task context, dispatch attempts, comments, activity, audit, exports, and frontend previews do not leak raw secrets.
-- Decide whether production OpenAPI admin access should stay workspace-admin based or move behind a system-admin/global permission.
-- Decide whether outbound URL allowlists need CIDR/wildcard support or should stay exact host/port entries for the first manual test.
-- Decide whether login throttling remains in-memory through local manual testing or moves to database/Redis-backed counters before shared deployments.
-- Re-run Maven tests, frontend tests, frontend build, `npm audit`, port/config checks, and any newly added security checks.
-
-Done when:
-
-- Remaining high-risk security findings are fixed, medium findings are either fixed or explicitly documented with production-safe mitigations, and both repos pass the expanded security regression suite.
-
-### 2. Manual End-To-End Product Test Pass
+### 1. Manual End-To-End Product Test Pass
 
 Goal: validate the now-operable automation, webhook, email, import, board, dashboard, and agent surfaces against realistic local data before public testing.
 
@@ -80,7 +60,7 @@ Done when:
 
 - A local tester can operate delivery workers, inspect failures, retry/cancel jobs, export/prune worker history, create guarded sample imports, review/import conflict outcomes, and inspect agent task dispatch attempts without touching the database.
 
-### 3. External Worker And Provider Readiness
+### 2. External Worker And Provider Readiness
 
 Goal: prepare the provider-neutral worker boundary for the first non-stub external agent execution without weakening normal Jira/Rally-style product behavior.
 
@@ -95,6 +75,22 @@ Done when:
 
 - Admins can preview runtime payloads, rotate/revoke credentials, inspect dispatch attempts, and test a local worker without enabling paid or unmanaged external execution.
 
+### 3. Production Security Packaging Follow-Ups
+
+Goal: turn the hardened local/manual-test baseline into deployable production controls.
+
+Planned work:
+
+- Add system-admin management APIs/screens with explicit install-owner safeguards.
+- Decide whether Redis-backed throttling is needed before horizontal scale.
+- Add NVD API key/cache configuration for Java dependency scanning if the CI gate becomes mandatory.
+- Centralize production error/log redaction around outbound HTTP, OAuth, SMTP, agent provider, import, and export failures.
+- Keep secret-bearing deployment config in environment variables and plan the shared Vault/KMS/Secrets Manager abstraction for SMTP, object storage, and non-stub agent credentials.
+
+Done when:
+
+- A production-like deployment can start only with explicit secure configuration, run dependency/security checks predictably, and expose no raw secrets through normal API responses, logs, frontend previews, or generated artifacts.
+
 ## Remaining Dashboard/Report APIs
 
 - Time and estimate reporting by user/project/work item, remaining-time trends, and estimate-vs-actual summaries.
@@ -106,7 +102,7 @@ The following work should be completed before the application is ready for a mea
 
 ### Backend Readiness
 
-- Complete the remaining security hardening pass from `SECURITY_AUDIT.MD` before broad manual product testing begins.
+- Use the hardened security baseline from `SECURITY_AUDIT.MD` before broad manual product testing begins, and keep the remaining production-packaging follow-ups tracked before public hosting.
 - Keep manual reporting rollups stable and add automatic destructive snapshot pruning only after dashboard behavior has been manually reviewed.
 - Expand permission checks and permission tests beyond work items, dashboards, user-management, team/planning, agent endpoints, personalization/custom-field paths, automation workers, notification defaults, import parsing/materialization/record editing/history/conflict resolution, and worker history as more APIs are exposed.
 - Extend activity/audit projection coverage to request-changes, waiting-for-input, retry failures, cancellation failures, notification defaults, worker runs, import review export jobs, import record versions, clone-retarget, snapshot reruns, and external callback/delivery failures as those flows are added.

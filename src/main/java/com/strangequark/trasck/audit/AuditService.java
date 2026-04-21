@@ -18,6 +18,7 @@ import com.strangequark.trasck.identity.CurrentUserService;
 import com.strangequark.trasck.integration.ExportJob;
 import com.strangequark.trasck.integration.ExportJobRepository;
 import com.strangequark.trasck.integration.ExportJobResponse;
+import com.strangequark.trasck.security.ContentLimitPolicy;
 import com.strangequark.trasck.workspace.Workspace;
 import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.time.OffsetDateTime;
@@ -50,6 +51,7 @@ public class AuditService {
     private final PermissionService permissionService;
     private final DomainEventService domainEventService;
     private final ObjectMapper objectMapper;
+    private final ContentLimitPolicy contentLimitPolicy;
 
     public AuditService(
             AuditLogEntryRepository auditLogEntryRepository,
@@ -62,7 +64,8 @@ public class AuditService {
             CurrentUserService currentUserService,
             PermissionService permissionService,
             DomainEventService domainEventService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ContentLimitPolicy contentLimitPolicy
     ) {
         this.auditLogEntryRepository = auditLogEntryRepository;
         this.auditRetentionPolicyRepository = auditRetentionPolicyRepository;
@@ -75,6 +78,7 @@ public class AuditService {
         this.permissionService = permissionService;
         this.domainEventService = domainEventService;
         this.objectMapper = objectMapper;
+        this.contentLimitPolicy = contentLimitPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -243,12 +247,14 @@ public class AuditService {
         requireWorkspaceAdmin(workspaceId);
         ExportJob job = exportJob(workspaceId, exportJobId);
         Attachment attachment = exportAttachment(job, true);
+        contentLimitPolicy.validateExportDownload(attachment.getFilename(), attachment.getContentType(), attachment.getSizeBytes());
         AttachmentStorageConfig storageConfig = attachmentStorageConfigRepository.findByIdAndWorkspaceId(
                         attachment.getStorageConfigId(),
                         workspaceId
                 )
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file storage config not found"));
         byte[] bytes = attachmentStorageService.read(storageConfig, attachment.getStorageKey());
+        contentLimitPolicy.validateExportDownload(attachment.getFilename(), attachment.getContentType(), (long) bytes.length);
         return new ExportFileResponse(attachment.getFilename(), attachment.getContentType(), attachment.getChecksum(), bytes);
     }
 
@@ -310,6 +316,7 @@ public class AuditService {
                 + now.format(EXPORT_FILENAME_TIME)
                 + ".json";
         byte[] content = retentionExportContent(workspaceId, actorId, snapshot, now);
+        contentLimitPolicy.validateGeneratedExport(filename, "application/json", content);
         StoredAttachment stored = attachmentStorageService.store(
                 storageConfig,
                 new AttachmentUpload(filename, "application/json", content, null)

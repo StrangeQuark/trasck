@@ -17,6 +17,7 @@
 		<java.version>21</java.version>
 		<testcontainers.version>1.21.4</testcontainers.version>
 		<springdoc.version>3.0.3</springdoc.version>
+		<dependency-check.version>12.2.1</dependency-check.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -124,5 +125,28 @@
 			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<profile>
+			<id>security-audit</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.owasp</groupId>
+						<artifactId>dependency-check-maven</artifactId>
+						<version>${dependency-check.version}</version>
+						<configuration>
+							<failBuildOnCVSS>7</failBuildOnCVSS>
+							<suppressionFiles>
+								<suppressionFile>${project.basedir}/dependency-check-suppressions.xml</suppressionFile>
+							</suppressionFiles>
+							<skipProvidedScope>true</skipProvidedScope>
+							<skipRuntimeScope>false</skipRuntimeScope>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 
 </project>

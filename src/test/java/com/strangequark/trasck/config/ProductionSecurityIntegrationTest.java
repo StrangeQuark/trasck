@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -41,6 +42,9 @@ class ProductionSecurityIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -58,16 +62,31 @@ class ProductionSecurityIntegrationTest {
     }
 
     @Test
-    void protectsOpenApiDocsBehindAuthenticatedWorkspaceAdminInProductionProfiles() throws Exception {
+    void protectsOpenApiDocsBehindAuthenticatedSystemAdminInProductionProfiles() throws Exception {
         assertThat(get("/v3/api-docs", null).statusCode()).isIn(401, 403);
 
         JsonNode setup = postSetup();
         String accessToken = login(setup);
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                select count(*)
+                from role_permissions rp
+                join permissions p on p.id = rp.permission_id
+                where p.key = 'system.admin'
+                """,
+                Long.class
+        )).isZero();
 
         HttpResponse<String> authenticatedOpenApi = get("/v3/api-docs", accessToken);
         assertThat(authenticatedOpenApi.statusCode()).isEqualTo(200);
         JsonNode openApi = objectMapper.readTree(authenticatedOpenApi.body());
         assertThat(openApi.at("/openapi").asText()).startsWith("3.");
+
+        jdbcTemplate.update(
+                "update system_admins set active = false, revoked_at = now() where user_id = cast(? as uuid)",
+                setup.at("/adminUser/id").asText()
+        );
+        assertThat(get("/v3/api-docs", accessToken).statusCode()).isEqualTo(403);
     }
 
     private JsonNode postSetup() throws Exception {
