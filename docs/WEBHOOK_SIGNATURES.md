@@ -36,12 +36,14 @@ valid = constant_time_equals(expected, received_signature)
 
 ## Secret Rotation
 
-Creating a webhook secret assigns a `secretKeyId` in the webhook response. Updating the webhook with a new `secret` rotates the encrypted signing secret and issues a new `secretKeyId`.
+Creating a webhook secret assigns a `secretKeyId` in the webhook response. Updating the webhook with a new `secret` rotates the encrypted signing secret and issues a new `secretKeyId`. Trasck keeps the immediately previous encrypted secret, previous key ID, rotation timestamp, and previous-secret expiry metadata for a 72-hour overlap window.
+
+Queued deliveries store the `signatureKeyId` selected when the delivery row is created. If a delivery was queued before a secret rotation and processed during the overlap window, Trasck signs it with the previous secret and sends the previous key ID. Deliveries queued after rotation use the new current key ID. If a delivery requests a key ID that is no longer retained or the previous-secret overlap has expired, delivery processing marks that delivery failed and follows normal retry/dead-letter behavior.
 
 Receivers should support overlap during rotation:
 
 - Store the old and new secret by key ID during rollout.
-- Accept either key ID until all queued deliveries using the old key have finished or expired.
-- Remove the old key after the delivery retry window has passed.
+- Accept either key ID until all queued deliveries using the old key have finished or the `previousSecretExpiresAt` value has passed.
+- Remove the old key after the delivery retry window and Trasck overlap window have passed.
 
-Trasck never returns the raw webhook secret after write. The API only exposes whether a secret is configured and the current non-secret key ID.
+Trasck never returns the raw webhook secret after write. The API exposes whether a secret is configured, the current non-secret key ID, the previous non-secret key ID, the rotation timestamp, and the previous-secret expiry. Delivery responses expose the non-secret `signatureKeyId` used for that durable delivery row.
