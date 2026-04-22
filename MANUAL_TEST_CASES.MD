@@ -9,7 +9,6 @@ Recommended local services:
 ```bash
 cd "/home/strangequark/Desktop/codex - trasck/trasck"
 docker compose up -d
-./mvnw spring-boot:run
 ```
 
 ```bash
@@ -20,7 +19,7 @@ npm run dev
 Default local URLs:
 
 - Backend: `http://localhost:6100`
-- Frontend: `http://localhost:5173`
+- Frontend: `http://localhost:8080`
 - Maildev UI: `http://localhost:1080`
 
 Codex/Claude manual agent prerequisites:
@@ -53,12 +52,11 @@ Steps:
 2. Run `docker compose up -d`.
 3. Run `docker compose ps`.
 4. Confirm PostgreSQL, Redis, and Maildev containers are running.
-5. Start the backend with `./mvnw spring-boot:run`.
-6. Open `http://localhost:6100/api/trasck/health`.
-7. Confirm the backend health response is successful.
-8. Start the frontend from `trasck-frontend` with `npm run dev`.
-9. Open `http://localhost:5173`.
-10. Confirm the Trasck shell loads without a browser console error.
+5. Open `http://localhost:6100/api/trasck/health`.
+6. Confirm the backend health response is successful.
+7. Start the frontend from `trasck-frontend` with `npm run dev`.
+8. Open `http://localhost:8080`.
+9. Confirm the Trasck shell loads without a browser console error.
 
 ### TC-002 - First-Run Setup Creates Workspace
 
