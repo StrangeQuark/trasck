@@ -583,6 +583,50 @@ Content-Type: application/json
   "enabled": true
 }
 
+### Create Codex CLI Agent Provider
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-providers
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "providerKey": "codex-local",
+  "providerType": "codex",
+  "displayName": "Codex Local",
+  "dispatchMode": "managed",
+  "enabled": true,
+  "config": {
+    "runtime": {
+      "mode": "cli_worker",
+      "externalExecutionEnabled": true,
+      "cliWorker": {
+        "commandProfile": "codex-local"
+      }
+    }
+  }
+}
+
+### Create Claude Code CLI Agent Provider
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-providers
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "providerKey": "claude-code-local",
+  "providerType": "claude_code",
+  "displayName": "Claude Code Local",
+  "dispatchMode": "managed",
+  "enabled": true,
+  "config": {
+    "runtime": {
+      "mode": "cli_worker",
+      "externalExecutionEnabled": true,
+      "cliWorker": {
+        "commandProfile": "claude-code-local"
+      }
+    }
+  }
+}
+
 ### Create Worker Token Credential
 POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials
 Authorization: Bearer {{accessToken}}
@@ -594,6 +638,34 @@ Content-Type: application/json
   "metadata": {
     "workerId": "worker-1",
     "purpose": "generic-worker-auth"
+  }
+}
+
+### Create Codex API Key Credential
+POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "credentialType": "codex_api_key",
+  "secret": "replace-with-codex-secret",
+  "metadata": {
+    "authScheme": "bearer",
+    "environmentVariable": "CODEX_API_KEY"
+  }
+}
+
+### Create Claude API Key Credential
+POST {{baseUrl}}/api/v1/agent-providers/{{providerId}}/credentials
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "credentialType": "anthropic_api_key",
+  "secret": "replace-with-anthropic-secret",
+  "metadata": {
+    "authScheme": "api_key",
+    "environmentVariable": "ANTHROPIC_API_KEY"
   }
 }
 
@@ -666,6 +738,27 @@ Content-Type: application/json
   "requestPayload": {
     "instructions": "Implement the story and request review."
   }
+}
+
+### List CLI Worker Run Artifacts
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs
+Authorization: Bearer {{accessToken}}
+
+### Download CLI Worker Run ZIP
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs/{{agentTaskId}}/download
+Authorization: Bearer {{accessToken}}
+
+### Delete CLI Worker Run Directory
+DELETE {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs/{{agentTaskId}}
+Authorization: Bearer {{accessToken}}
+
+### Prune Old CLI Worker Run Directories
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs/prune
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "retentionDays": 7
 }
 
 ### Build Backend Push Dispatch Payload

@@ -92,6 +92,14 @@ final class ExternalAgentRuntimeConfig {
         return externalExecutionEnabled;
     }
 
+    boolean cliWorker() {
+        return "cli_worker".equals(mode);
+    }
+
+    String commandProfile() {
+        return text(cliWorker, "commandProfile");
+    }
+
     String transport() {
         return switch (mode) {
             case "hosted_api" -> "provider_hosted_api";

@@ -305,7 +305,7 @@ Regression tests/checks:
 
 Severity: Medium-high
 
-Status: Resolved for the current provider-neutral callback/worker baseline; keep expanding negative tests before external execution is enabled.
+Status: Resolved for the current provider-neutral callback/worker baseline; keep expanding negative tests before broader external execution is enabled.
 
 Affected files:
 
@@ -320,6 +320,7 @@ Current state:
 - Callback and worker authentication happens in agent services through signed callback JWTs and worker-token credentials.
 - Repeated callback and generic worker authentication failures are rate-limited through the same durable security counter path used by login throttling.
 - Callback and worker auth failures write durable security telemetry events.
+- Backend-managed Codex/Claude CLI execution is disabled by default, requires explicit `TRASCK_AGENTS_CLI_WORKER_ENABLED=true`, uses allowlisted command profiles instead of raw provider commands, and routes task completion/failure through the same signed callback validation path. The current local manual-test defaults are intentionally edit-capable, so they must run only on trusted hosts and disposable checkouts.
 
 Impact:
 
@@ -333,7 +334,7 @@ Recommended fix:
 
 Regression tests/checks:
 
-- Expand agent callback and worker auth denial tests before external adapters are enabled.
+- Expand agent callback and worker auth denial tests before hosted provider APIs or additional external adapters are enabled.
 
 ### SEC-009: Attachment and import payload limits are not fully explicit
 
@@ -380,6 +381,7 @@ Affected files:
 Current state:
 
 - AES-GCM encryption is implemented for provider credentials, callback private keys, and SMTP passwords.
+- Backend-managed CLI worker credentials are decrypted only to inject a configured process environment variable, and CLI output is redacted before it is stored as callback payload/message/artifact content. Workspace-admin CLI run artifact list/download/delete/prune controls avoid requiring direct filesystem access during manual testing.
 - The encryption key is application config driven.
 - There is no key ID, rotation workflow, envelope encryption, KMS/Vault integration, or per-secret audit metadata.
 

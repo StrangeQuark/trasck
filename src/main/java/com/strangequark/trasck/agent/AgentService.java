@@ -117,6 +117,7 @@ public class AgentService {
     private final DomainEventService domainEventService;
     private final AgentCallbackJwtService callbackJwtService;
     private final SecretCipherService secretCipherService;
+    private final AgentCliWorkerDispatcher agentCliWorkerDispatcher;
     private final OutboundUrlPolicy outboundUrlPolicy;
     private final LoginAttemptService loginAttemptService;
     private final ContentLimitPolicy contentLimitPolicy;
@@ -159,6 +160,7 @@ public class AgentService {
             DomainEventService domainEventService,
             AgentCallbackJwtService callbackJwtService,
             SecretCipherService secretCipherService,
+            AgentCliWorkerDispatcher agentCliWorkerDispatcher,
             OutboundUrlPolicy outboundUrlPolicy,
             LoginAttemptService loginAttemptService,
             ContentLimitPolicy contentLimitPolicy,
@@ -200,6 +202,7 @@ public class AgentService {
         this.domainEventService = domainEventService;
         this.callbackJwtService = callbackJwtService;
         this.secretCipherService = secretCipherService;
+        this.agentCliWorkerDispatcher = agentCliWorkerDispatcher;
         this.outboundUrlPolicy = outboundUrlPolicy;
         this.loginAttemptService = loginAttemptService;
         this.contentLimitPolicy = contentLimitPolicy;
@@ -307,6 +310,67 @@ public class AgentService {
         activeWorkspace(workspaceId);
         permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
         return pruneDispatchAttemptsInternal(workspaceId, actorId, request);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentCliWorkerRunResponse> listCliWorkerRuns(UUID workspaceId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        return agentCliWorkerDispatcher.listRuns(workspaceId);
+    }
+
+    @Transactional(readOnly = true)
+    public AgentCliWorkerRunArchive archiveCliWorkerRun(UUID workspaceId, UUID agentTaskId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        AgentTask task = agentTaskRepository.findByIdAndWorkspaceId(agentTaskId, workspaceId)
+                .orElseThrow(() -> notFound("Agent task not found"));
+        ensureCliRunNotActive(task);
+        try {
+            return agentCliWorkerDispatcher.archiveRun(task);
+        } catch (IllegalArgumentException ex) {
+            throw notFound(ex.getMessage());
+        }
+    }
+
+    @Transactional
+    public AgentCliWorkerRunDeleteResponse deleteCliWorkerRun(UUID workspaceId, UUID agentTaskId) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        AgentTask task = agentTaskRepository.findByIdAndWorkspaceId(agentTaskId, workspaceId)
+                .orElseThrow(() -> notFound("Agent task not found"));
+        ensureCliRunNotActive(task);
+        try {
+            AgentCliWorkerRunDeleteResponse response = agentCliWorkerDispatcher.deleteRun(task);
+            ObjectNode payload = cliRunDeletionPayload(response);
+            recordWorkspaceEvent(workspaceId, "agent_cli_run", agentTaskId, "agent.cli_run.deleted", actorId, payload);
+            return response;
+        } catch (IllegalArgumentException ex) {
+            throw notFound(ex.getMessage());
+        }
+    }
+
+    @Transactional
+    public AgentCliWorkerRunDeleteResponse pruneCliWorkerRuns(UUID workspaceId, AgentCliWorkerRunPruneRequest request) {
+        UUID actorId = currentUserService.requireUserId();
+        activeWorkspace(workspaceId);
+        permissionService.requireWorkspacePermission(actorId, workspaceId, "agent.provider.manage");
+        int retentionDays = request == null || request.retentionDays() == null ? 7 : request.retentionDays();
+        if (retentionDays < 0 || retentionDays > 3650) {
+            throw badRequest("retentionDays must be between 0 and 3650");
+        }
+        OffsetDateTime cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(retentionDays);
+        AgentCliWorkerRunDeleteResponse response = agentCliWorkerDispatcher.pruneRuns(workspaceId, cutoff);
+        ObjectNode payload = cliRunDeletionPayload(response)
+                .put("retentionDays", retentionDays);
+        if (response.cutoff() != null) {
+            payload.put("cutoff", response.cutoff().toString());
+        }
+        recordWorkspaceEvent(workspaceId, "agent_cli_run", workspaceId, "agent.cli_runs.pruned", actorId, payload);
+        return response;
     }
 
     @Transactional
@@ -1065,6 +1129,17 @@ public class AgentService {
         }
     }
 
+    @Transactional
+    public AgentTaskResponse handleInternalAgentCallback(UUID taskId, String assertion, AgentTaskCallbackRequest request) {
+        AgentTask task = agentTaskRepository.findById(taskId).orElseThrow(() -> notFound("Agent task not found"));
+        AgentCallbackJwtService.AgentCallbackClaims claims = callbackJwtService.peek(assertion);
+        if (!taskId.equals(claims.taskId())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Agent callback task mismatch");
+        }
+        AgentProvider provider = activeProvider(task.getWorkspaceId(), task.getProviderId());
+        return handleCallbackInternal(provider.getProviderKey(), assertion, request);
+    }
+
     private AgentTaskResponse handleCallbackInternal(String providerKey, String assertion, AgentTaskCallbackRequest request) {
         AgentTaskCallbackRequest callback = required(request, "request");
         AgentCallbackJwtService.AgentCallbackClaims untrustedClaims = callbackJwtService.peek(assertion);
@@ -1293,6 +1368,7 @@ public class AgentService {
         if (shouldPublishWorkerWebhookDispatch(provider)) {
             recordWorkerWebhookDispatchRequested(saved, item, provider, profile, result.dispatchPayload(), actorId, retry);
         }
+        agentCliWorkerDispatcher.dispatchAfterCommit(saved, provider, profile, result.dispatchPayload(), callbackToken);
         return callbackToken;
     }
 
@@ -2302,6 +2378,24 @@ public class AgentService {
             payload.put("startedTo", filter.startedTo().toString());
         }
         return payload;
+    }
+
+    private ObjectNode cliRunDeletionPayload(AgentCliWorkerRunDeleteResponse response) {
+        ObjectNode payload = objectMapper.createObjectNode()
+                .put("deletedRuns", response.deletedRuns())
+                .put("deletedBytes", response.deletedBytes());
+        ArrayNode taskIds = objectMapper.createArrayNode();
+        for (UUID taskId : response.deletedAgentTaskIds()) {
+            taskIds.add(taskId.toString());
+        }
+        payload.set("deletedAgentTaskIds", taskIds);
+        return payload;
+    }
+
+    private void ensureCliRunNotActive(AgentTask task) {
+        if (ACTIVE_TASK_STATUSES.contains(task.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "CLI worker run artifacts cannot be downloaded or deleted while the agent task is active");
+        }
     }
 
     private boolean isTerminal(String status) {
