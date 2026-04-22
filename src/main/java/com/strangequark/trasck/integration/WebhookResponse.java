@@ -14,6 +14,7 @@ public record WebhookResponse(
         String previousSecretKeyId,
         OffsetDateTime secretRotatedAt,
         OffsetDateTime previousSecretExpiresAt,
+        Long previousSecretOverlapSeconds,
         Object eventTypes,
         Boolean enabled
 ) {
@@ -29,6 +30,7 @@ public record WebhookResponse(
                 webhook.getPreviousSecretKeyId(),
                 webhook.getSecretRotatedAt(),
                 webhook.getPreviousSecretExpiresAt(),
+                webhook.getPreviousSecretOverlapSeconds(),
                 JsonValues.toJavaValue(webhook.getEventTypes()),
                 webhook.getEnabled()
         );

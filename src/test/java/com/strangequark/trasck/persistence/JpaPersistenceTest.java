@@ -244,6 +244,7 @@ class JpaPersistenceTest {
         assertThat(columnExists("webhooks", "previous_secret_key_id")).isTrue();
         assertThat(columnExists("webhooks", "secret_rotated_at")).isTrue();
         assertThat(columnExists("webhooks", "previous_secret_expires_at")).isTrue();
+        assertThat(columnExists("webhooks", "previous_secret_overlap_seconds")).isTrue();
         assertThat(columnExists("webhook_deliveries", "signature_key_id")).isTrue();
         assertThat(columnExists("import_mapping_templates", "transform_preset_id")).isTrue();
         assertThat(columnExists("import_transform_presets", "version")).isTrue();

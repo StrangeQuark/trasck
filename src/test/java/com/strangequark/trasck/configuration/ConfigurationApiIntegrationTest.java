@@ -9,6 +9,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -54,6 +56,7 @@ class ConfigurationApiIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
+        registry.add("trasck.webhooks.previous-secret-overlap", () -> "PT2H");
     }
 
     @Test
@@ -210,6 +213,17 @@ class ConfigurationApiIntegrationTest {
         JsonNode webhook = postJson("/api/v1/workspaces/" + workspaceId + "/webhooks", webhookBody);
         UUID webhookId = uuid(webhook, "/id");
         assertThat(webhook.at("/secretConfigured").asBoolean()).isTrue();
+        assertThat(webhook.at("/previousSecretOverlapSeconds").asLong()).isEqualTo(Duration.ofHours(2).toSeconds());
+        String originalWebhookKeyId = webhook.at("/secretKeyId").asText();
+        JsonNode rotatedWebhook = patch("/api/v1/webhooks/" + webhookId, objectMapper.createObjectNode()
+                .put("secret", "rotated-development-secret")
+                .put("previousSecretOverlapSeconds", Duration.ofHours(1).toSeconds()));
+        assertThat(rotatedWebhook.at("/previousSecretKeyId").asText()).isEqualTo(originalWebhookKeyId);
+        assertThat(rotatedWebhook.at("/previousSecretOverlapSeconds").asLong()).isEqualTo(Duration.ofHours(1).toSeconds());
+        assertThat(Duration.between(
+                OffsetDateTime.parse(rotatedWebhook.at("/secretRotatedAt").asText()),
+                OffsetDateTime.parse(rotatedWebhook.at("/previousSecretExpiresAt").asText())
+        )).isEqualTo(Duration.ofHours(1));
 
         JsonNode emailProviderSettings = putJson("/api/v1/workspaces/" + workspaceId + "/email-provider-settings", objectMapper.createObjectNode()
                 .put("provider", "smtp")

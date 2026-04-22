@@ -58,6 +58,9 @@ public class Webhook {
     @Column(name = "previous_secret_expires_at")
     private OffsetDateTime previousSecretExpiresAt;
 
+    @Column(name = "previous_secret_overlap_seconds")
+    private Long previousSecretOverlapSeconds;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "event_types")
     private JsonNode eventTypes;
@@ -160,6 +163,14 @@ public class Webhook {
 
     public void setPreviousSecretExpiresAt(OffsetDateTime previousSecretExpiresAt) {
         this.previousSecretExpiresAt = previousSecretExpiresAt;
+    }
+
+    public Long getPreviousSecretOverlapSeconds() {
+        return previousSecretOverlapSeconds;
+    }
+
+    public void setPreviousSecretOverlapSeconds(Long previousSecretOverlapSeconds) {
+        this.previousSecretOverlapSeconds = previousSecretOverlapSeconds;
     }
 
     public JsonNode getEventTypes() {
