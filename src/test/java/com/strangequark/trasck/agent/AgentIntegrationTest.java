@@ -408,6 +408,28 @@ class AgentIntegrationTest {
         assertThat(reviewedClaudeCliTask.at("/resultPayload/providerType").asText()).isEqualTo("claude_code");
         assertThat(reviewedClaudeCliTask.at("/resultPayload/output").asText()).contains("Trasck Agent Task", "Claude Code");
 
+        UUID codexCliTaskId = uuid(codexCliTask, "/id");
+        UUID claudeCliTaskId = uuid(claudeCliTask, "/id");
+        JsonNode cliRuns = read(get("/api/v1/workspaces/" + workspaceId + "/agent-cli-runs", accessToken));
+        assertThat(cliRuns.toString())
+                .contains(codexCliTaskId.toString(), claudeCliTaskId.toString())
+                .contains("promptPresent", "taskFilePresent", "outputPresent");
+        HttpResponse<byte[]> codexCliRunArchive = getBytes("/api/v1/workspaces/" + workspaceId + "/agent-cli-runs/" + codexCliTaskId + "/download", accessToken);
+        assertThat(codexCliRunArchive.statusCode()).isEqualTo(200);
+        assertThat(codexCliRunArchive.headers().firstValue("Content-Type").orElse("")).contains("application/zip");
+        assertThat(codexCliRunArchive.headers().firstValue("Content-Disposition").orElse("")).contains("agent-cli-run-" + codexCliTaskId);
+        assertThat(codexCliRunArchive.body().length).isGreaterThan(100);
+        JsonNode deletedCodexCliRun = read(delete("/api/v1/workspaces/" + workspaceId + "/agent-cli-runs/" + codexCliTaskId, accessToken));
+        assertThat(deletedCodexCliRun.at("/deletedRuns").asInt()).isEqualTo(1);
+        assertThat(read(get("/api/v1/workspaces/" + workspaceId + "/agent-cli-runs", accessToken)).toString())
+                .doesNotContain(codexCliTaskId.toString())
+                .contains(claudeCliTaskId.toString());
+        JsonNode prunedCliRuns = read(post("/api/v1/workspaces/" + workspaceId + "/agent-cli-runs/prune", objectMapper.createObjectNode()
+                .put("retentionDays", 0), accessToken));
+        assertThat(prunedCliRuns.at("/deletedRuns").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(read(get("/api/v1/workspaces/" + workspaceId + "/agent-cli-runs", accessToken)).toString())
+                .doesNotContain(codexCliTaskId.toString(), claudeCliTaskId.toString());
+
         jdbcTemplate.update(
                 "update agent_providers set config = cast(? as jsonb) where id = ?",
                 "{\"runtime\":{\"mode\":\"hosted_api\",\"externalExecutionEnabled\":false}}",
@@ -700,6 +722,12 @@ class AgentIntegrationTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
         authorize(builder, accessToken);
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<byte[]> getBytes(String path, String accessToken) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path)).GET();
+        authorize(builder, accessToken);
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
     }
 
     private HttpResponse<String> delete(String path, String accessToken) throws Exception {

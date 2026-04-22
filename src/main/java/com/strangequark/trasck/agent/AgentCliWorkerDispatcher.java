@@ -13,10 +13,12 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -25,6 +27,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -32,6 +37,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @Component
 public class AgentCliWorkerDispatcher {
+
+    private static final List<String> ACTIVE_CLI_RUN_STATUSES = List.of("queued", "running", "waiting_for_input");
 
     private final ObjectMapper objectMapper;
     private final AgentCliWorkerProperties properties;
@@ -94,6 +101,74 @@ public class AgentCliWorkerDispatcher {
         } else {
             dispatch.run();
         }
+    }
+
+    List<AgentCliWorkerRunResponse> listRuns(UUID workspaceId) {
+        Path root = properties.workspaceRoot();
+        if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
+            return List.of();
+        }
+        List<AgentCliWorkerRunResponse> runs = new ArrayList<>();
+        try (Stream<Path> directories = Files.list(root)) {
+            directories
+                    .filter(directory -> Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
+                    .forEach(directory -> runResponse(workspaceId, directory).ifPresent(runs::add));
+        } catch (IOException ex) {
+            throw new IllegalStateException("CLI worker run directories could not be listed", ex);
+        }
+        runs.sort(Comparator.comparing(AgentCliWorkerRunResponse::updatedAt, Comparator.nullsLast(Comparator.naturalOrder())).reversed());
+        return runs;
+    }
+
+    AgentCliWorkerRunArchive archiveRun(AgentTask task) {
+        Path directory = requireExistingRunDirectory(task);
+        try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                ZipOutputStream zip = new ZipOutputStream(buffer, StandardCharsets.UTF_8)) {
+            try (Stream<Path> paths = Files.walk(directory)) {
+                for (Path path : paths.toList()) {
+                    if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || !path.normalize().startsWith(directory)) {
+                        continue;
+                    }
+                    String entryName = directory.relativize(path).toString().replace('\\', '/');
+                    if (entryName.isBlank()) {
+                        continue;
+                    }
+                    ZipEntry entry = new ZipEntry(entryName);
+                    entry.setTime(Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toMillis());
+                    zip.putNextEntry(entry);
+                    Files.copy(path, zip);
+                    zip.closeEntry();
+                }
+            }
+            zip.finish();
+            byte[] bytes = buffer.toByteArray();
+            return new AgentCliWorkerRunArchive("agent-cli-run-" + task.getId() + ".zip", bytes, bytes.length);
+        } catch (IOException ex) {
+            throw new IllegalStateException("CLI worker run archive could not be created", ex);
+        }
+    }
+
+    AgentCliWorkerRunDeleteResponse deleteRun(AgentTask task) {
+        Path directory = requireExistingRunDirectory(task);
+        long deletedBytes = deleteDirectory(directory);
+        return new AgentCliWorkerRunDeleteResponse(task.getWorkspaceId(), null, 1, deletedBytes, List.of(task.getId()));
+    }
+
+    AgentCliWorkerRunDeleteResponse pruneRuns(UUID workspaceId, OffsetDateTime cutoff) {
+        List<UUID> deletedTaskIds = new ArrayList<>();
+        long deletedBytes = 0;
+        for (AgentCliWorkerRunResponse run : listRuns(workspaceId)) {
+            if (run.updatedAt() == null || run.updatedAt().isAfter(cutoff) || ACTIVE_CLI_RUN_STATUSES.contains(run.status())) {
+                continue;
+            }
+            Path directory = runDirectory(run.agentTaskId());
+            if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+                continue;
+            }
+            deletedBytes += deleteDirectory(directory);
+            deletedTaskIds.add(run.agentTaskId());
+        }
+        return new AgentCliWorkerRunDeleteResponse(workspaceId, cutoff, deletedTaskIds.size(), deletedBytes, deletedTaskIds);
     }
 
     private boolean shouldRunCliWorker(AgentProvider provider) {
@@ -283,15 +358,102 @@ public class AgentCliWorkerDispatcher {
         try {
             Path root = properties.workspaceRoot();
             Files.createDirectories(root);
-            Path directory = root.resolve(task.getId().toString()).normalize();
-            if (!directory.startsWith(root)) {
-                throw new IllegalStateException("CLI worker run directory escaped workspace root");
-            }
+            Path directory = runDirectory(task.getId());
             Files.createDirectories(directory);
             return directory;
         } catch (IOException ex) {
             throw new IllegalStateException("CLI worker run directory could not be created", ex);
         }
+    }
+
+    private Optional<AgentCliWorkerRunResponse> runResponse(UUID workspaceId, Path directory) {
+        UUID taskId;
+        try {
+            taskId = UUID.fromString(directory.getFileName().toString());
+        } catch (RuntimeException ex) {
+            return Optional.empty();
+        }
+        return agentTaskRepository.findByIdAndWorkspaceId(taskId, workspaceId)
+                .map(task -> {
+                    RunFileStats stats = directoryStats(directory);
+                    String providerType = agentProviderRepository.findByIdAndWorkspaceId(task.getProviderId(), workspaceId)
+                            .map(AgentProvider::getProviderType)
+                            .orElse(null);
+                    return new AgentCliWorkerRunResponse(
+                            task.getId(),
+                            task.getWorkspaceId(),
+                            task.getProviderId(),
+                            providerType,
+                            task.getAgentProfileId(),
+                            task.getWorkItemId(),
+                            task.getStatus(),
+                            task.getQueuedAt(),
+                            directoryUpdatedAt(directory),
+                            stats.sizeBytes(),
+                            stats.fileCount(),
+                            Files.exists(directory.resolve("prompt.md"), LinkOption.NOFOLLOW_LINKS),
+                            Files.exists(directory.resolve("task.json"), LinkOption.NOFOLLOW_LINKS),
+                            Files.exists(directory.resolve("output.log"), LinkOption.NOFOLLOW_LINKS)
+                    );
+                });
+    }
+
+    private Path requireExistingRunDirectory(AgentTask task) {
+        Path directory = runDirectory(task.getId());
+        if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("CLI worker run not found");
+        }
+        return directory;
+    }
+
+    private Path runDirectory(UUID taskId) {
+        Path root = properties.workspaceRoot();
+        Path directory = root.resolve(taskId.toString()).normalize();
+        if (!directory.startsWith(root)) {
+            throw new IllegalStateException("CLI worker run directory escaped workspace root");
+        }
+        return directory;
+    }
+
+    private RunFileStats directoryStats(Path directory) {
+        long sizeBytes = 0;
+        int fileCount = 0;
+        try (Stream<Path> paths = Files.walk(directory)) {
+            for (Path path : paths.toList()) {
+                if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || !path.normalize().startsWith(directory)) {
+                    continue;
+                }
+                sizeBytes += Files.size(path);
+                fileCount++;
+            }
+        } catch (IOException ex) {
+            throw new IllegalStateException("CLI worker run directory could not be inspected", ex);
+        }
+        return new RunFileStats(sizeBytes, fileCount);
+    }
+
+    private OffsetDateTime directoryUpdatedAt(Path directory) {
+        try {
+            return Files.getLastModifiedTime(directory, LinkOption.NOFOLLOW_LINKS).toInstant().atOffset(ZoneOffset.UTC);
+        } catch (IOException ex) {
+            throw new IllegalStateException("CLI worker run directory timestamp could not be read", ex);
+        }
+    }
+
+    private long deleteDirectory(Path directory) {
+        long deletedBytes = directoryStats(directory).sizeBytes();
+        try (Stream<Path> paths = Files.walk(directory)) {
+            List<Path> sortedPaths = paths.sorted(Comparator.reverseOrder()).toList();
+            for (Path path : sortedPaths) {
+                if (!path.normalize().startsWith(directory)) {
+                    continue;
+                }
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException ex) {
+            throw new IllegalStateException("CLI worker run directory could not be deleted", ex);
+        }
+        return deletedBytes;
     }
 
     private JsonNode taskFilePayload(AgentTask task, AgentProvider provider, AgentProfile profile, JsonNode dispatchPayload, Path runDirectory) {
@@ -503,6 +665,9 @@ public class AgentCliWorkerDispatcher {
     }
 
     private record BoundedBytes(byte[] bytes, boolean truncated) {
+    }
+
+    private record RunFileStats(long sizeBytes, int fileCount) {
     }
 
     private record ProcessResult(

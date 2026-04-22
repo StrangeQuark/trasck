@@ -105,8 +105,8 @@ public class AgentCliWorkerProperties {
 
     private String defaultArguments(String profileName) {
         return switch (profileName) {
-            case "codex-local" -> "exec|-";
-            case "claude-code-local" -> "-p|{prompt}";
+            case "codex-local" -> "exec|--full-auto|-";
+            case "claude-code-local" -> "-p|{prompt}|--permission-mode|bypassPermissions";
             default -> "";
         };
     }

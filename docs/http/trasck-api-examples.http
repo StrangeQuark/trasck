@@ -740,6 +740,27 @@ Content-Type: application/json
   }
 }
 
+### List CLI Worker Run Artifacts
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs
+Authorization: Bearer {{accessToken}}
+
+### Download CLI Worker Run ZIP
+GET {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs/{{agentTaskId}}/download
+Authorization: Bearer {{accessToken}}
+
+### Delete CLI Worker Run Directory
+DELETE {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs/{{agentTaskId}}
+Authorization: Bearer {{accessToken}}
+
+### Prune Old CLI Worker Run Directories
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/agent-cli-runs/prune
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "retentionDays": 7
+}
+
 ### Build Backend Push Dispatch Payload
 POST {{baseUrl}}/api/v1/agent-tasks/{{agentTaskId}}/worker-dispatch
 Authorization: Bearer {{accessToken}}
