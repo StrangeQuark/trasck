@@ -369,6 +369,7 @@ class ConfigurationApiIntegrationTest {
         JsonNode importJob = postJson("/api/v1/workspaces/" + workspaceId + "/import-jobs", objectMapper.createObjectNode()
                 .put("provider", "jira"));
         UUID importJobId = uuid(importJob, "/id");
+        assertThat(getJson("/api/v1/import-jobs/" + importJobId + "/records?status=pending&sourceType=issue")).isEmpty();
         JsonNode importRecord = postJson("/api/v1/import-jobs/" + importJobId + "/records", objectMapper.createObjectNode()
                 .put("sourceType", "issue")
                 .put("sourceId", "JIRA-1")
