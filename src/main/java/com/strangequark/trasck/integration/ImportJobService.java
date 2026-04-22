@@ -1652,7 +1652,13 @@ public class ImportJobService {
         UUID actorId = currentUserService.requireUserId();
         ImportJob job = importJob(importJobId);
         permissionService.requireWorkspacePermission(actorId, job.getWorkspaceId(), "workspace.admin");
-        return importJobRecordRepository.findFiltered(job.getId(), normalizedFilter(status), normalizedFilter(conflictStatus), normalizedFilter(sourceType)).stream()
+        String normalizedStatus = normalizedFilter(status);
+        String normalizedConflictStatus = normalizedFilter(conflictStatus);
+        String normalizedSourceType = normalizedFilter(sourceType);
+        return importJobRecordRepository.findByImportJobIdOrderBySourceTypeAscSourceIdAsc(job.getId()).stream()
+                .filter(record -> normalizedStatus == null || normalizedStatus.equals(record.getStatus()))
+                .filter(record -> normalizedConflictStatus == null || normalizedConflictStatus.equals(record.getConflictStatus()))
+                .filter(record -> normalizedSourceType == null || (record.getSourceType() != null && normalizedSourceType.equalsIgnoreCase(record.getSourceType())))
                 .map(ImportJobRecordResponse::from)
                 .toList();
     }
