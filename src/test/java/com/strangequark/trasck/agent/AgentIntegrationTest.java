@@ -67,6 +67,14 @@ class AgentIntegrationTest {
         registry.add("spring.flyway.enabled", () -> "true");
         registry.add("trasck.events.outbox.fixed-delay-ms", () -> "600000");
         registry.add("trasck.security.outbound-url.allowed-hosts", () -> "127.0.0.1");
+        registry.add("trasck.agents.cli-worker.enabled", () -> "true");
+        registry.add("trasck.agents.cli-worker.workspace-root", () -> "target/agent-cli-runs");
+        registry.add("trasck.agents.cli-worker.profiles.codex-local.command", () -> "sh");
+        registry.add("trasck.agents.cli-worker.profiles.codex-local.arguments", () -> "-c|cat");
+        registry.add("trasck.agents.cli-worker.profiles.codex-local.send-prompt-to-stdin", () -> "true");
+        registry.add("trasck.agents.cli-worker.profiles.claude-code-local.command", () -> "sh");
+        registry.add("trasck.agents.cli-worker.profiles.claude-code-local.arguments", () -> "-c|cat");
+        registry.add("trasck.agents.cli-worker.profiles.claude-code-local.send-prompt-to-stdin", () -> "true");
     }
 
     @Test
@@ -99,6 +107,22 @@ class AgentIntegrationTest {
                 .put("dispatchMode", "managed"), accessToken));
         UUID codexProviderId = uuid(codexProvider, "/id");
         assertThat(codexProvider.at("/providerType").asText()).isEqualTo("codex");
+        ObjectNode codexCliRuntimeConfig = objectMapper.createObjectNode();
+        ObjectNode codexCliRuntime = objectMapper.createObjectNode()
+                .put("mode", "cli_worker")
+                .put("externalExecutionEnabled", true);
+        codexCliRuntime.set("cliWorker", objectMapper.createObjectNode()
+                .put("commandProfile", "codex-local"));
+        codexCliRuntimeConfig.set("runtime", codexCliRuntime);
+        ObjectNode codexCliProviderRequest = objectMapper.createObjectNode()
+                .put("providerKey", "codex-cli-main")
+                .put("providerType", "codex")
+                .put("displayName", "Codex CLI")
+                .put("dispatchMode", "managed");
+        codexCliProviderRequest.set("config", codexCliRuntimeConfig);
+        JsonNode codexCliProvider = read(post("/api/v1/workspaces/" + workspaceId + "/agent-providers", codexCliProviderRequest, accessToken));
+        UUID codexCliProviderId = uuid(codexCliProvider, "/id");
+        assertThat(codexCliProvider.at("/config/runtime/cliWorker/commandProfile").asText()).isEqualTo("codex-local");
         ObjectNode hostedCodexRuntime = objectMapper.createObjectNode();
         ObjectNode hostedRuntime = objectMapper.createObjectNode()
                 .put("mode", "hosted_api")
@@ -247,6 +271,26 @@ class AgentIntegrationTest {
         JsonNode codexProfile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", codexProfileRequest, accessToken));
         UUID codexProfileId = uuid(codexProfile, "/id");
 
+        ObjectNode codexCliProfileRequest = objectMapper.createObjectNode()
+                .put("providerId", codexCliProviderId.toString())
+                .put("displayName", "Codex CLI Agent")
+                .put("username", "codex-cli-agent")
+                .put("roleId", memberRoleId.toString())
+                .put("maxConcurrentTasks", 2);
+        codexCliProfileRequest.set("projectIds", objectMapper.createArrayNode().add(projectId.toString()));
+        JsonNode codexCliProfile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", codexCliProfileRequest, accessToken));
+        UUID codexCliProfileId = uuid(codexCliProfile, "/id");
+
+        ObjectNode claudeCliProfileRequest = objectMapper.createObjectNode()
+                .put("providerId", uuid(claudeProvider, "/id").toString())
+                .put("displayName", "Claude Code CLI Agent")
+                .put("username", "claude-code-cli-agent")
+                .put("roleId", memberRoleId.toString())
+                .put("maxConcurrentTasks", 2);
+        claudeCliProfileRequest.set("projectIds", objectMapper.createArrayNode().add(projectId.toString()));
+        JsonNode claudeCliProfile = read(post("/api/v1/workspaces/" + workspaceId + "/agents", claudeCliProfileRequest, accessToken));
+        UUID claudeCliProfileId = uuid(claudeCliProfile, "/id");
+
         ObjectNode viewerProfileRequest = objectMapper.createObjectNode()
                 .put("providerId", providerId.toString())
                 .put("displayName", "Read Only Agent")
@@ -296,6 +340,18 @@ class AgentIntegrationTest {
                 .put("title", "Record provider cancel failures")
                 .put("reporterId", adminUserId.toString()), accessToken));
         UUID failedCancelWorkItemId = uuid(failedCancelWorkItem, "/id");
+        JsonNode codexCliWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Let Codex CLI implement this")
+                .put("descriptionMarkdown", "The backend-managed Codex CLI worker should request review.")
+                .put("reporterId", adminUserId.toString()), accessToken));
+        UUID codexCliWorkItemId = uuid(codexCliWorkItem, "/id");
+        JsonNode claudeCliWorkItem = read(post("/api/v1/projects/" + projectId + "/work-items", objectMapper.createObjectNode()
+                .put("typeKey", "story")
+                .put("title", "Let Claude Code CLI implement this")
+                .put("descriptionMarkdown", "The backend-managed Claude Code CLI worker should request review.")
+                .put("reporterId", adminUserId.toString()), accessToken));
+        UUID claudeCliWorkItemId = uuid(claudeCliWorkItem, "/id");
         read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
                 .put("transitionKey", "open_to_ready"), accessToken));
         read(post("/api/v1/work-items/" + workItemId + "/transition", objectMapper.createObjectNode()
@@ -333,6 +389,24 @@ class AgentIntegrationTest {
         assertThat(callbackToken).isNotBlank();
         assertThat(retriedTask.at("/dispatchAttempts")).hasSize(3);
         assertThat(retriedTask.at("/dispatchAttempts/2/attemptType").asText()).isEqualTo("retry");
+
+        JsonNode codexCliTask = read(post("/api/v1/work-items/" + codexCliWorkItemId + "/assign-agent", objectMapper.createObjectNode()
+                .put("agentProfileId", codexCliProfileId.toString())
+                .set("requestPayload", objectMapper.createObjectNode().put("instructions", "Run through the Codex CLI worker path.")), accessToken));
+        assertThat(codexCliTask.at("/status").asText()).isEqualTo("running");
+        JsonNode reviewedCodexCliTask = waitForTaskStatus(accessToken, uuid(codexCliTask, "/id"), "review_requested");
+        assertThat(eventTypes(reviewedCodexCliTask.at("/events"))).contains("cli_worker_started", "cli_worker_completed", "review_requested");
+        assertThat(reviewedCodexCliTask.at("/resultPayload/providerType").asText()).isEqualTo("codex");
+        assertThat(reviewedCodexCliTask.at("/resultPayload/output").asText()).contains("Trasck Agent Task", "Codex CLI");
+
+        JsonNode claudeCliTask = read(post("/api/v1/work-items/" + claudeCliWorkItemId + "/assign-agent", objectMapper.createObjectNode()
+                .put("agentProfileId", claudeCliProfileId.toString())
+                .set("requestPayload", objectMapper.createObjectNode().put("instructions", "Run through the Claude Code CLI worker path.")), accessToken));
+        assertThat(claudeCliTask.at("/status").asText()).isEqualTo("running");
+        JsonNode reviewedClaudeCliTask = waitForTaskStatus(accessToken, uuid(claudeCliTask, "/id"), "review_requested");
+        assertThat(eventTypes(reviewedClaudeCliTask.at("/events"))).contains("cli_worker_started", "cli_worker_completed", "review_requested");
+        assertThat(reviewedClaudeCliTask.at("/resultPayload/providerType").asText()).isEqualTo("claude_code");
+        assertThat(reviewedClaudeCliTask.at("/resultPayload/output").asText()).contains("Trasck Agent Task", "Claude Code");
 
         jdbcTemplate.update(
                 "update agent_providers set config = cast(? as jsonb) where id = ?",
@@ -687,6 +761,18 @@ class AgentIntegrationTest {
         for (int cycle = 0; cycle < cycles; cycle++) {
             domainEventOutboxDispatcher.dispatchPending();
         }
+    }
+
+    private JsonNode waitForTaskStatus(String accessToken, UUID taskId, String expectedStatus) throws Exception {
+        JsonNode task = null;
+        for (int attempt = 0; attempt < 40; attempt++) {
+            task = read(get("/api/v1/agent-tasks/" + taskId, accessToken));
+            if (expectedStatus.equals(task.at("/status").asText())) {
+                return task;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("Agent task " + taskId + " did not reach status " + expectedStatus + ": " + task);
     }
 
     private UUID uuid(JsonNode node, String pointer) {

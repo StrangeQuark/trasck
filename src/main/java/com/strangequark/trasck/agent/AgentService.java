@@ -117,6 +117,7 @@ public class AgentService {
     private final DomainEventService domainEventService;
     private final AgentCallbackJwtService callbackJwtService;
     private final SecretCipherService secretCipherService;
+    private final AgentCliWorkerDispatcher agentCliWorkerDispatcher;
     private final OutboundUrlPolicy outboundUrlPolicy;
     private final LoginAttemptService loginAttemptService;
     private final ContentLimitPolicy contentLimitPolicy;
@@ -159,6 +160,7 @@ public class AgentService {
             DomainEventService domainEventService,
             AgentCallbackJwtService callbackJwtService,
             SecretCipherService secretCipherService,
+            AgentCliWorkerDispatcher agentCliWorkerDispatcher,
             OutboundUrlPolicy outboundUrlPolicy,
             LoginAttemptService loginAttemptService,
             ContentLimitPolicy contentLimitPolicy,
@@ -200,6 +202,7 @@ public class AgentService {
         this.domainEventService = domainEventService;
         this.callbackJwtService = callbackJwtService;
         this.secretCipherService = secretCipherService;
+        this.agentCliWorkerDispatcher = agentCliWorkerDispatcher;
         this.outboundUrlPolicy = outboundUrlPolicy;
         this.loginAttemptService = loginAttemptService;
         this.contentLimitPolicy = contentLimitPolicy;
@@ -1065,6 +1068,17 @@ public class AgentService {
         }
     }
 
+    @Transactional
+    public AgentTaskResponse handleInternalAgentCallback(UUID taskId, String assertion, AgentTaskCallbackRequest request) {
+        AgentTask task = agentTaskRepository.findById(taskId).orElseThrow(() -> notFound("Agent task not found"));
+        AgentCallbackJwtService.AgentCallbackClaims claims = callbackJwtService.peek(assertion);
+        if (!taskId.equals(claims.taskId())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Agent callback task mismatch");
+        }
+        AgentProvider provider = activeProvider(task.getWorkspaceId(), task.getProviderId());
+        return handleCallbackInternal(provider.getProviderKey(), assertion, request);
+    }
+
     private AgentTaskResponse handleCallbackInternal(String providerKey, String assertion, AgentTaskCallbackRequest request) {
         AgentTaskCallbackRequest callback = required(request, "request");
         AgentCallbackJwtService.AgentCallbackClaims untrustedClaims = callbackJwtService.peek(assertion);
@@ -1293,6 +1307,7 @@ public class AgentService {
         if (shouldPublishWorkerWebhookDispatch(provider)) {
             recordWorkerWebhookDispatchRequested(saved, item, provider, profile, result.dispatchPayload(), actorId, retry);
         }
+        agentCliWorkerDispatcher.dispatchAfterCommit(saved, provider, profile, result.dispatchPayload(), callbackToken);
         return callbackToken;
     }
 
