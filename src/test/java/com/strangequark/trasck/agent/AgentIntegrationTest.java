@@ -542,6 +542,16 @@ class AgentIntegrationTest {
         assertThat(read(get("/api/v1/workspaces/" + workspaceId + "/repository-connections", accessToken))).hasSize(1);
         assertThat(delete("/api/v1/workspaces/" + workspaceId + "/repository-connections/" + repositoryConnectionId, accessToken).statusCode()).isEqualTo(204);
         assertThat(read(get("/api/v1/workspaces/" + workspaceId + "/repository-connections", accessToken))).isEmpty();
+        JsonNode deactivatedProfile = read(post("/api/v1/agents/" + profileId + "/deactivate", objectMapper.createObjectNode(), accessToken));
+        assertThat(deactivatedProfile.at("/status").asText()).isEqualTo("disabled");
+        JsonNode deactivatedProvider = read(post("/api/v1/agent-providers/" + providerId + "/deactivate", objectMapper.createObjectNode(), accessToken));
+        assertThat(deactivatedProvider.at("/enabled").asBoolean()).isFalse();
+        HttpResponse<String> disabledProviderProfileCreate = post("/api/v1/workspaces/" + workspaceId + "/agents", objectMapper.createObjectNode()
+                .put("providerId", providerId.toString())
+                .put("displayName", "Disabled Provider Agent")
+                .put("username", "disabled-provider-agent")
+                .put("roleId", memberRoleId.toString()), accessToken);
+        assertThat(disabledProviderProfileCreate.statusCode()).isEqualTo(400);
     }
 
     private JsonNode postSetup() throws Exception {

@@ -42,4 +42,9 @@ public class AgentProfileController {
     ) {
         return agentService.updateProfile(profileId, request);
     }
+
+    @PostMapping("/agents/{profileId}/deactivate")
+    public AgentProfileResponse deactivateProfile(@PathVariable UUID profileId) {
+        return agentService.deactivateProfile(profileId);
+    }
 }

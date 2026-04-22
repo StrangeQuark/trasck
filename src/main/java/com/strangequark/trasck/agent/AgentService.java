@@ -501,6 +501,18 @@ public class AgentService {
         return AgentProviderResponse.from(saved);
     }
 
+    @Transactional
+    public AgentProviderResponse deactivateProvider(UUID providerId) {
+        AgentProvider provider = agentProviderRepository.findById(providerId).orElseThrow(() -> notFound("Agent provider not found"));
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, provider.getWorkspaceId(), "agent.provider.manage");
+        provider.setEnabled(false);
+        AgentProvider saved = agentProviderRepository.save(provider);
+        syncWorkerWebhookConsumer(saved);
+        recordWorkspaceEvent(saved.getWorkspaceId(), "agent_provider", saved.getId(), "agent.provider.deactivated", actorId, payloadForProvider(saved, actorId));
+        return AgentProviderResponse.from(saved);
+    }
+
     @Transactional(readOnly = true)
     public AgentRuntimePreviewResponse previewRuntime(UUID providerId, AgentRuntimePreviewRequest request) {
         AgentRuntimePreviewRequest previewRequest = request == null ? new AgentRuntimePreviewRequest(null, null, null) : request;
@@ -802,6 +814,17 @@ public class AgentService {
             recordWorkspaceEvent(saved.getWorkspaceId(), "agent_profile", saved.getId(), "agent.profile.project_scope_updated", actorId, payloadForProfile(saved, actorId));
         }
         recordWorkspaceEvent(saved.getWorkspaceId(), "agent_profile", saved.getId(), "agent.profile.updated", actorId, payloadForProfile(saved, actorId));
+        return profileResponse(saved);
+    }
+
+    @Transactional
+    public AgentProfileResponse deactivateProfile(UUID profileId) {
+        AgentProfile profile = agentProfileRepository.findById(profileId).orElseThrow(() -> notFound("Agent profile not found"));
+        UUID actorId = currentUserService.requireUserId();
+        permissionService.requireWorkspacePermission(actorId, profile.getWorkspaceId(), "agent.profile.manage");
+        profile.setStatus("disabled");
+        AgentProfile saved = agentProfileRepository.save(profile);
+        recordWorkspaceEvent(saved.getWorkspaceId(), "agent_profile", saved.getId(), "agent.profile.deactivated", actorId, payloadForProfile(saved, actorId));
         return profileResponse(saved);
     }
 
