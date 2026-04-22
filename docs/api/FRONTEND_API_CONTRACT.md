@@ -176,6 +176,71 @@ export interface WorkItemUpdateRequest extends Partial<Omit<WorkItemCreateReques
   clearTeam?: boolean;
 }
 
+export interface WorkItemComment {
+  id: UUID;
+  workItemId: UUID;
+  authorId: UUID;
+  bodyMarkdown: string;
+  bodyDocument?: unknown;
+  visibility: "workspace" | "public" | "private";
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+export interface WorkItemLink {
+  id: UUID;
+  sourceWorkItemId: UUID;
+  targetWorkItemId: UUID;
+  linkType: "relates_to" | "blocks" | "blocked_by" | "duplicates" | "is_duplicated_by" | string;
+  createdById: UUID;
+  createdAt: ISODateTime;
+}
+
+export interface WorkItemWatcher {
+  workItemId: UUID;
+  userId: UUID;
+  createdAt: ISODateTime;
+}
+
+export interface WorkLog {
+  id: UUID;
+  workItemId: UUID;
+  userId: UUID;
+  minutesSpent: number;
+  workDate: ISODate;
+  startedAt?: ISODateTime;
+  descriptionMarkdown?: string;
+  descriptionDocument?: unknown;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+export interface Label {
+  id: UUID;
+  workspaceId: UUID;
+  name: string;
+  color?: string;
+  createdAt: ISODateTime;
+}
+
+export interface WorkItemAttachment {
+  id: UUID;
+  workspaceId: UUID;
+  storageConfigId: UUID;
+  uploaderId: UUID;
+  filename: string;
+  contentType?: string;
+  storageKey: string;
+  sizeBytes: number;
+  checksum?: string;
+  visibility: "restricted" | "public";
+  createdAt: ISODateTime;
+}
+
+// Frontend work item detail controls should use these collaboration endpoints through workItemsService.
+// Attachment upload uses multipart/form-data with file, optional checksum, and visibility.
+// The current UI supports both drag/drop and a standard file picker.
+
 export interface Dashboard {
   id: UUID;
   workspaceId: UUID;
