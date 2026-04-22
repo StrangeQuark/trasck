@@ -156,7 +156,7 @@ public class AutomationService {
             Environment environment,
             @Value("${trasck.email.provider:maildev}") String emailProvider,
             @Value("${trasck.email.from:no-reply@trasck.local}") String defaultFromEmail,
-            @Value("${trasck.webhooks.previous-secret-overlap:PT72H}") Duration webhookPreviousSecretOverlap
+            @Value("${trasck.webhooks.previous-secret-overlap:PT720H}") Duration webhookPreviousSecretOverlap
     ) {
         this.objectMapper = objectMapper;
         this.automationRuleRepository = automationRuleRepository;
