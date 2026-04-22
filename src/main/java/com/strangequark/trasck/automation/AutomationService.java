@@ -84,7 +84,6 @@ public class AutomationService {
     private static final int MAX_WORKER_RUN_RETENTION_EXPORT_ROWS = 10_000;
     private static final DateTimeFormatter EXPORT_FILENAME_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
     private static final String WEBHOOK_SIGNATURE_ALGORITHM = "HmacSHA256";
-    private static final Duration WEBHOOK_SECRET_OVERLAP = Duration.ofHours(72);
 
     private final ObjectMapper objectMapper;
     private final AutomationRuleRepository automationRuleRepository;
@@ -118,6 +117,8 @@ public class AutomationService {
     private final Environment environment;
     private final String emailProvider;
     private final String defaultFromEmail;
+    private final Duration webhookPreviousSecretOverlap;
+    private final long defaultWebhookPreviousSecretOverlapSeconds;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2))
             .build();
@@ -154,7 +155,8 @@ public class AutomationService {
             ObjectProvider<JavaMailSender> mailSenderProvider,
             Environment environment,
             @Value("${trasck.email.provider:maildev}") String emailProvider,
-            @Value("${trasck.email.from:no-reply@trasck.local}") String defaultFromEmail
+            @Value("${trasck.email.from:no-reply@trasck.local}") String defaultFromEmail,
+            @Value("${trasck.webhooks.previous-secret-overlap:PT72H}") Duration webhookPreviousSecretOverlap
     ) {
         this.objectMapper = objectMapper;
         this.automationRuleRepository = automationRuleRepository;
@@ -188,6 +190,11 @@ public class AutomationService {
         this.environment = environment;
         this.emailProvider = emailProvider;
         this.defaultFromEmail = defaultFromEmail;
+        if (webhookPreviousSecretOverlap == null || webhookPreviousSecretOverlap.compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("trasck.webhooks.previous-secret-overlap must be at least one second");
+        }
+        this.webhookPreviousSecretOverlap = webhookPreviousSecretOverlap;
+        this.defaultWebhookPreviousSecretOverlapSeconds = webhookPreviousSecretOverlap.toSeconds();
     }
 
     @Transactional(readOnly = true)
@@ -1078,6 +1085,9 @@ public class AutomationService {
             outboundUrlPolicy.validateHttpUrl(url, "url");
             webhook.setUrl(url);
         }
+        if (create || request.previousSecretOverlapSeconds() != null) {
+            webhook.setPreviousSecretOverlapSeconds(normalizeWebhookSecretOverlapSeconds(request.previousSecretOverlapSeconds()));
+        }
         if (hasText(request.secret())) {
             rotateWebhookSecret(webhook, request.secret(), create);
         }
@@ -1861,7 +1871,7 @@ public class AutomationService {
             webhook.setPreviousSecretEncrypted(webhook.getSecretEncrypted());
             webhook.setPreviousSecretKeyId(currentWebhookSigningKeyId(webhook));
             webhook.setSecretRotatedAt(now);
-            webhook.setPreviousSecretExpiresAt(now.plus(WEBHOOK_SECRET_OVERLAP));
+            webhook.setPreviousSecretExpiresAt(now.plus(webhookSecretOverlap(webhook)));
         } else {
             webhook.setPreviousSecretHash(null);
             webhook.setPreviousSecretEncrypted(null);
@@ -1922,6 +1932,24 @@ public class AutomationService {
 
     private String newWebhookSecretKeyId() {
         return "whsec_" + UUID.randomUUID();
+    }
+
+    private long normalizeWebhookSecretOverlapSeconds(Long seconds) {
+        if (seconds == null) {
+            return defaultWebhookPreviousSecretOverlapSeconds;
+        }
+        if (seconds < 1) {
+            throw badRequest("previousSecretOverlapSeconds must be greater than zero");
+        }
+        return seconds;
+    }
+
+    private Duration webhookSecretOverlap(Webhook webhook) {
+        Long seconds = webhook.getPreviousSecretOverlapSeconds();
+        if (seconds == null || seconds < 1) {
+            return webhookPreviousSecretOverlap;
+        }
+        return Duration.ofSeconds(seconds);
     }
 
     private record WebhookSigningSecret(String keyId, String encryptedSecret) {
