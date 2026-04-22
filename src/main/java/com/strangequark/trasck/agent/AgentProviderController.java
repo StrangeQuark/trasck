@@ -43,6 +43,11 @@ public class AgentProviderController {
         return agentService.updateProvider(providerId, request);
     }
 
+    @PostMapping("/agent-providers/{providerId}/deactivate")
+    public AgentProviderResponse deactivateProvider(@PathVariable UUID providerId) {
+        return agentService.deactivateProvider(providerId);
+    }
+
     @PostMapping("/agent-providers/{providerId}/runtime-preview")
     public AgentRuntimePreviewResponse previewRuntime(
             @PathVariable UUID providerId,
