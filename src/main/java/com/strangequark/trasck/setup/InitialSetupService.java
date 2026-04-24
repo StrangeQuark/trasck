@@ -42,6 +42,12 @@ public class InitialSetupService {
         this.systemAdminRepository = systemAdminRepository;
     }
 
+    @Transactional(readOnly = true)
+    public InitialSetupStatusResponse status() {
+        boolean completed = userRepository.count() > 0;
+        return new InitialSetupStatusResponse(!completed, completed);
+    }
+
     @Transactional
     public InitialSetupResponse createInitialSetup(InitialSetupRequest request) {
         InitialSetupRequest setupRequest = SetupRequestValidator.required(request, "request");

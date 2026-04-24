@@ -119,6 +119,46 @@ class AuthIntegrationTest {
         HttpResponse<String> meByCookie = getWithCookie("/api/v1/auth/me", admin.cookie());
         assertThat(meByCookie.statusCode()).isEqualTo(200);
 
+        HttpResponse<String> logoutWithoutCsrf = postWithCookies(
+                "/api/v1/auth/logout",
+                objectMapper.createObjectNode(),
+                null,
+                null,
+                admin.cookie()
+        );
+        assertThat(logoutWithoutCsrf.statusCode()).isEqualTo(204);
+        assertThat(logoutWithoutCsrf.headers().allValues("Set-Cookie")).anySatisfy(cookie -> assertThat(cookie)
+                .contains(JwtAuthenticationFilter.ACCESS_TOKEN_COOKIE + "=")
+                .contains("Max-Age=0"));
+
+        JsonNode authContext = read(get("/api/v1/auth/context", admin.accessToken()));
+        assertThat(uuid(authContext, "/user/id")).isEqualTo(adminUserId);
+        assertThat(authContext.at("/workspaces")).anySatisfy(workspace -> {
+            assertThat(uuid((JsonNode) workspace, "/id")).isEqualTo(workspaceId);
+            assertThat(((JsonNode) workspace).at("/membershipStatus").asText()).isEqualTo("active");
+        });
+        assertThat(authContext.at("/projects")).anySatisfy(project -> {
+            assertThat(uuid((JsonNode) project, "/id")).isEqualTo(projectId);
+            assertThat(uuid((JsonNode) project, "/workspaceId")).isEqualTo(workspaceId);
+            assertThat(((JsonNode) project).at("/membershipStatus").asText()).isEqualTo("active");
+        });
+        assertThat(uuid(authContext, "/defaultWorkspace/id")).isEqualTo(workspaceId);
+        assertThat(uuid(authContext, "/defaultProject/id")).isEqualTo(projectId);
+
+        jdbcTemplate.update("update users set active = false where id = ?", adminUserId);
+        HttpResponse<String> staleCookieCsrf = getWithCookie("/api/v1/auth/csrf", admin.cookie());
+        assertThat(staleCookieCsrf.statusCode()).isEqualTo(200);
+        assertThat(staleCookieCsrf.headers().allValues("Set-Cookie")).anySatisfy(cookie -> assertThat(cookie)
+                .contains(JwtAuthenticationFilter.ACCESS_TOKEN_COOKIE + "=")
+                .contains("Max-Age=0"));
+        HttpResponse<String> staleCookieContext = getWithCookie("/api/v1/auth/context", admin.cookie());
+        assertThat(staleCookieContext.statusCode()).isEqualTo(401);
+        assertThat(staleCookieContext.headers().allValues("Set-Cookie")).anySatisfy(cookie -> assertThat(cookie)
+                .contains(JwtAuthenticationFilter.ACCESS_TOKEN_COOKIE + "=")
+                .contains("Max-Age=0"));
+        assertThat(get("/api/v1/auth/me", admin.accessToken()).statusCode()).isEqualTo(401);
+        jdbcTemplate.update("update users set active = true where id = ?", adminUserId);
+
         JsonNode workspaceRoles = read(get("/api/v1/workspaces/" + workspaceId + "/roles", admin.accessToken()));
         assertThat(workspaceRoles).anySatisfy(role -> {
             JsonNode listedRole = (JsonNode) role;

@@ -62,6 +62,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/error").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/trasck/health", "/api/trasck/health/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/setup/status").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/setup").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/oauth/login", "/api/v1/auth/logout").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/agent-callbacks/**").permitAll()

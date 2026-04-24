@@ -83,6 +83,11 @@ public class AuthController {
         return authService.currentUser(currentUserService.requireUserId());
     }
 
+    @GetMapping("/auth/context")
+    public AuthContextResponse context() {
+        return authService.currentContext(currentUserService.requireUserId());
+    }
+
     @PostMapping("/auth/tokens/personal")
     public ResponseEntity<ApiTokenResponse> createPersonalToken(@RequestBody CreatePersonalTokenRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)

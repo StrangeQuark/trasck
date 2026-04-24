@@ -12,12 +12,15 @@ import com.strangequark.trasck.access.WorkspaceMembershipRepository;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
+import com.strangequark.trasck.workspace.Workspace;
+import com.strangequark.trasck.workspace.WorkspaceRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +45,7 @@ public class AuthService {
 
     private static final Set<String> SUPPORTED_OAUTH_PROVIDERS = Set.of("github", "google", "gitlab", "microsoft");
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Comparator<String> NULL_SAFE_TEXT_ORDER = Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER);
 
     private final UserRepository userRepository;
     private final UserAuthIdentityRepository userAuthIdentityRepository;
@@ -50,6 +54,7 @@ public class AuthService {
     private final ProjectMembershipRepository projectMembershipRepository;
     private final RoleRepository roleRepository;
     private final ProjectRepository projectRepository;
+    private final WorkspaceRepository workspaceRepository;
     private final PasswordEncoder passwordEncoder;
     private final PasswordPolicy passwordPolicy;
     private final LoginAttemptService loginAttemptService;
@@ -66,6 +71,7 @@ public class AuthService {
             ProjectMembershipRepository projectMembershipRepository,
             RoleRepository roleRepository,
             ProjectRepository projectRepository,
+            WorkspaceRepository workspaceRepository,
             PasswordEncoder passwordEncoder,
             PasswordPolicy passwordPolicy,
             LoginAttemptService loginAttemptService,
@@ -81,6 +87,7 @@ public class AuthService {
         this.projectMembershipRepository = projectMembershipRepository;
         this.roleRepository = roleRepository;
         this.projectRepository = projectRepository;
+        this.workspaceRepository = workspaceRepository;
         this.passwordEncoder = passwordEncoder;
         this.passwordPolicy = passwordPolicy;
         this.loginAttemptService = loginAttemptService;
@@ -119,6 +126,43 @@ public class AuthService {
     @Transactional(readOnly = true)
     public AuthUserResponse currentUser(UUID userId) {
         return AuthUserResponse.from(activeUser(userId));
+    }
+
+    @Transactional(readOnly = true)
+    public AuthContextResponse currentContext(UUID userId) {
+        User user = activeUser(userId);
+        List<WorkspaceMembership> workspaceMemberships = workspaceMembershipRepository
+                .findByUserIdAndStatusIgnoreCase(userId, "active");
+        Map<UUID, WorkspaceMembership> membershipByWorkspaceId = workspaceMemberships.stream()
+                .filter(membership -> membership.getWorkspaceId() != null)
+                .collect(Collectors.toMap(WorkspaceMembership::getWorkspaceId, Function.identity(), (left, right) -> left));
+        List<AuthWorkspaceContextResponse> workspaces = workspaceRepository.findAllById(membershipByWorkspaceId.keySet()).stream()
+                .filter(workspace -> workspace.getDeletedAt() == null)
+                .filter(workspace -> "active".equalsIgnoreCase(workspace.getStatus()))
+                .sorted(Comparator.comparing(Workspace::getName, NULL_SAFE_TEXT_ORDER)
+                        .thenComparing(Workspace::getKey, NULL_SAFE_TEXT_ORDER))
+                .map(workspace -> AuthWorkspaceContextResponse.from(workspace, membershipByWorkspaceId.get(workspace.getId())))
+                .toList();
+
+        Map<UUID, ProjectMembership> membershipByProjectId = projectMembershipRepository
+                .findByUserIdAndStatusIgnoreCase(userId, "active").stream()
+                .filter(membership -> membership.getProjectId() != null)
+                .collect(Collectors.toMap(ProjectMembership::getProjectId, Function.identity(), (left, right) -> left));
+        List<AuthProjectContextResponse> projects = projectRepository.findAllById(membershipByProjectId.keySet()).stream()
+                .filter(project -> project.getDeletedAt() == null)
+                .filter(project -> "active".equalsIgnoreCase(project.getStatus()))
+                .filter(project -> membershipByWorkspaceId.containsKey(project.getWorkspaceId()))
+                .sorted(Comparator.comparing(Project::getKey, NULL_SAFE_TEXT_ORDER)
+                        .thenComparing(Project::getName, NULL_SAFE_TEXT_ORDER))
+                .map(project -> AuthProjectContextResponse.from(project, membershipByProjectId.get(project.getId())))
+                .toList();
+
+        AuthWorkspaceContextResponse defaultWorkspace = workspaces.stream().findFirst().orElse(null);
+        AuthProjectContextResponse defaultProject = projects.stream()
+                .filter(project -> defaultWorkspace == null || Objects.equals(project.workspaceId(), defaultWorkspace.id()))
+                .findFirst()
+                .orElse(projects.stream().findFirst().orElse(null));
+        return new AuthContextResponse(AuthUserResponse.from(user), workspaces, projects, defaultWorkspace, defaultProject);
     }
 
     @Transactional(readOnly = true)

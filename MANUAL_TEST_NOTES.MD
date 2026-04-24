@@ -9,10 +9,10 @@ Use this file during the human manual test round to record defects, blocked flow
 - Backend branch/commit:
 - Frontend branch/commit:
 - Test repo branch/commit:
-- Backend URL:
+- Backend URL from environment:
 - Frontend URL:
-- Workspace ID:
-- Project ID:
+- Selected workspace:
+- Selected project:
 - Codex CLI worker enabled: Yes / No
 - Claude Code CLI worker enabled: Yes / No
 
