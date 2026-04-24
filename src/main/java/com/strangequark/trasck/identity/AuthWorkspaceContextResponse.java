@@ -1,6 +1,7 @@
 package com.strangequark.trasck.identity;
 
 import com.strangequark.trasck.access.WorkspaceMembership;
+import java.util.List;
 import com.strangequark.trasck.workspace.Workspace;
 import java.util.UUID;
 
@@ -11,9 +12,10 @@ public record AuthWorkspaceContextResponse(
         String status,
         UUID membershipId,
         UUID roleId,
-        String membershipStatus
+        String membershipStatus,
+        List<String> permissionKeys
 ) {
-    static AuthWorkspaceContextResponse from(Workspace workspace, WorkspaceMembership membership) {
+    static AuthWorkspaceContextResponse from(Workspace workspace, WorkspaceMembership membership, List<String> permissionKeys) {
         return new AuthWorkspaceContextResponse(
                 workspace.getId(),
                 workspace.getName(),
@@ -21,7 +23,8 @@ public record AuthWorkspaceContextResponse(
                 workspace.getStatus(),
                 membership.getId(),
                 membership.getRoleId(),
-                membership.getStatus()
+                membership.getStatus(),
+                permissionKeys == null ? List.of() : List.copyOf(permissionKeys)
         );
     }
 }

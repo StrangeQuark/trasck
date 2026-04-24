@@ -7,6 +7,7 @@ public record AuthContextResponse(
         List<AuthWorkspaceContextResponse> workspaces,
         List<AuthProjectContextResponse> projects,
         AuthWorkspaceContextResponse defaultWorkspace,
-        AuthProjectContextResponse defaultProject
+        AuthProjectContextResponse defaultProject,
+        boolean systemAdmin
 ) {
 }

@@ -3,10 +3,12 @@ package com.strangequark.trasck.identity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.strangequark.trasck.access.Role;
 import com.strangequark.trasck.access.RoleRepository;
+import com.strangequark.trasck.access.Role;
+import com.strangequark.trasck.access.RolePermissionRepository;
 import com.strangequark.trasck.access.ProjectMembership;
 import com.strangequark.trasck.access.ProjectMembershipRepository;
+import com.strangequark.trasck.access.SystemAdminRepository;
 import com.strangequark.trasck.access.WorkspaceMembership;
 import com.strangequark.trasck.access.WorkspaceMembershipRepository;
 import com.strangequark.trasck.event.DomainEventService;
@@ -22,6 +24,7 @@ import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
@@ -52,9 +55,11 @@ public class AuthService {
     private final UserInvitationRepository userInvitationRepository;
     private final WorkspaceMembershipRepository workspaceMembershipRepository;
     private final ProjectMembershipRepository projectMembershipRepository;
+    private final RolePermissionRepository rolePermissionRepository;
     private final RoleRepository roleRepository;
     private final ProjectRepository projectRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final SystemAdminRepository systemAdminRepository;
     private final PasswordEncoder passwordEncoder;
     private final PasswordPolicy passwordPolicy;
     private final LoginAttemptService loginAttemptService;
@@ -69,9 +74,11 @@ public class AuthService {
             UserInvitationRepository userInvitationRepository,
             WorkspaceMembershipRepository workspaceMembershipRepository,
             ProjectMembershipRepository projectMembershipRepository,
+            RolePermissionRepository rolePermissionRepository,
             RoleRepository roleRepository,
             ProjectRepository projectRepository,
             WorkspaceRepository workspaceRepository,
+            SystemAdminRepository systemAdminRepository,
             PasswordEncoder passwordEncoder,
             PasswordPolicy passwordPolicy,
             LoginAttemptService loginAttemptService,
@@ -85,9 +92,11 @@ public class AuthService {
         this.userInvitationRepository = userInvitationRepository;
         this.workspaceMembershipRepository = workspaceMembershipRepository;
         this.projectMembershipRepository = projectMembershipRepository;
+        this.rolePermissionRepository = rolePermissionRepository;
         this.roleRepository = roleRepository;
         this.projectRepository = projectRepository;
         this.workspaceRepository = workspaceRepository;
+        this.systemAdminRepository = systemAdminRepository;
         this.passwordEncoder = passwordEncoder;
         this.passwordPolicy = passwordPolicy;
         this.loginAttemptService = loginAttemptService;
@@ -133,6 +142,12 @@ public class AuthService {
         User user = activeUser(userId);
         List<WorkspaceMembership> workspaceMemberships = workspaceMembershipRepository
                 .findByUserIdAndStatusIgnoreCase(userId, "active");
+        List<ProjectMembership> projectMemberships = projectMembershipRepository
+                .findByUserIdAndStatusIgnoreCase(userId, "active");
+        Map<UUID, List<String>> permissionKeysByRoleId = permissionKeysByRoleId(Stream.concat(
+                workspaceMemberships.stream().map(WorkspaceMembership::getRoleId),
+                projectMemberships.stream().map(ProjectMembership::getRoleId)
+        ));
         Map<UUID, WorkspaceMembership> membershipByWorkspaceId = workspaceMemberships.stream()
                 .filter(membership -> membership.getWorkspaceId() != null)
                 .collect(Collectors.toMap(WorkspaceMembership::getWorkspaceId, Function.identity(), (left, right) -> left));
@@ -141,11 +156,17 @@ public class AuthService {
                 .filter(workspace -> "active".equalsIgnoreCase(workspace.getStatus()))
                 .sorted(Comparator.comparing(Workspace::getName, NULL_SAFE_TEXT_ORDER)
                         .thenComparing(Workspace::getKey, NULL_SAFE_TEXT_ORDER))
-                .map(workspace -> AuthWorkspaceContextResponse.from(workspace, membershipByWorkspaceId.get(workspace.getId())))
+                .map(workspace -> {
+                    WorkspaceMembership membership = membershipByWorkspaceId.get(workspace.getId());
+                    return AuthWorkspaceContextResponse.from(
+                            workspace,
+                            membership,
+                            permissionKeysByRoleId.getOrDefault(membership.getRoleId(), List.of())
+                    );
+                })
                 .toList();
 
-        Map<UUID, ProjectMembership> membershipByProjectId = projectMembershipRepository
-                .findByUserIdAndStatusIgnoreCase(userId, "active").stream()
+        Map<UUID, ProjectMembership> membershipByProjectId = projectMemberships.stream()
                 .filter(membership -> membership.getProjectId() != null)
                 .collect(Collectors.toMap(ProjectMembership::getProjectId, Function.identity(), (left, right) -> left));
         List<AuthProjectContextResponse> projects = projectRepository.findAllById(membershipByProjectId.keySet()).stream()
@@ -154,7 +175,18 @@ public class AuthService {
                 .filter(project -> membershipByWorkspaceId.containsKey(project.getWorkspaceId()))
                 .sorted(Comparator.comparing(Project::getKey, NULL_SAFE_TEXT_ORDER)
                         .thenComparing(Project::getName, NULL_SAFE_TEXT_ORDER))
-                .map(project -> AuthProjectContextResponse.from(project, membershipByProjectId.get(project.getId())))
+                .map(project -> {
+                    WorkspaceMembership workspaceMembership = membershipByWorkspaceId.get(project.getWorkspaceId());
+                    ProjectMembership projectMembership = membershipByProjectId.get(project.getId());
+                    return AuthProjectContextResponse.from(
+                            project,
+                            projectMembership,
+                            combinedPermissionKeys(
+                                    permissionKeysByRoleId.getOrDefault(workspaceMembership.getRoleId(), List.of()),
+                                    permissionKeysByRoleId.getOrDefault(projectMembership.getRoleId(), List.of())
+                            )
+                    );
+                })
                 .toList();
 
         AuthWorkspaceContextResponse defaultWorkspace = workspaces.stream().findFirst().orElse(null);
@@ -162,7 +194,14 @@ public class AuthService {
                 .filter(project -> defaultWorkspace == null || Objects.equals(project.workspaceId(), defaultWorkspace.id()))
                 .findFirst()
                 .orElse(projects.stream().findFirst().orElse(null));
-        return new AuthContextResponse(AuthUserResponse.from(user), workspaces, projects, defaultWorkspace, defaultProject);
+        return new AuthContextResponse(
+                AuthUserResponse.from(user),
+                workspaces,
+                projects,
+                defaultWorkspace,
+                defaultProject,
+                systemAdminRepository.existsByUserIdAndActiveTrue(userId)
+        );
     }
 
     @Transactional(readOnly = true)
@@ -691,6 +730,24 @@ public class AuthService {
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
+    }
+
+    private Map<UUID, List<String>> permissionKeysByRoleId(Stream<UUID> roleIds) {
+        return roleIds
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toMap(Function.identity(), rolePermissionRepository::findPermissionKeysByRoleId));
+    }
+
+    private List<String> combinedPermissionKeys(List<String> workspacePermissionKeys, List<String> projectPermissionKeys) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (workspacePermissionKeys != null) {
+            merged.addAll(workspacePermissionKeys);
+        }
+        if (projectPermissionKeys != null) {
+            merged.addAll(projectPermissionKeys);
+        }
+        return List.copyOf(merged);
     }
 
     private record ProjectInviteTarget(UUID projectId, UUID projectRoleId) {

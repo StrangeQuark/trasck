@@ -1,6 +1,7 @@
 package com.strangequark.trasck.identity;
 
 import com.strangequark.trasck.access.ProjectMembership;
+import java.util.List;
 import com.strangequark.trasck.project.Project;
 import java.util.UUID;
 
@@ -13,9 +14,10 @@ public record AuthProjectContextResponse(
         String status,
         UUID membershipId,
         UUID roleId,
-        String membershipStatus
+        String membershipStatus,
+        List<String> permissionKeys
 ) {
-    static AuthProjectContextResponse from(Project project, ProjectMembership membership) {
+    static AuthProjectContextResponse from(Project project, ProjectMembership membership, List<String> permissionKeys) {
         return new AuthProjectContextResponse(
                 project.getId(),
                 project.getWorkspaceId(),
@@ -25,7 +27,8 @@ public record AuthProjectContextResponse(
                 project.getStatus(),
                 membership.getId(),
                 membership.getRoleId(),
-                membership.getStatus()
+                membership.getStatus(),
+                permissionKeys == null ? List.of() : List.copyOf(permissionKeys)
         );
     }
 }
