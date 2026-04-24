@@ -69,15 +69,17 @@ Defect IDs:
 Steps:
 
 1. Open the frontend.
-2. Navigate to `/setup`.
-3. In `Initial Setup`, enter an admin email, username, display name, and password.
-4. Enter organization, workspace, and project names and keys.
-5. Click `Create`.
-6. Confirm setup returns IDs for admin user, workspace, project, and seed data.
-7. Store the workspace ID and project ID for later tests.
-8. Navigate to `/auth`.
-9. Log in with the new admin credentials.
-10. Confirm `Current User` shows the admin user.
+2. Confirm the homepage shows the `First-run setup` button when the backend has no users.
+3. Navigate to `/setup`.
+4. In `Initial Setup`, enter an admin email, username, display name, and password.
+5. Enter organization, workspace, and project names and keys.
+6. Click `Create`.
+7. Confirm the browser returns to `/` after the setup request succeeds.
+8. Confirm the shell shows the new admin as signed in.
+9. Confirm the `First-run setup` button is no longer visible on the homepage.
+10. Use the workspace and project selectors in the shell for later tests instead of pasting IDs.
+11. Navigate to `/auth`.
+12. Confirm the account summary shows the admin user and the sign-in form is hidden.
 
 ### TC-003 - First-Run Setup Is Locked After Bootstrap
 
@@ -90,11 +92,13 @@ Defect IDs:
 Steps:
 
 1. Stay logged in as the admin.
-2. Navigate to `/setup`.
-3. Fill the setup form with different organization/workspace/project values.
-4. Click `Create`.
-5. Confirm the request is rejected because setup has already run.
-6. Confirm the original workspace and project still load.
+2. Open `/`.
+3. Confirm the `First-run setup` button is hidden.
+4. Navigate directly to `/setup`.
+5. Fill the setup form with different organization/workspace/project values.
+6. Click `Create`.
+7. Confirm the request is rejected because setup has already run.
+8. Confirm the original workspace and project still load.
 
 ### TC-004 - Browser Auth Uses Cookie And CSRF
 
@@ -133,10 +137,10 @@ Steps:
 3. Click `Create token`.
 4. Confirm a token value is shown once.
 5. Confirm the token value is masked or can be cleared from the screen.
-6. Click `Load` in `Tokens`.
+6. Click `Refresh` in `Tokens`.
 7. Confirm the token appears without the raw secret.
 8. Revoke the token from the table.
-9. Click `Load` again and confirm the token is inactive or absent.
+9. Click `Refresh` again and confirm the token is inactive or absent.
 
 ### TC-006 - Workspace Service Token Lifecycle
 
@@ -153,7 +157,7 @@ Steps:
 3. Enter a token name and optional expiry.
 4. Click `Create token`.
 5. Confirm the service token secret is shown once.
-6. Click `Load`.
+6. Click `Refresh`.
 7. Confirm service-token-backed users are shown in the token/admin surface, not mixed into normal member lists unless explicitly intended.
 8. Revoke the token.
 9. Confirm the revoked token cannot be used for a simple backend API request.
@@ -169,10 +173,10 @@ Defect IDs:
 Steps:
 
 1. Click `System`.
-2. Click `Load` in `System Admins`.
+2. Click `Refresh` in `System Admins`.
 3. Confirm the current admin is listed as active.
 4. Create a second user from Workspace Settings in TC-008 if one is not available.
-5. Enter the second user's ID in `System Admins`.
+5. Select the second user in `System Admins`.
 6. Click `Grant`.
 7. Confirm the second user appears as active.
 8. Click the revoke icon for the second user.
@@ -191,14 +195,14 @@ Defect IDs:
 Steps:
 
 1. Click `Workspace Settings`.
-2. In `Workspace Members`, click `Load`.
+2. In `Workspace Members`, click `Refresh`.
 3. Confirm the current admin appears.
 4. Use the direct user form to create a human user with email, username, display name, password, and role.
 5. Click the create-user button.
 6. Confirm the new user appears in the member table.
 7. In `Workspace Invitations`, enter an email and role.
 8. Click the invite button.
-9. Click `Load` in invitations.
+9. Click `Refresh` in invitations.
 10. Confirm the invitation appears as pending.
 11. Click the revoke icon.
 12. Confirm the invitation is revoked or removed from pending.
@@ -216,11 +220,11 @@ Defect IDs:
 Steps:
 
 1. Click `Workspace Settings`.
-2. In `Workspace Security Policy`, click `Load`.
+2. In `Workspace Security Policy`, click `Refresh`.
 3. Toggle anonymous read enabled off.
 4. Set attachment, import, and export byte limits to reasonable local values.
 5. Click `Save`.
-6. Click `Load` again.
+6. Click `Refresh` again.
 7. Confirm the saved values persist.
 8. Toggle anonymous read enabled on.
 9. Click `Save`.
@@ -237,7 +241,7 @@ Defect IDs:
 Steps:
 
 1. Click `Project Settings`.
-2. In `Project Security Policy`, click `Load`.
+2. In `Project Security Policy`, click `Refresh`.
 3. Set project visibility to `public`.
 4. Set any project-level attachment/import/export overrides you want to test.
 5. Click `Save`.
@@ -260,7 +264,7 @@ Defect IDs:
 Steps:
 
 1. Click `Workspace Settings`.
-2. In `Workspace Roles`, click `Load roles`.
+2. In `Workspace Roles`, click `Refresh roles`.
 3. Select a seeded role.
 4. Click `Refresh role`.
 5. Confirm permission checkboxes and role metadata load.
@@ -286,7 +290,7 @@ Defect IDs:
 Steps:
 
 1. Click `Project Settings`.
-2. In `Project Roles`, click `Load roles`.
+2. In `Project Roles`, click `Refresh roles`.
 3. Select a project role.
 4. Click `Refresh role`.
 5. Create a custom project role.
@@ -298,7 +302,7 @@ Steps:
 
 ## Work Items And Collaboration
 
-### TC-013 - Create And Load Work Items
+### TC-013 - Create And Refresh Work Items
 
 Result: Pass / Fail / Blocked / Not Run
 
@@ -309,7 +313,7 @@ Defect IDs:
 Steps:
 
 1. Click `Work items`.
-2. In `Project Work`, click `Load`.
+2. In `Project Work`, click `Refresh`.
 3. Enter a title, type key `story`, and description.
 4. Click `Create`.
 5. Confirm the new work item appears in the list.
@@ -329,7 +333,7 @@ Steps:
 1. Open the work item from TC-013.
 2. Update title, description, priority, due date, or estimate fields available on the page.
 3. Save the work item.
-4. Click `Load` or refresh detail.
+4. Click `Refresh` or refresh detail.
 5. Confirm updates persist.
 6. Use transition controls to move from Open to Ready and then to In Progress if available.
 7. Assign or reassign the item if assignee controls are available.
@@ -434,10 +438,10 @@ Steps:
 
 1. Make at least one work item change, comment, label, and attachment change.
 2. Open the work item detail.
-3. In `Activity`, click `Load` or refresh.
+3. In `Activity`, click `Refresh` or refresh.
 4. Confirm activity rows include the recent changes.
 5. Navigate to `System` or the audit/export surface.
-6. Load workspace audit entries.
+6. Refresh workspace audit entries.
 7. Confirm relevant admin and work item actions appear.
 8. Confirm raw secrets or private keys are not shown in activity or audit rows.
 
@@ -560,7 +564,7 @@ Steps:
 3. In `Board Layout`, add at least three columns.
 4. Map columns to statuses.
 5. Add a swimlane using a simple field/value predicate or saved-filter reference if available.
-6. Click `Load` in `Planning Records`.
+6. Click `Refresh` in `Planning Records`.
 7. Confirm board, columns, and swimlanes appear.
 8. Open the board detail route.
 9. Confirm the layout reloads.
@@ -619,7 +623,7 @@ Steps:
 1. Click `Planning`.
 2. In `Roadmap`, create a roadmap.
 3. Add a work item or release item to the roadmap.
-4. Click `Load`.
+4. Click `Refresh`.
 5. Confirm roadmap and item appear.
 6. Open roadmap detail.
 7. Edit roadmap configuration.
@@ -681,8 +685,8 @@ Steps:
 1. Click `Dashboards`.
 2. In `Dashboard Builder`, create a dashboard.
 3. In `Widget`, add at least one work item or import completion widget.
-4. Click `Load` in `Render`.
-5. Select or enter the dashboard ID.
+4. Click `Refresh` in `Render`.
+5. Select the dashboard in the render controls.
 6. Click `Render`.
 7. Confirm rendered widget data appears.
 8. Confirm no raw JSON errors appear in the browser console.
@@ -739,7 +743,7 @@ Steps:
 5. Edit roadmap or report config.
 6. Save and reload.
 7. In `Program Projects`, assign the current project.
-8. Click `Load summary`.
+8. Click `Refresh summary`.
 9. Confirm program dashboard summary includes the project.
 10. Remove the project and archive the program.
 
@@ -759,7 +763,7 @@ Steps:
 2. In `Notification Preferences`, save a current-user preference.
 3. Save a workspace default notification policy.
 4. Trigger a notification by creating a work item update or automation action.
-5. Load current-user notifications.
+5. Refresh current-user notifications.
 6. Mark a notification read.
 7. Confirm read state persists after reload.
 
@@ -796,7 +800,7 @@ Steps:
 2. In worker settings, enable or disable scheduled automation as needed.
 3. Save worker settings.
 4. Run a manual worker process for automation or import review exports.
-5. Click `Load`.
+5. Click `Refresh`.
 6. Confirm worker run rows appear.
 7. Confirm worker health rows update.
 8. Filter worker run/health rows by worker type.
@@ -872,7 +876,7 @@ Defect IDs:
 Steps:
 
 1. Click `Automation`.
-2. Load worker runs.
+2. Refresh worker runs.
 3. Set filters for worker type, trigger type, status, or date range.
 4. Click the worker retention export control.
 5. Confirm an export job is created.
@@ -897,7 +901,7 @@ Steps:
 2. In `Sample Walkthrough`, load import settings.
 3. Enable sample jobs for the workspace.
 4. Click `Save setting`.
-5. Load the sample catalog.
+5. Refresh the sample catalog.
 6. Select a CSV, Jira, or Rally sample.
 7. Click `Create sample job`.
 8. Confirm a job is created.
@@ -918,7 +922,7 @@ Steps:
 3. In `Parse`, paste a small CSV payload.
 4. Click `Parse`.
 5. Confirm import records are created.
-6. Click `Load` in `Lifecycle`.
+6. Click `Refresh` in `Lifecycle`.
 7. Confirm job status and counts are correct.
 8. Confirm record endpoints return an empty list for a created job with no parsed records.
 
@@ -937,10 +941,10 @@ Steps:
 3. Select a record.
 4. Edit the source payload or mapped field.
 5. Save the record.
-6. Load record version history.
-7. Load field-level diffs.
+6. Refresh record version history.
+7. Refresh field-level diffs.
 8. Confirm the original and edited values are shown.
-9. Load job-level diff export.
+9. Refresh job-level diff export.
 10. Confirm grouped diffs are understandable.
 
 ### TC-045 - Transform Preset Versions And Retarget
@@ -956,7 +960,7 @@ Steps:
 1. Click `Imports`.
 2. Create a transform preset.
 3. Edit the preset to create a new version if a detail route is available.
-4. Click `Load versions`.
+4. Click `Refresh versions`.
 5. Confirm immutable version rows appear.
 6. Select a historical version.
 7. Click `Clone`.
@@ -1091,7 +1095,7 @@ Steps:
 5. Enter an audit reason.
 6. Complete the import.
 7. Confirm open-conflict completion fields are visible on the job.
-8. Load import completion metrics.
+8. Refresh import completion metrics.
 9. Confirm project/workspace dashboard import metrics reflect the accepted conflicts.
 
 ## AI Agents
@@ -1107,7 +1111,7 @@ Defect IDs:
 Steps:
 
 1. Click `Agents`.
-2. Click `Load`.
+2. Click `Refresh`.
 3. Create a simulated provider.
 4. Create an agent profile for the simulated provider.
 5. Create or select a repository connection.
@@ -1115,7 +1119,7 @@ Steps:
 7. Enter instructions.
 8. Click `Assign`.
 9. Confirm the agent task appears and status is running or review requested.
-10. Click `Load` for the task.
+10. Click `Refresh` for the task.
 11. Request changes.
 12. Add a human message.
 13. Retry or cancel if applicable.
@@ -1168,7 +1172,7 @@ Steps:
 11. Enter a small, safe implementation instruction.
 12. Click `Assign`.
 13. Wait for status to move to review requested or failed.
-14. Click `Load` for the task.
+14. Click `Refresh` for the task.
 15. Confirm task events include `cli_worker_started` and either `cli_worker_completed` or `cli_worker_failed`.
 16. Inspect the disposable checkout for Codex changes.
 17. Confirm Trasck captured a redacted output artifact and message.
@@ -1196,7 +1200,7 @@ Steps:
 11. Enter a small, safe implementation instruction.
 12. Click `Assign`.
 13. Wait for status to move to review requested or failed.
-14. Click `Load` for the task.
+14. Click `Refresh` for the task.
 15. Confirm task events include `cli_worker_started` and either `cli_worker_completed` or `cli_worker_failed`.
 16. Inspect the disposable checkout for Claude changes.
 17. Confirm Trasck captured a redacted output artifact and message.
@@ -1213,7 +1217,7 @@ Steps:
 
 1. Click `Agents`.
 2. Select an existing provider.
-3. Click `Load credentials`.
+3. Click `Refresh credentials`.
 4. Confirm raw secret values are not displayed.
 5. Create a new provider credential.
 6. Confirm the returned row does not contain the raw secret.
@@ -1235,7 +1239,7 @@ Defect IDs:
 Steps:
 
 1. Click `Agents`.
-2. Click `Load`.
+2. Click `Refresh`.
 3. Use `Attempt` and `Status` filters.
 4. Click `Attempts`.
 5. Confirm dispatch, retry, or cancel rows appear.
@@ -1259,7 +1263,7 @@ Steps:
 
 1. Complete TC-054 or TC-055 so at least one CLI run directory exists.
 2. Click `Agents`.
-3. In `CLI Run Artifacts`, click `Load runs`.
+3. In `CLI Run Artifacts`, click `Refresh runs`.
 4. Confirm the table shows task ID, provider type, status, file count, size, updated time, and artifact flags.
 5. Click the download icon for a completed or review-requested run.
 6. Confirm a ZIP file downloads.
@@ -1267,7 +1271,7 @@ Steps:
 8. Confirm it contains `prompt.md`, `task.json`, and `output.log` when available.
 9. Confirm the ZIP does not contain raw provider credentials.
 10. Click the delete icon for one run.
-11. Click `Load runs`.
+11. Click `Refresh runs`.
 12. Confirm that run no longer appears.
 13. Set `Retention days` to `0` or another test value.
 14. Click `Prune runs`.
@@ -1345,7 +1349,7 @@ Defect IDs:
 Steps:
 
 1. Create provider credentials, webhook secret, SMTP password, and service token.
-2. Load provider, webhook, email provider, token, audit, activity, and export views.
+2. Refresh provider, webhook, email provider, token, audit, activity, and export views.
 3. Confirm raw secrets never appear after initial token one-time display.
 4. Export dispatch attempts and audit entries.
 5. Download the exports.

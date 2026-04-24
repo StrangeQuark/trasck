@@ -78,7 +78,7 @@ Highest-risk entry points:
 - API error bodies and production server-error logs pass through centralized redaction for token/password/secret/authorization/private-key shaped text.
 - Saved-filter/query-builder SQL uses whitelisted fields/operators and bind parameters. Raw SQL-shaped keys are rejected in user-configurable report/filter/dashboard paths.
 - Local filesystem attachment storage normalizes paths and rejects storage keys that escape the configured root.
-- The frontend does not persist access tokens in local storage. Current local storage is limited to API base URL and selected UI/entity IDs.
+- The frontend does not persist access tokens in local storage. The browser-visible API URL editor and global entity-ID context storage have been removed; API base configuration now comes from environment/runtime settings and canonical workspace/project context comes from the authenticated backend context endpoint.
 - No `dangerouslySetInnerHTML`, `eval`, `new Function`, or direct `document.cookie` usage was found in current frontend source.
 - No `6101` backend or frontend config references were found; current backend defaults remain on `6100`.
 - Only `.env.example` files remain in the two repos; real `.env` files are ignored.
@@ -415,7 +415,7 @@ Current state:
 
 - The frontend does not store access tokens in local storage.
 - Created API tokens are displayed through a dedicated one-time reveal component with copy and clear actions.
-- Generic JSON previews recursively redact secret-shaped fields.
+- Product data panels render structured summaries by default, and the remaining raw diagnostics view is env-gated while recursively redacting secret-shaped fields.
 - Webhook secret inputs use password fields.
 
 Impact:
@@ -424,7 +424,7 @@ Impact:
 
 Recommended fix:
 
-- Continue replacing raw JSON escape hatches with field-specific secret-aware forms as admin screens mature.
+- Continue replacing advanced diagnostics/editing escape hatches with field-specific secret-aware forms as admin screens mature.
 
 Regression tests/checks:
 

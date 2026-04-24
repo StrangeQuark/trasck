@@ -16,6 +16,8 @@ public interface ProjectMembershipRepository extends JpaRepository<ProjectMember
 
     long countByProjectIdAndRoleIdAndStatusIgnoreCase(UUID projectId, UUID roleId, String status);
 
+    List<ProjectMembership> findByUserIdAndStatusIgnoreCase(UUID userId, String status);
+
     List<ProjectMembership> findByProjectIdAndStatusIgnoreCaseOrderByCreatedAtDesc(UUID projectId, String status);
 
     @Query("""

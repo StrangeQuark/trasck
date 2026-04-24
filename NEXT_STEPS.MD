@@ -8,12 +8,16 @@ Answer these as we start each implementation task. These are the remaining decis
     - Answer:
 2. Should the first production packaging pass require a documented disposable checkout/branch naming convention before enabling edit-capable Codex or Claude Code command profiles?
     - Answer:
+3. Should the env-gated raw diagnostics switch (`VITE_TRASCK_ENABLE_DIAGNOSTICS=true`) remain available for developer/admin manual testing, or should raw payload diagnostics be removed entirely before any external tester uses the frontend?
+    - Answer:
+4. Should `/api/v1/auth/context` be expanded to return permission/capability flags so the frontend can hide admin pages by the signed-in user's actual roles, or should permission-aware navigation wait for a broader page-access UX pass?
+    - Answer:
 
 ## Current State
 
 The backend has the full initial relational schema, Flyway migrations, JPA entity model, JPA repositories, and PostgreSQL/Testcontainers verification in place. The schema is designed for the full Trasck product direction, including organizations, workspaces, projects, work item hierarchy, workflows, boards, planning, permissions, automation, reporting, notifications, attachments, imports, exports, audit data, durable domain events, and provider-neutral AI agent execution.
 
-The first-run-only setup API creates an admin user, organization, workspace, project, memberships, deterministic default project configuration, and default local filesystem attachment storage. Public project, public work-item, public work-item comment, and public work-item attachment reads are wired through security and checked against workspace anonymous-read plus project/work-item visibility in domain code; those public-read switches can now be changed through workspace/project security-policy APIs and the frontend settings routes. Anonymous public comments use narrow DTOs that omit author IDs and edit metadata, private comments are excluded, public attachment DTOs omit storage/uploader internals, and attachment bytes are retrieved through short-lived app-signed backend download URLs. App-signed backend proxy URLs are the planned long-term public attachment download pattern, including for S3-compatible storage.
+The first-run-only setup API creates an admin user, organization, workspace, project, memberships, deterministic default project configuration, and default local filesystem attachment storage. The public setup-status endpoint tells the frontend whether first-run setup is still available; setup links are hidden after bootstrap, and successful initial setup logs in the new admin and returns to the homepage. Public project, public work-item, public work-item comment, and public work-item attachment reads are wired through security and checked against workspace anonymous-read plus project/work-item visibility in domain code; those public-read switches can now be changed through workspace/project security-policy APIs and the frontend settings routes. Anonymous public comments use narrow DTOs that omit author IDs and edit metadata, private comments are excluded, public attachment DTOs omit storage/uploader internals, and attachment bytes are retrieved through short-lived app-signed backend download URLs. App-signed backend proxy URLs are the planned long-term public attachment download pattern, including for S3-compatible storage.
 
 Authentication and authorization foundations are implemented. Username/password login returns a JWT and sets the same value in an HTTP-only cookie. Direct API callers can use JWTs, revocable personal tokens, or revocable workspace service tokens as `Authorization: Bearer`. Cookie-authenticated unsafe browser requests use Spring cookie CSRF protection. Invitation-based registration supports workspace-only and workspace-plus-project membership, pending invitations can be revoked through a public workspace-admin API, and workspace-admin-created users can be removed from a workspace without direct database access. Workspace-admin direct user creation, signed verified OAuth identity linking, full Spring OAuth redirect startup for GitHub/Google/GitLab/Microsoft, provider-specific verified-email resolution, method-level admin permissions, explicit service-layer work item permission checks, enforced API token scopes, token list/revoke flows, dedicated service-token listing, token expiry coverage, and durable hybrid outbox delivery are in place.
 
@@ -35,7 +39,7 @@ Agent delivery hardening keeps the generic worker protocol as the main extensibi
 
 Queued import review CSV export jobs can now be picked up by the shared scheduled worker through workspace worker settings. Scheduled and manual review export processing writes `import_review_export` worker run and health rows, and operations screens can filter that worker type alongside automation, webhook, email, and import conflict-resolution workers. Agent dispatch attempt retention now has workspace-level defaults and optional automatic scheduled pruning. Codex and Claude Code provider credential creation now validates provider-specific credential types and basic secret/auth-scheme shape before encrypting credentials.
 
-Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client refreshed from a live backend on `6100`, feature-specific API service wrappers, local API-base configuration, route-based navigation, cookie/CSRF browser auth that sends Spring's `X-XSRF-TOKEN` header without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy/workspace member-management screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, field-specific import/planning/agent controls instead of the previous raw JSON/ID inputs for common workflows, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, Codex/Claude provider presets, provider credential management, agent runtime preview, dispatch-attempt admin controls, CLI run artifact list/download/delete/prune controls, and Vitest/Testing Library coverage.
+Local runtime and contract polish is in place. The backend has checked-in HTTP examples under `docs/http/`, realistic import samples under `docs/import-samples/`, local runtime guidance under `docs/LOCAL_RUNTIME.md`, a frontend-facing contract under `docs/api/FRONTEND_API_CONTRACT.md`, generated OpenAPI at `/v3/api-docs`, Swagger UI at `/swagger-ui.html`, a self-contained Docker Compose setup, `spring.jpa.open-in-view=false`, and the duplicate `org.json.JSONObject` dependency was removed. The Vite React repo has `npm run generate:api`, checked-in generated OpenAPI JSON and TypeScript client refreshed from a live backend on `6100`, feature-specific API service wrappers, environment-owned API-base configuration, route-based navigation, public first-run setup availability checks, authenticated workspace/project context loaded through `/api/v1/auth/context`, cookie/CSRF browser auth that sends Spring's `X-XSRF-TOKEN` header without access-token local storage, global toast/error handling, admin/API token/system-admin/workspace-security-policy/project-security-policy/workspace member-management screens, setup/login/current-user/project work item/team/planning/saved filter/saved view/dashboard/configuration/automation/import/agent flows, field-specific import/planning/agent controls instead of the previous raw JSON/ID inputs for common workflows, no visible Backend URL editor or global Workspace/Project UUID strip, no dev seed values in setup/auth forms, product-facing structured data panels with raw diagnostics gated behind `VITE_TRASCK_ENABLE_DIAGNOSTICS=true`, worker retention export/prune/automatic schedule controls, worker-type filtered operations previews, queued backend-generated filtered import review CSV export artifacts with admin processing controls, import diff export artifact history/download controls, import completion metrics tables, Codex/Claude provider presets, provider credential management, agent runtime preview, dispatch-attempt admin controls, CLI run artifact list/download/delete/prune controls, and Vitest/Testing Library coverage.
 
 The separate `trasck-test` repository now holds the Java Playwright automation harness for cross-repo testing. It has Maven-based Playwright configuration, environment-backed backend/frontend base URLs, optional authenticated smoke credentials plus workspace/project IDs, optional disposable first-run setup bootstrap through `/api/v1/setup`, separate opt-in sample-data fixture support plus direct per-test seed creation for real-backend browser workflows, opt-in managed production-like backend stack coverage through Testcontainers PostgreSQL/Redis plus a child backend process from the sibling `trasck` repo, a GitHub Actions workflow that compiles the Java suite and runs the Docker-backed `managed-stack` production security group on pull requests and `main` pushes when the required `TRASCK_BACKEND_REPOSITORY` repository variable is set, Docker support, reusable API/browser fixtures, unique-data helpers, a local HTTP receiver for webhook/worker delivery assertions, redacted API snippets, committed OpenAPI route coverage baseline enforcement with `coverageOwner` on covered rows, generated OpenAPI route inventory output, screenshots, traces, deterministic local-stack guidance, API smoke tests, authenticated API coverage across the implemented backend surfaces including CLI run artifact admin routes, browser smoke tests for the frontend shell and admin routes, real-backend seeded workflows for project work, saved filters, dashboards, teams, configuration, planning/boards, agents, imports, automation/workers, notifications, program/admin/token, public preview, and work item collaboration surfaces, and a disposable first-run frontend rehearsal that creates its own setup context on an empty stack before touching core routes and running a longer planning/import/automation/agent creation scenario. Import, planning/board/roadmap, agent, and work-item collaboration real-browser workflows now use the UI for the records that previously needed API-only creation or fragile raw inputs. The broad remaining workflow coverage has been split into feature-specific classes rather than one large test. The new collaboration browser workflow is compile-verified and should be run against a live backend/frontend stack during the next full test pass. The committed baseline currently tracks 403 covered backend routes, 0 ordinary planned routes, and 0 planned high-risk routes.
 
@@ -44,235 +48,8 @@ The full production-minded backend/frontend security audit is recorded in `SECUR
 
 ## Primary Next Steps
 
-### 1. Frontend Developer Console Cleanup Before Manual Testing
 
-Goal: remove the remaining developer-console scaffolding from the browser product before the first broad manual testing pass. The app should behave like Trasck, not like an API exercise console: no visible backend URL override, no global UUID context strip, no normal-user raw JSON inspectors, no dev seed values in forms, and no manual ID typing where the UI can load records and offer selectors.
-
-Deep-dive inventory and planned work:
-
-- `trasck-frontend/src/App.jsx`
-  - Remove persisted `trasck.apiBaseUrl` as a visible runtime setting; the API base should come from build/runtime environment configuration.
-  - Remove global persisted `trasck.workspaceId`, `trasck.projectId`, `trasck.dashboardId`, `trasck.savedFilterId`, and `trasck.agentTaskId` as the primary navigation model.
-  - Replace global ID context plumbing with route params, authenticated current-user/default workspace/project data, and page-local selected records loaded from APIs.
-  - Keep local storage only for harmless user preferences, never as the source of truth for backend entity context.
-
-- `trasck-frontend/src/app/Shell.jsx`
-  - Remove the visible `Backend URL` form and checkmark action from the header.
-  - Remove the `InlineId` Workspace/Project UUID strip.
-  - Rename the app header away from "Project console" to product language.
-  - Hide `Setup` once the instance is initialized; setup should be a first-run gate, not a permanent main tab.
-  - Replace the permanent `Auth` tab with proper signed-out login/account behavior.
-  - Move admin-only tabs such as `Tokens` and `System` behind a clearer admin/settings area instead of presenting them as primary project tabs.
-  - Keep environment-driven API configuration through `src/api/client.js` and `.env.example`; do not reintroduce a browser-visible API URL field.
-
-- `trasck-frontend/src/api/client.js`
-  - Keep `VITE_TRASCK_API_BASE_URL`, `VITE_API_URL`, and the local `http://localhost:6100` fallback as configuration.
-  - Verify CSRF bootstrap still uses the configured API base after the shell URL override is removed.
-  - Remove any coupling to `context.apiBaseUrl` callers that only existed for the visible console override.
-
-- `trasck-frontend/src/hooks/useLocalStorage.js`
-  - Remove or rewrite the "development console" comment.
-  - Restrict use to preferences such as collapsed panels or recently selected UI filters, not backend URLs, credentials, or canonical entity IDs.
-
-- `trasck-frontend/src/components/InlineId.jsx`
-  - Remove this component if it is unused after the shell/context strip is removed.
-  - Replace any remaining ID-entry usage with feature-specific selectors or detail routes.
-
-- `trasck-frontend/src/components/JsonPreview.jsx`
-  - Remove from normal product pages or gate behind an explicit dev-only diagnostics mode.
-  - Replace user-facing uses with structured tables, summary rows, status panels, diff views, or audit/detail components.
-  - Keep backend redaction assumptions intact even if a dev-only inspector remains.
-
-- `trasck-frontend/src/components/JsonRecordEditor.jsx`
-  - Remove from normal product pages or gate behind an explicit advanced/dev mode.
-  - Replace record editing with field-specific forms for boards, roadmaps, custom-field contexts, screen fields, import records, and mapping-related records.
-
-- `trasck-frontend/src/components/RoleManagementPanel.jsx`
-  - Replace permission preview and role state `JsonPreview` panels with structured impacted-member, permission, role, and version-history tables.
-  - Keep custom role create/update/archive/rollback behavior unchanged.
-  - Review placeholder defaults such as `custom_role` and `Custom Role`; use empty or product-quality defaults if they are visible.
-
-- `trasck-frontend/src/constants/appConstants.js`
-  - Remove visible dev setup defaults: `admin@trasck.local`, `admin`, `Trasck Admin`, `correct-horse-battery-staple`, `Trasck Local`, `trasck-local`, `Trasck Workspace`, `TRASCK`, `Trasck Project`, and `TRASCK`.
-  - If automated tests still need seed values, move them into test fixtures or a dev-only sample-data path.
-  - Replace raw default saved-filter JSON exposure with a query-builder UI default where the page still needs one.
-
-- `trasck-frontend/src/pages/OverviewPage.jsx`
-  - Remove the raw session Workspace/Project UUID panel.
-  - Remove product-path links that send normal users to Setup/Auth.
-  - Keep overview cards focused on work, planning, dashboards, automation status, and admin settings only when the signed-in user has permission.
-
-- `trasck-frontend/src/pages/SetupPage.jsx`
-  - Remove dev prefilled setup values.
-  - Replace `Setup Result` `JsonPreview` with a concise success/error state and next action.
-  - Ensure setup is only reachable during first-run/open setup state.
-
-- `trasck-frontend/src/pages/AuthPage.jsx`
-  - Remove login defaults derived from setup dev seed values.
-  - Replace `Current User` `JsonPreview` with account/session summary UI.
-  - Stop treating auth as a normal project tab.
-
-- `trasck-frontend/src/pages/WorkPage.jsx`
-  - Remove the `Project ID` text input from the work list.
-  - Replace raw work item type key entry with a type selector loaded from project configuration.
-  - Replace raw custom-field key/operator/value filter controls with configured custom-field selectors or the saved-filter/query-builder execution UI.
-  - Replace manual `Load` as the primary data-fetch action with route/context-driven loading plus an optional refresh action.
-
-- `trasck-frontend/src/pages/work/WorkItemDetail.jsx`
-  - Keep collaboration behavior, but review for technical fields that should be hidden or moved to advanced/audit views, such as attachment checksums and generic "Workspace member" labels.
-  - Keep refresh actions secondary; the detail route should load itself from the route ID.
-
-- `trasck-frontend/src/pages/WorkspaceSettingsPage.jsx`
-  - Remove raw workspace UUID display from primary summaries unless it is in an admin diagnostics copy field.
-  - Replace invitation `Project ID` input with a project picker.
-  - Replace raw `Expires at ISO` with a date/time picker or preset expiry options.
-  - Replace `Workspace Management State` JSON previews with member, invitation, policy, role, and last-action components.
-  - Replace manual `Load` buttons with automatic page-load refresh and explicit secondary refresh controls.
-
-- `trasck-frontend/src/pages/ProjectSettingsPage.jsx`
-  - Remove raw project/effective ID summaries from primary UI.
-  - Replace `Project Security State` `JsonPreview` with structured inherited/effective policy rows and visibility controls.
-  - Replace manual `Load` as primary behavior with automatic route-driven load.
-
-- `trasck-frontend/src/pages/SystemAdminPage.jsx`
-  - Replace raw `User ID` grant input with a user/member picker and confirmation flow.
-  - Replace `System Admins` `JsonPreview` with a table showing admins, grant metadata, revoke actions, and step-up state.
-  - Keep last-admin and production step-up behavior unchanged.
-
-- `trasck-frontend/src/pages/TokenAdminPage.jsx`
-  - Replace service-token raw `Role ID` input with a role picker.
-  - Replace personal-token/service-token/new-token JSON previews with structured token tables and a one-time secret reveal component.
-  - Keep token scope, expiry, revoke, and service-user behavior unchanged.
-
-- `trasck-frontend/src/pages/ProgramsPage.jsx`
-  - Replace `Roadmap config JSON` and `Report config JSON` textareas with field-specific controls or a clearly gated advanced editor.
-  - Replace raw `Project ID` assignment with a project picker.
-  - Replace program/project/dashboard summary JSON previews with tables and summary cards.
-  - Replace manual load buttons with automatic loads plus secondary refresh.
-
-- `trasck-frontend/src/pages/DashboardsPage.jsx`
-  - Replace dashboard `Layout JSON` and widget `Config JSON` textareas with layout/widget forms or a gated advanced editor.
-  - Replace `Dashboards`, `Rendered`, `Project Summary`, `Workspace Summary`, and import report JSON previews with dashboard lists, rendered widget panels, and summary tables.
-  - Remove reliance on globally persisted `dashboardId`; use selected dashboard route state or route params.
-  - Keep report rendering/export behavior unchanged.
-
-- `trasck-frontend/src/pages/SearchPage.jsx`
-  - Replace raw `Project ID` and `Team ID` filter inputs with project/team selectors.
-  - Replace `Expert JSON` saved-filter query textarea with the query-builder UI path or a gated advanced mode.
-  - Replace saved-view `Config JSON` textarea with view/favorite/recent-item form controls.
-  - Replace result/filter/view JSON previews with work item lists, saved-filter tables, and saved-view tables.
-  - Remove reliance on globally persisted `savedFilterId`; use selected filter route state or list selection.
-
-- `trasck-frontend/src/pages/planning/PlanningPage.jsx`
-  - Replace planning record JSON preview panels for teams, project teams, iterations, boards, columns, swimlanes, board work, saved filters, releases, release work, roadmaps, roadmap items, and work items with structured lists/tables.
-  - Replace manual `Load`, `Board cards`, `Release scope`, and `Roadmap items` buttons as primary discovery with automatic loading from selected records.
-  - Keep board/team/iteration/release/roadmap create and update behavior unchanged.
-  - Keep advanced swimlane predicates only if presented through saved-filter/query-builder controls.
-
-- `trasck-frontend/src/pages/planning/PlanningDetailPages.jsx`
-  - Replace `JsonRecordEditor` usage for board columns, board swimlanes, and roadmap items with field-specific add/edit/archive forms.
-  - Replace board/release/roadmap `JsonPreview` panels with structured detail views.
-  - Replace manual board move controls that expose `transitionKey`, `previousWorkItemId`, and `nextWorkItemId` with board drag/drop or record selectors, while preserving the API behavior.
-  - Keep release scope and roadmap item management behavior unchanged.
-
-- `trasck-frontend/src/pages/AgentsPage.jsx`
-  - Remove dev wording from the default task message: `"Adding context from the frontend console."`.
-  - Keep Codex and Claude presets, but present provider/profile/repository/task setup as product workflows with safe advanced sections.
-  - Replace raw provider/profile/repository/runtime/credential state JSON previews with structured tables and detail panels.
-  - Replace globally persisted `agentTaskId` with route/list selection.
-  - Move dispatch attempt export/prune, CLI run artifact delete/prune, credential internals, worker IDs, and runtime preview controls into an admin/operations or advanced section, not the main assignment flow.
-  - Keep provider-neutral worker protocol, Codex/Claude CLI worker support, credential masking, dispatch attempts, callback signing, and CLI artifact APIs unchanged.
-
-- `trasck-frontend/src/pages/automation/AutomationPage.jsx`
-  - Replace notification preference `Config JSON`, webhook `Event types JSON`, automation rule `Trigger JSON`, condition `Config JSON`, and action `Config JSON` textareas with field-specific controls or a gated advanced editor.
-  - Remove dev default addresses such as `admin@trasck.local` from visible form defaults.
-  - Replace notification/preference/default/worker/webhook/email/rule/job/run JSON previews with tables, status panels, and delivery logs.
-  - Move manual worker execution, export, prune, and retention operations into a clearer operations/admin section.
-  - Keep webhook signing, dual-secret overlap, worker settings, Maildev local testing, and retention APIs unchanged.
-
-- `trasck-frontend/src/pages/automation/AutomationDetailPages.jsx`
-  - Replace rule/webhook trigger and event JSON editors with field-specific controls or gated advanced mode.
-  - Replace `JsonRecordEditor` condition/action editing with purpose-built condition/action rows.
-  - Replace job/webhook/delivery JSON previews with structured delivery and job history views.
-
-- `trasck-frontend/src/pages/configuration/ConfigurationPage.jsx`
-  - Replace `Options JSON`, `Default JSON`, `Validation JSON`, and screen `Config JSON` textareas with field-type-specific forms.
-  - Replace raw `System field` key input with a supported-system-field picker.
-  - Replace custom-field, field-config, screen, screen-field, and assignment JSON previews with tables/detail panels.
-  - Keep custom field definitions, contexts, screen assignment, and required-field enforcement behavior unchanged.
-
-- `trasck-frontend/src/pages/configuration/ConfigurationDetailPages.jsx`
-  - Replace custom-field context/config and screen field/assignment `JsonRecordEditor` usage with field-specific forms.
-  - Replace field/screen JSON previews with structured detail views.
-  - Keep archive/update flows unchanged.
-
-- `trasck-frontend/src/pages/PublicProjectPreviewPage.jsx`
-  - Replace selected public project/work item JSON previews with public-facing issue/detail rendering.
-  - Remove raw project UUID from primary public summary where possible; show project name/key and work item keys.
-  - Remove `context.apiBaseUrl` dependency for attachment download links; use the configured API client/base URL behavior or backend-provided URLs.
-
-- `trasck-frontend/src/pages/imports/ImportsPage.jsx`
-  - Replace raw transformation/config JSON defaults and textareas with transform-pipeline controls or a gated advanced editor.
-  - Replace `Sample Result`, `Worker Result`, `Review Export Result`, `Retarget Preview`, `Filtered Conflict Preview`, `Jobs`, `Templates`, `Transform Presets`, `Transform Preset Versions`, `Selected Job`, `Parse Result`, `Materialize Result`, `Job Version Diff Export`, `Job Version Diff Export Artifact`, `Materialization Runs`, `Open Conflicts`, and `Records` JSON previews with structured tables, diff views, status panels, and export artifact rows.
-  - Replace raw `Source ID` and similar import record identifiers with generated/selected values where possible.
-  - Replace any remaining `JsonRecordEditor` usage with import-specific forms.
-  - Keep CSV/Jira/Rally sample jobs, parse, review, conflict, materialization, rerun, export, and worker behavior unchanged.
-
-- `trasck-frontend/src/pages/imports/ImportRecordEditor.jsx`
-  - Replace raw `Source ID`, `Target ID`, and `Source payload JSON` controls with import-record specific fields, diff tables, and a gated raw-payload viewer when needed.
-  - Replace selected record/version JSON previews with structured record history and field diff views.
-
-- `trasck-frontend/src/pages/imports/TransformPipelineEditor.jsx`
-  - Replace visible raw JSON step editor with field-specific transform step forms.
-  - Keep a gated advanced JSON editor only if it is clearly marked for admins.
-
-- `trasck-frontend/src/pages/imports/ImportDetailPages.jsx`
-  - Replace worker/review/job/conflict/export/materialization/records/lookups/translations/template JSON previews with structured import detail components.
-  - Keep backend-generated export artifact downloads and review tables unchanged.
-
-- `trasck-frontend/src/pages/imports/ImportConflictDetails.jsx`
-  - Replace generic `Source Payload` JSON preview with a field-by-field conflict/diff view, keeping a gated raw payload option only for admin diagnostics.
-
-- `trasck-frontend/src/pages/imports/ImportReviewTables.jsx`
-  - Review local CSV export affordances against the durable export-job flow; keep local exports only where intentionally lightweight.
-  - Ensure tables remain product-facing after the JSON preview cleanup.
-
-- `trasck-frontend/src/api/services/*.js`
-  - Keep feature-specific service wrappers.
-  - Add or use list endpoints needed by selectors so pages no longer require users to paste UUIDs.
-  - Do not bypass services from UI components while removing console state.
-
-- `trasck-frontend/src/styles/app.css` and `trasck-frontend/src/index.css`
-  - Remove styles only used by the backend URL form, context strip, `InlineId`, normal-page `JsonPreview`, and normal-page `JsonRecordEditor`.
-  - Add replacement styles for selectors, structured tables, detail panels, empty states, and account/admin navigation.
-
-- `trasck-frontend/src/App.test.jsx`, `trasck-frontend/src/components/*.test.jsx`, and existing Vitest coverage
-  - Update tests that expect the old shell controls, setup/auth tabs, JSON previews, manual ID strip, or manual load-first behavior.
-  - Add regression tests proving the browser shell does not render a backend URL field, Workspace/Project UUID strip, or raw JSON previews on normal routes.
-
-- `trasck-test` Java Playwright tests
-  - Update browser workflow selectors and manual-test expectations after setup/auth/admin navigation and raw JSON panels are removed.
-  - Keep API tests unchanged unless supporting selectors require new backend list endpoints.
-
-- Backend/API supporting cleanup in `trasck/src/main/java`
-  - Do not remove backend capabilities just because the UI stops exposing raw forms.
-  - Add narrow read/list endpoints only where necessary to replace raw UUID entry with selectors: projects, teams, users/members, roles, work item types, boards, releases, roadmaps, dashboards, saved filters, agent providers/profiles/repositories/tasks, import jobs/templates/presets, and automation/webhook/email records.
-  - Keep admin/operations APIs for worker runs, dispatch attempts, CLI artifacts, retention pruning, imports, and exports, but make sure the frontend presents them as admin operations instead of mixed into normal product workflows.
-
-- Documentation to update during the cleanup
-  - `TECH_SPECS.MD`: update frontend architecture notes to state that environment config owns the API base URL and that UUID/manual JSON console controls are not product UI.
-  - `MANUAL_TEST_CASES.MD`: rewrite steps that currently say to click `Load`, paste IDs, use Backend URL, or inspect JSON previews.
-  - `MANUAL_TEST_NOTES.MD`: remove Backend URL setup fields if they are still present.
-  - `SECURITY_AUDIT.MD`: update frontend findings that currently assume generic JSON previews are present.
-
-Done when:
-
-- The normal browser UI has no visible Backend URL editor, Workspace/Project UUID strip, permanent Setup/Auth console tabs, dev prefilled seed data, raw JSON preview panels, generic JSON record editors, or required pasted UUID inputs for common workflows.
-- Admin and operations capabilities still exist, but are clearly grouped as admin/advanced surfaces with structured tables and safe secret handling.
-- The app still uses cookie plus CSRF browser auth, environment-based API configuration, generated API client services, and the same backend behavior.
-- Frontend unit tests, Java Playwright expectations, and manual test documentation are updated for the product UI.
-
-### 2. Human Manual Test And Bug-Fix Loop
+### 1. Human Manual Test And Bug-Fix Loop
 
 Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
@@ -290,7 +67,7 @@ Done when:
 
 - A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, Codex/Claude agent assignment/review flows, and agent task inspection without touching the database.
 
-### 3. Production Security Packaging Follow-Ups
+### 2. Production Security Packaging Follow-Ups
 
 Goal: turn the hardened local/manual-test baseline into deployable production controls.
 
@@ -353,12 +130,12 @@ The following work should be completed before the application is ready for a mea
 ### Frontend Readiness
 
 - Keep normal browser auth on cookie plus CSRF with no browser access-token local storage.
-- Use the route-based frontend shell and global toast/error handling as the manual-test surface.
+- Use the route-based frontend shell, environment-owned API base URL, authenticated workspace/project selectors, and global toast/error handling as the manual-test surface.
 - Use the checked-in generated TypeScript API client and regenerate it immediately when the backend contract changes.
 - Keep feature-specific frontend API services as the boundary between UI components and the generated client.
 - Use the full role-management screens in Workspace Settings and Project Settings for seeded/custom role maintenance, impacted-member previews, version history, and rollback during manual admin testing. Program/portfolio management now has a frontend route, public-read settings live in Workspace Settings and Project Settings, public project preview includes public work items, comments, and signed public attachment downloads, and Workspace member/invitation management uses managed role picker APIs.
 - Keep direct workspace-admin notification creation API/test-fixture-only until notification center UX is expanded.
-- Continue replacing lower-priority raw JSON child editors with field-specific forms as their surrounding list/detail APIs mature; the common import, planning, and agent workflow inputs are now field-specific.
+- Continue replacing lower-priority advanced child editors with field-specific forms as their surrounding list/detail APIs mature; raw diagnostics are developer-gated and should not be part of normal manual-test workflows.
 - Expand frontend route tests and replace remaining raw ID inputs only after corresponding list endpoints exist.
 - Keep board drag/drop card-level insertion covered in route/component tests as the board UI grows.
 - Exercise import sample-data walkthroughs, import workspace sample settings, field-specific import diff tables, column filters, backend-generated review CSV export jobs, export artifact downloads, and import completion dashboard screens during manual end-to-end testing.

@@ -55,6 +55,11 @@ class InitialSetupIntegrationTest {
     @Test
     void createsInitialSetupWithAllDefaultSeedDataAndAnonymousPublicRead() throws Exception {
         assertThat(count("users")).isZero();
+        HttpResponse<String> initialStatusResponse = get("/api/v1/setup/status");
+        assertThat(initialStatusResponse.statusCode()).isEqualTo(200);
+        JsonNode initialStatus = objectMapper.readTree(initialStatusResponse.body());
+        assertThat(initialStatus.at("/available").asBoolean()).isTrue();
+        assertThat(initialStatus.at("/completed").asBoolean()).isFalse();
 
         JsonNode publicSetup = postSetup("open", true, "public");
         UUID adminUserId = uuid(publicSetup, "/adminUser/id");
@@ -62,6 +67,11 @@ class InitialSetupIntegrationTest {
         UUID projectId = uuid(publicSetup, "/project/id");
         UUID workflowId = uuid(publicSetup, "/seedData/workflow/id");
         UUID boardId = uuid(publicSetup, "/seedData/board/id");
+        HttpResponse<String> completedStatusResponse = get("/api/v1/setup/status");
+        assertThat(completedStatusResponse.statusCode()).isEqualTo(200);
+        JsonNode completedStatus = objectMapper.readTree(completedStatusResponse.body());
+        assertThat(completedStatus.at("/available").asBoolean()).isFalse();
+        assertThat(completedStatus.at("/completed").asBoolean()).isTrue();
 
         assertThat(publicSetup.at("/seedData/workItemTypes")).hasSize(9);
         assertThat(publicSetup.at("/seedData/workItemTypeRules")).hasSize(10);

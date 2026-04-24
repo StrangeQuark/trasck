@@ -2,6 +2,7 @@ package com.strangequark.trasck.setup;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -15,6 +16,11 @@ public class InitialSetupController {
 
     public InitialSetupController(InitialSetupService initialSetupService) {
         this.initialSetupService = initialSetupService;
+    }
+
+    @GetMapping("/status")
+    public InitialSetupStatusResponse setupStatus() {
+        return initialSetupService.status();
     }
 
     @PostMapping
