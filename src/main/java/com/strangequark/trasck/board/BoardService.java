@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.strangequark.trasck.access.PermissionService;
 import com.strangequark.trasck.event.DomainEventService;
 import com.strangequark.trasck.identity.CurrentUserService;
+import com.strangequark.trasck.planning.Iteration;
+import com.strangequark.trasck.planning.IterationRepository;
+import com.strangequark.trasck.planning.IterationWorkItem;
+import com.strangequark.trasck.planning.IterationWorkItemRepository;
 import com.strangequark.trasck.project.Project;
 import com.strangequark.trasck.project.ProjectRepository;
 import com.strangequark.trasck.search.SavedFilter;
@@ -14,6 +18,10 @@ import com.strangequark.trasck.search.SavedFilterService;
 import com.strangequark.trasck.team.ProjectTeamRepository;
 import com.strangequark.trasck.team.Team;
 import com.strangequark.trasck.team.TeamRepository;
+import com.strangequark.trasck.workflow.WorkflowAssignment;
+import com.strangequark.trasck.workflow.WorkflowAssignmentRepository;
+import com.strangequark.trasck.workflow.WorkflowStatus;
+import com.strangequark.trasck.workflow.WorkflowStatusRepository;
 import com.strangequark.trasck.workitem.WorkItem;
 import com.strangequark.trasck.workitem.WorkItemRepository;
 import com.strangequark.trasck.workitem.WorkItemRankRequest;
@@ -22,8 +30,12 @@ import com.strangequark.trasck.workitem.WorkItemService;
 import com.strangequark.trasck.workitem.WorkItemTransitionRequest;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -41,8 +53,12 @@ public class BoardService {
     private final ProjectRepository projectRepository;
     private final TeamRepository teamRepository;
     private final ProjectTeamRepository projectTeamRepository;
+    private final IterationRepository iterationRepository;
+    private final IterationWorkItemRepository iterationWorkItemRepository;
     private final WorkItemRepository workItemRepository;
     private final WorkItemService workItemService;
+    private final WorkflowAssignmentRepository workflowAssignmentRepository;
+    private final WorkflowStatusRepository workflowStatusRepository;
     private final SavedFilterExecutionService savedFilterExecutionService;
     private final SavedFilterService savedFilterService;
     private final CurrentUserService currentUserService;
@@ -57,8 +73,12 @@ public class BoardService {
             ProjectRepository projectRepository,
             TeamRepository teamRepository,
             ProjectTeamRepository projectTeamRepository,
+            IterationRepository iterationRepository,
+            IterationWorkItemRepository iterationWorkItemRepository,
             WorkItemRepository workItemRepository,
             WorkItemService workItemService,
+            WorkflowAssignmentRepository workflowAssignmentRepository,
+            WorkflowStatusRepository workflowStatusRepository,
             SavedFilterExecutionService savedFilterExecutionService,
             SavedFilterService savedFilterService,
             CurrentUserService currentUserService,
@@ -72,8 +92,12 @@ public class BoardService {
         this.projectRepository = projectRepository;
         this.teamRepository = teamRepository;
         this.projectTeamRepository = projectTeamRepository;
+        this.iterationRepository = iterationRepository;
+        this.iterationWorkItemRepository = iterationWorkItemRepository;
         this.workItemRepository = workItemRepository;
         this.workItemService = workItemService;
+        this.workflowAssignmentRepository = workflowAssignmentRepository;
+        this.workflowStatusRepository = workflowStatusRepository;
         this.savedFilterExecutionService = savedFilterExecutionService;
         this.savedFilterService = savedFilterService;
         this.currentUserService = currentUserService;
@@ -204,22 +228,37 @@ public class BoardService {
     }
 
     @Transactional(readOnly = true)
-    public BoardWorkItemsResponse listBoardWorkItems(UUID boardId, Integer limitPerColumn) {
+    public BoardWorkItemsResponse listBoardWorkItems(
+            UUID boardId,
+            Integer limitPerColumn,
+            UUID iterationId,
+            UUID teamId,
+            String viewMode
+    ) {
         UUID actorId = currentUserService.requireUserId();
         Board board = activeBoard(boardId);
         permissionService.requireProjectPermission(actorId, board.getProjectId(), "work_item.read");
         int limit = normalizeLimitPerColumn(limitPerColumn);
-        List<BoardColumnWorkItemsResponse> columns = boardColumnRepository.findByBoardIdOrderByPositionAsc(board.getId()).stream()
+        BoardScope scope = resolveBoardScope(board, iterationId, teamId, viewMode);
+        List<BoardColumn> boardColumns = boardColumnRepository.findByBoardIdOrderByPositionAsc(board.getId());
+        List<UUID> statusIds = boardColumns.stream()
+                .flatMap(column -> statusIds(column.getStatusIds()).stream())
+                .distinct()
+                .toList();
+        List<WorkItem> scopedItems = statusIds.isEmpty()
+                ? List.of()
+                : workItemRepository.findByProjectIdAndStatusIdInAndDeletedAtIsNullOrderByRankAsc(board.getProjectId(), statusIds).stream()
+                        .filter(item -> matchesScope(item, scope))
+                        .toList();
+        List<BoardColumnWorkItemsResponse> columns = boardColumns.stream()
                 .map(column -> {
-                    List<UUID> statusIds = statusIds(column.getStatusIds());
-                    List<WorkItemResponse> items = statusIds.isEmpty()
-                            ? List.of()
-                            : workItemRepository.findByProjectIdAndStatusIdInAndDeletedAtIsNullOrderByRankAsc(board.getProjectId(), statusIds)
-                                    .stream()
-                                    .limit(limit)
-                                    .map(WorkItemResponse::from)
-                                    .toList();
-                    return new BoardColumnWorkItemsResponse(column.getId(), column.getName(), statusIds, items);
+                    List<UUID> columnStatusIds = statusIds(column.getStatusIds());
+                    List<WorkItemResponse> items = scopedItems.stream()
+                            .filter(item -> columnStatusIds.contains(item.getStatusId()))
+                            .limit(limit)
+                            .map(WorkItemResponse::from)
+                            .toList();
+                    return new BoardColumnWorkItemsResponse(column.getId(), column.getName(), columnStatusIds, items);
                 })
                 .toList();
         List<BoardSwimlaneWorkItemsResponse> swimlanes = boardSwimlaneRepository.findByBoardIdOrderByPositionAsc(board.getId()).stream()
@@ -231,7 +270,30 @@ public class BoardService {
                         swimlaneColumns(board, swimlane, columns, limit)
                 ))
                 .toList();
-        return new BoardWorkItemsResponse(board.getId(), board.getProjectId(), limit, columns, swimlanes);
+        return new BoardWorkItemsResponse(board.getId(), board.getProjectId(), scope.iterationId(), scope.teamId(), scope.viewMode(), limit, columns, swimlanes);
+    }
+
+    @Transactional(readOnly = true)
+    public List<BoardStatusOptionResponse> listStatusOptions(UUID boardId) {
+        UUID actorId = currentUserService.requireUserId();
+        Board board = activeBoard(boardId);
+        permissionService.requireProjectPermission(actorId, board.getProjectId(), "project.read");
+        List<UUID> workflowIds = workflowAssignmentRepository.findByProjectIdOrderByWorkflowIdAscWorkItemTypeIdAsc(board.getProjectId()).stream()
+                .map(WorkflowAssignment::getWorkflowId)
+                .distinct()
+                .toList();
+        if (workflowIds.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, WorkflowStatus> uniqueStatuses = new LinkedHashMap<>();
+        for (WorkflowStatus status : workflowStatusRepository.findByWorkflowIdInOrderBySortOrderAscNameAsc(workflowIds)) {
+            uniqueStatuses.putIfAbsent(status.getId(), status);
+        }
+        return uniqueStatuses.values().stream()
+                .sorted(Comparator.comparing((WorkflowStatus status) -> status.getSortOrder() == null ? Integer.MAX_VALUE : status.getSortOrder())
+                        .thenComparing(WorkflowStatus::getName, String.CASE_INSENSITIVE_ORDER))
+                .map(BoardStatusOptionResponse::from)
+                .toList();
     }
 
     @Transactional
@@ -513,6 +575,73 @@ public class BoardService {
         return ids;
     }
 
+    private BoardScope resolveBoardScope(Board board, UUID iterationId, UUID teamId, String viewMode) {
+        String normalizedViewMode = normalizeViewMode(firstText(viewMode, textConfig(board, "viewMode"), "all"));
+        UUID resolvedIterationId = iterationId != null ? iterationId : uuidConfig(board, "iterationId");
+        UUID resolvedTeamId = teamId != null ? teamId : firstNonNull(board.getTeamId(), uuidConfig(board, "teamId"));
+        if (resolvedIterationId != null) {
+            Iteration iteration = iterationRepository.findById(resolvedIterationId).orElseThrow(() -> badRequest("iterationId was not found"));
+            if (!same(board.getProjectId(), iteration.getProjectId())) {
+                throw badRequest("iterationId is not on this board project");
+            }
+            if (resolvedTeamId == null && iteration.getTeamId() != null) {
+                resolvedTeamId = iteration.getTeamId();
+            }
+        }
+        if (resolvedTeamId != null) {
+            Project project = activeProject(board.getProjectId());
+            validateTeam(project, resolvedTeamId);
+        }
+        Set<UUID> scopedWorkItemIds = resolvedIterationId == null
+                ? Set.of()
+                : iterationWorkItemRepository.findByIdIterationIdAndRemovedAtIsNullOrderByAddedAtAsc(resolvedIterationId).stream()
+                        .map(IterationWorkItem::getId)
+                        .map(id -> id.getWorkItemId())
+                        .collect(LinkedHashSet::new, Set::add, Set::addAll);
+        return new BoardScope(resolvedIterationId, resolvedTeamId, normalizedViewMode, scopedWorkItemIds);
+    }
+
+    private boolean matchesScope(WorkItem item, BoardScope scope) {
+        if (scope.teamId() != null && !same(scope.teamId(), item.getTeamId())) {
+            return false;
+        }
+        if (scope.iterationId() == null) {
+            return true;
+        }
+        boolean inIteration = scope.scopedWorkItemIds().contains(item.getId());
+        return switch (scope.viewMode()) {
+            case "iteration" -> inIteration;
+            case "backlog" -> !inIteration;
+            default -> true;
+        };
+    }
+
+    private String normalizeViewMode(String viewMode) {
+        String normalized = requiredText(viewMode, "viewMode").toLowerCase(Locale.ROOT);
+        if (!List.of("all", "iteration", "backlog").contains(normalized)) {
+            throw badRequest("viewMode must be all, iteration, or backlog");
+        }
+        return normalized;
+    }
+
+    private UUID uuidConfig(Board board, String fieldName) {
+        if (board.getFilterConfig() == null || !board.getFilterConfig().hasNonNull(fieldName)) {
+            return null;
+        }
+        try {
+            return UUID.fromString(board.getFilterConfig().get(fieldName).asText());
+        } catch (IllegalArgumentException exception) {
+            throw badRequest(fieldName + " must be a UUID");
+        }
+    }
+
+    private String textConfig(Board board, String fieldName) {
+        if (board.getFilterConfig() == null || !board.getFilterConfig().hasNonNull(fieldName)) {
+            return null;
+        }
+        return board.getFilterConfig().get(fieldName).asText();
+    }
+
     private UUID targetBoardStatusId(Board board, WorkItem item, BoardWorkItemTransitionRequest request) {
         BoardColumn targetColumn = request.targetColumnId() == null
                 ? null
@@ -666,6 +795,20 @@ public class BoardService {
         return null;
     }
 
+    @SafeVarargs
+    private <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private boolean same(UUID left, UUID right) {
+        return left != null && left.equals(right);
+    }
+
     private WorkItem requireWorkItemOnBoard(Board board, UUID workItemId) {
         return workItemRepository.findActiveInProject(workItemId, board.getProjectId())
                 .orElseThrow(() -> notFound("Work item not found on this board"));
@@ -724,5 +867,8 @@ public class BoardService {
 
     private ResponseStatusException badRequest(String message) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private record BoardScope(UUID iterationId, UUID teamId, String viewMode, Set<UUID> scopedWorkItemIds) {
     }
 }

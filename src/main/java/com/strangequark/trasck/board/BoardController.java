@@ -59,9 +59,17 @@ public class BoardController {
     @GetMapping("/boards/{boardId}/work-items")
     public BoardWorkItemsResponse listBoardWorkItems(
             @PathVariable UUID boardId,
-            @RequestParam(required = false) Integer limitPerColumn
+            @RequestParam(required = false) Integer limitPerColumn,
+            @RequestParam(required = false) UUID iterationId,
+            @RequestParam(required = false) UUID teamId,
+            @RequestParam(required = false) String viewMode
     ) {
-        return boardService.listBoardWorkItems(boardId, limitPerColumn);
+        return boardService.listBoardWorkItems(boardId, limitPerColumn, iterationId, teamId, viewMode);
+    }
+
+    @GetMapping("/boards/{boardId}/status-options")
+    public List<BoardStatusOptionResponse> listBoardStatusOptions(@PathVariable UUID boardId) {
+        return boardService.listStatusOptions(boardId);
     }
 
     @PostMapping("/boards/{boardId}/work-items/{workItemId}/rank")

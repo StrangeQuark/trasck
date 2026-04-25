@@ -6,9 +6,15 @@ Answer these as we start each implementation task. These are the remaining decis
 
 1. After the first manual Codex/Claude test round, should CLI run ZIP downloads stay direct-from-worker-filesystem, or should selected run archives be promoted into durable `export_jobs` for longer retention and audit history?
     - Answer:
-2. Should the first production packaging pass require a documented disposable checkout/branch naming convention before enabling edit-capable Codex or Claude Code command profiles?
+2. When a user clicks a card on the backlog or active sprint board, should Trasck open inline planning-side detail/edit UI, or keep deeper editing in the Work route until manual testing proves the better interaction?
     - Answer:
-3. Should the env-gated raw diagnostics switch (`VITE_TRASCK_ENABLE_DIAGNOSTICS=true`) remain available for developer/admin manual testing, or should raw payload diagnostics be removed entirely before any external tester uses the frontend?
+3. When closing an iteration with incomplete work, should the first planning UX default those items back to backlog, or require an explicit carryover target iteration every time?
+    - Answer:
+4. Should the backlog evolve into multi-sprint planning buckets (`current`, `next`, `later`), or stay centered on one selected iteration plus unplanned backlog until real usage shows a stronger need?
+    - Answer:
+5. Should the first production packaging pass require a documented disposable checkout/branch naming convention before enabling edit-capable Codex or Claude Code command profiles?
+    - Answer:
+6. Should the env-gated raw diagnostics switch (`VITE_TRASCK_ENABLE_DIAGNOSTICS=true`) remain available for developer/admin manual testing, or should raw payload diagnostics be removed entirely before any external tester uses the frontend?
     - Answer:
 
 ## Current State
@@ -24,6 +30,8 @@ Workspace and project role management is now first-class. Admins can list permis
 The first work item API slices are implemented. Authenticated users with project/workspace permissions can create, read, update, cursor-list, assign, rank, transition, and archive work items through REST APIs. Create/update requests can include keyed `customFields`. Work item detail data includes comment create/update/delete/list, work item link create/delete/list, watcher add/remove/list, work log create/update/delete/list, workspace label create/list/delete, work item label add/remove/list, attachment metadata APIs, and attachment file upload/download/delete through a provider-neutral storage interface. Local filesystem storage and S3-compatible provider selection are wired and tested. Work items support explicit team assignment through `teamId`; assigned teams must be active, belong to the workspace, and be attached to the project. The frontend Work route now exposes inline work item detail controls for comments, comment edit/delete, fixed or custom link types, self-service watcher add/remove, work logs, workspace/work-item labels, drag/drop plus file-picker attachment upload, attachment download/delete, and activity review.
 
 Team, planning, board, program/portfolio, reporting, dashboard, saved filter, saved view, personalization, notification, automation, webhook, email, audit/export, system administration, workspace/project security policy, and AI agent foundations are implemented enough for backend-driven manual testing. The Vite React frontend has route-based screens for the same major surfaces, cookie/CSRF browser auth, generated OpenAPI client tooling, feature-specific API services, global toasts/errors, detail routes, board card moves, admin/configuration flows, system-admin flows, a Workspace Settings route that now hosts workspace security policy, member/invitation management, and full workspace role management, a Project Settings route with project security policy, public-read effective state, full project role management, and an anonymous preview link, a Programs route for program CRUD/project assignment/dashboard summary review, a Work route with usable work item collaboration controls, a dedicated anonymous public project/work-item/comment/attachment preview route with signed public attachment downloads, dashboard/filter/report flows, automation/worker/email/webhook flows, import flows, and agent provider/profile/repository/task flows.
+
+Planning now has a distinct daily-use flow instead of one admin-heavy page. `/planning` is an overview, `/planning/backlog` supports iteration assignment/removal and sprint start, `/planning/active-board` renders board cards through iteration/team-scoped board queries, and `/planning/admin` keeps team/board/release/roadmap administration behind a separate route. Board column configuration no longer depends on raw JSON status ID editing; admins now map columns through selectable workflow-status options, and both frontend Vitest coverage and Java Playwright/API coverage were updated for the new planning routes and board-scope behavior.
 
 Import jobs can parse CSV, Jira JSON, and Rally JSON into reviewable import records. Import record list APIs return safe empty lists for created/cancelled/not-yet-parsed jobs, and the frontend only loads record-review resources once a selected job has records or is otherwise reviewable. Import records can be created, edited, filtered, versioned, diffed, materialized, conflicted, resolved, rerun, completed with guarded open-conflict acceptance, and exercised through checked-in CSV/Jira/Rally sample payload flows. Reusable transform presets have immutable version records, clone-from-version recovery, clone-and-retarget preview/apply, template-local overrides, value lookups, type translations, status translations, materialization snapshots, exact/modified reruns, and conflict-resolution worker pickup.
 
@@ -47,25 +55,7 @@ The full production-minded backend/frontend security audit is recorded in `SECUR
 ## Primary Next Steps
 
 
-### 1. Jira/Rally-Style Backlog And Sprint Board Flow
-
-Goal: turn the current planning/admin surface into a normal daily-use workflow with a backlog, sprint commitment flow, and an active sprint board that behaves like Jira or Rally instead of a board configuration console.
-
-Planned work:
-
-- Split the current Planning surface into distinct daily-use and admin flows so backlog and sprint-board users are not dropped into team/board/release/roadmap configuration panels by default.
-- Add a project backlog route that shows ranked work, supports iteration assignment/removal, and makes sprint commitment explicit instead of leaving iterations disconnected from the board workflow.
-- Add an active sprint board route that is filtered by project, team, and active iteration scope rather than only by board column status mappings.
-- Add iteration-focused views and commands for planned, active, and closed iterations, including visible sprint scope, commitment, carryover, and sprint-health context.
-- Replace the raw board-column/status editing path with a normal board configuration UI backed by selectable workflow statuses so boards can be made operational without editing JSON records.
-- Keep board/team/iteration administration available to admins, but move it behind dedicated planning settings/detail routes so normal users can navigate directly to backlog and board views.
-- Add regression coverage for the new backlog, sprint assignment, active sprint board filtering, and board/status mapping flows in Vitest and the Java Playwright suite.
-
-Done when:
-
-- A project can be used through a normal backlog -> sprint commitment -> active sprint board flow without requiring users to understand raw board configuration records or hunt through admin-oriented planning panels.
-
-### 2. Human Manual Test And Bug-Fix Loop
+### 1. Human Manual Test And Bug-Fix Loop
 
 Goal: run the now-operable system through a realistic local browser/API pass and fix the defects that only show up when the flows are used together.
 
@@ -82,6 +72,22 @@ Planned work:
 Done when:
 
 - A local tester can operate core project-management flows, delivery workers, system/security admin flows, import review/export flows, board moves, dashboards, Codex/Claude agent assignment/review flows, and agent task inspection without touching the database.
+
+### 2. Planning Workflow Deepening After Manual Feedback
+
+Goal: finish the next layer of sprint-planning ergonomics now that the basic backlog -> sprint commitment -> active board flow exists.
+
+Planned work:
+
+- Decide whether backlog/active-board cards open inline planning detail/edit controls or continue routing users into the Work surface for deeper changes.
+- Add explicit iteration close/carryover UX on top of the existing backend close/carryover APIs so teams can end a sprint without dropping to admin/API tooling.
+- Decide whether backlog planning should stay centered on one selected iteration or expand into multi-sprint planning buckets for future sprint shaping.
+- Add richer sprint-health context where it proves useful in manual testing, such as commitment vs scoped work, carryover visibility, and clearer active/planned/closed iteration summaries.
+- Expand Java Playwright browser coverage from the first backlog/active-board regression slice into repeated sprint planning, sprint start, close, and carryover workflows.
+
+Done when:
+
+- Teams can repeatedly plan, start, inspect, and close iterations through normal planning UX without having to bounce between admin screens or unrelated routes for routine sprint-management work.
 
 ### 3. Production Security Packaging Follow-Ups
 

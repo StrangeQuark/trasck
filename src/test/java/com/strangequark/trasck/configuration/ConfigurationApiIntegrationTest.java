@@ -104,6 +104,9 @@ class ConfigurationApiIntegrationTest {
         boardBody.set("filterConfig", objectMapper.createObjectNode().put("query", "project = TRK"));
         JsonNode board = postJson("/api/v1/projects/" + projectId + "/boards", boardBody);
         UUID boardId = uuid(board, "/id");
+        JsonNode boardStatusOptions = getJson("/api/v1/boards/" + boardId + "/status-options");
+        assertThat(boardStatusOptions).isNotEmpty();
+        assertThat(boardStatusOptions.toString()).contains("\"key\":\"open\"", "\"key\":\"done\"");
         ObjectNode openColumnBody = objectMapper.createObjectNode()
                 .put("name", "Open")
                 .put("position", 0)
@@ -157,6 +160,32 @@ class ConfigurationApiIntegrationTest {
                 .put("targetColumnId", readyColumn.at("/id").asText())
                 .put("previousWorkItemId", openBoardStoryId.toString()));
         assertThat(invalidBoardMove.statusCode()).isEqualTo(400);
+
+        JsonNode team = postJson("/api/v1/workspaces/" + workspaceId + "/teams", objectMapper.createObjectNode()
+                .put("name", "Configuration Delivery Team")
+                .put("defaultCapacity", 90));
+        UUID teamId = uuid(team, "/id");
+        putJson("/api/v1/projects/" + projectId + "/teams/" + teamId, objectMapper.createObjectNode().put("role", "delivery"));
+        JsonNode scopedStory = createWorkItem(projectId, actorId, "story", "Scoped board story", teamId);
+        UUID scopedStoryId = uuid(scopedStory, "/id");
+        JsonNode backlogStory = createWorkItem(projectId, actorId, "story", "Backlog board story", teamId);
+        UUID backlogStoryId = uuid(backlogStory, "/id");
+        JsonNode iteration = postJson("/api/v1/projects/" + projectId + "/iterations", objectMapper.createObjectNode()
+                .put("name", "Board Sprint")
+                .put("teamId", teamId.toString())
+                .put("startDate", "2026-04-20")
+                .put("endDate", "2026-05-01"));
+        UUID iterationId = uuid(iteration, "/id");
+        postJson("/api/v1/iterations/" + iterationId + "/work-items", objectMapper.createObjectNode().put("workItemId", scopedStoryId.toString()));
+        JsonNode scopedBoardWork = getJson("/api/v1/boards/" + boardId + "/work-items?iterationId=" + iterationId + "&teamId=" + teamId + "&viewMode=iteration");
+        assertThat(scopedBoardWork.at("/iterationId").asText()).isEqualTo(iterationId.toString());
+        assertThat(scopedBoardWork.at("/teamId").asText()).isEqualTo(teamId.toString());
+        assertThat(scopedBoardWork.at("/viewMode").asText()).isEqualTo("iteration");
+        assertThat(scopedBoardWork.at("/columns/0/workItems")).hasSize(1);
+        assertThat(uuid(scopedBoardWork, "/columns/0/workItems/0/id")).isEqualTo(scopedStoryId);
+        JsonNode backlogBoardWork = getJson("/api/v1/boards/" + boardId + "/work-items?iterationId=" + iterationId + "&teamId=" + teamId + "&viewMode=backlog");
+        assertThat(backlogBoardWork.at("/columns/0/workItems")).hasSize(1);
+        assertThat(uuid(backlogBoardWork, "/columns/0/workItems/0/id")).isEqualTo(backlogStoryId);
 
         JsonNode release = postJson("/api/v1/projects/" + projectId + "/releases", objectMapper.createObjectNode()
                 .put("name", "Release 1")
@@ -683,11 +712,18 @@ class ConfigurationApiIntegrationTest {
     }
 
     private JsonNode createWorkItem(UUID projectId, UUID actorId, String typeKey, String title) throws Exception {
+        return createWorkItem(projectId, actorId, typeKey, title, null);
+    }
+
+    private JsonNode createWorkItem(UUID projectId, UUID actorId, String typeKey, String title, UUID teamId) throws Exception {
         ObjectNode body = objectMapper.createObjectNode()
                 .put("typeKey", typeKey)
                 .put("title", title)
                 .put("descriptionMarkdown", "Test work item")
                 .put("reporterId", actorId.toString());
+        if (teamId != null) {
+          body.put("teamId", teamId.toString());
+        }
         body.set("descriptionDocument", objectMapper.createObjectNode()
                 .put("type", "doc")
                 .put("title", title));

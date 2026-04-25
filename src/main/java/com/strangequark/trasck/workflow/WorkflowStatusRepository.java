@@ -1,5 +1,6 @@
 package com.strangequark.trasck.workflow;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -9,4 +10,6 @@ public interface WorkflowStatusRepository extends JpaRepository<WorkflowStatus, 
     Optional<WorkflowStatus> findByWorkflowIdAndKeyIgnoreCase(UUID workflowId, String key);
 
     List<WorkflowStatus> findByWorkflowIdOrderBySortOrderAsc(UUID workflowId);
+
+    List<WorkflowStatus> findByWorkflowIdInOrderBySortOrderAscNameAsc(Collection<UUID> workflowIds);
 }
