@@ -223,54 +223,123 @@ public class WorkspaceSeedService {
         this.localAttachmentRoot = localAttachmentRoot;
     }
 
+    public void seedWorkspaceDefaults(Workspace workspace, UUID ownerUserId) {
+        seedWorkspaceDefaultsInternal(workspace, ownerUserId);
+    }
+
+    public void seedProjectDefaults(Workspace workspace, Project project, UUID projectAdminUserId) {
+        seedProjectDefaultsInternal(workspace, project, projectAdminUserId, null);
+    }
+
+    public InitialSetupResponse.SeedDataSummary seedProjectDefaultsWithSummary(
+            Workspace workspace,
+            Project project,
+            UUID projectAdminUserId
+    ) {
+        WorkspaceSeedResult workspaceSeed = loadWorkspaceSeedResult(workspace.getId());
+        ProjectSeedResult projectSeed = seedProjectDefaultsInternal(workspace, project, projectAdminUserId, workspaceSeed);
+        return seedDataSummary(workspaceSeed, projectSeed);
+    }
+
     InitialSetupResponse.SeedDataSummary seed(Workspace workspace, Project project, User adminUser) {
-        Map<String, WorkItemType> workItemTypes = seedWorkItemTypes(workspace.getId());
-        List<WorkItemTypeRule> typeRules = seedWorkItemTypeRules(workspace.getId(), workItemTypes);
-        List<Priority> priorities = seedPriorities(workspace.getId());
-        Map<String, Resolution> resolutions = seedResolutions(workspace.getId());
-        Workflow workflow = seedWorkflow(workspace.getId());
+        WorkspaceSeedResult workspaceSeed = seedWorkspaceDefaultsInternal(workspace, adminUser.getId());
+        ProjectSeedResult projectSeed = seedProjectDefaultsInternal(workspace, project, adminUser.getId(), workspaceSeed);
+        return seedDataSummary(workspaceSeed, projectSeed);
+    }
+
+    private WorkspaceSeedResult seedWorkspaceDefaultsInternal(Workspace workspace, UUID ownerUserId) {
+        UUID workspaceId = workspace.getId();
+        Map<String, WorkItemType> workItemTypes = seedWorkItemTypes(workspaceId);
+        List<WorkItemTypeRule> typeRules = seedWorkItemTypeRules(workspaceId, workItemTypes);
+        List<Priority> priorities = seedPriorities(workspaceId);
+        Map<String, Resolution> resolutions = seedResolutions(workspaceId);
+        Workflow workflow = seedWorkflow(workspaceId);
         Map<String, WorkflowStatus> statuses = seedWorkflowStatuses(workflow.getId());
         List<WorkflowTransition> transitions = seedWorkflowTransitions(workflow.getId(), statuses, resolutions);
+        List<Role> roles = seedWorkspaceRolesAndMembership(workspaceId, ownerUserId);
+        AttachmentStorageConfig attachmentStorageConfig = seedAttachmentStorage(workspaceId);
+        return new WorkspaceSeedResult(
+                workItemTypes,
+                typeRules,
+                priorities,
+                resolutions,
+                workflow,
+                statuses,
+                transitions,
+                roles,
+                attachmentStorageConfig
+        );
+    }
+
+    private ProjectSeedResult seedProjectDefaultsInternal(
+            Workspace workspace,
+            Project project,
+            UUID projectAdminUserId,
+            WorkspaceSeedResult workspaceSeed
+    ) {
+        UUID workspaceId = workspace.getId();
+        Map<String, WorkItemType> workItemTypes = workspaceSeed == null
+                ? loadWorkspaceWorkItemTypes(workspaceId)
+                : workspaceSeed.workItemTypes();
+        Workflow workflow = workspaceSeed == null
+                ? loadDefaultWorkflow(workspaceId)
+                : workspaceSeed.workflow();
+        Map<String, WorkflowStatus> statuses = workspaceSeed == null
+                ? loadWorkflowStatuses(workflow.getId())
+                : workspaceSeed.statuses();
+
         List<ProjectWorkItemType> projectWorkItemTypes = seedProjectWorkItemTypes(project.getId(), workItemTypes.values());
         List<WorkflowAssignment> workflowAssignments = seedWorkflowAssignments(project.getId(), workflow.getId(), workItemTypes.values());
-        Board board = seedBoard(workspace.getId(), project.getId());
+        Board board = seedBoard(workspaceId, project.getId());
         List<BoardColumn> columns = seedBoardColumns(board.getId(), statuses);
         seedBoardSwimlane(board.getId());
         ProjectSettings projectSettings = seedProjectSettings(project.getId(), workflow.getId(), board.getId());
-        List<Role> roles = seedRolesAndMemberships(workspace.getId(), project.getId(), adminUser.getId());
-        AttachmentStorageConfig attachmentStorageConfig = seedAttachmentStorage(workspace.getId());
+        Role projectAdminRole = seedProjectRoleAndMembership(workspaceId, project.getId(), projectAdminUserId);
+        return new ProjectSeedResult(
+                projectWorkItemTypes,
+                workflowAssignments,
+                board,
+                columns,
+                projectSettings,
+                projectAdminRole
+        );
+    }
 
+    private InitialSetupResponse.SeedDataSummary seedDataSummary(WorkspaceSeedResult workspaceSeed, ProjectSeedResult projectSeed) {
+        Map<String, WorkItemType> workItemTypes = workspaceSeed.workItemTypes();
         return new InitialSetupResponse.SeedDataSummary(
                 keyed(workItemTypes.values()),
-                typeRules.stream()
+                workspaceSeed.typeRules().stream()
                         .map(rule -> new InitialSetupResponse.TypeRuleSummary(
                                 rule.getId(),
                                 findTypeKey(workItemTypes, rule.getParentTypeId()),
                                 findTypeKey(workItemTypes, rule.getChildTypeId())
                         ))
                         .toList(),
-                priorities.stream().map(priority -> new InitialSetupResponse.KeyedId(priority.getId(), priority.getKey(), priority.getName())).toList(),
-                resolutions.values().stream().map(resolution -> new InitialSetupResponse.KeyedId(resolution.getId(), resolution.getKey(), resolution.getName())).toList(),
+                workspaceSeed.priorities().stream().map(priority -> new InitialSetupResponse.KeyedId(priority.getId(), priority.getKey(), priority.getName())).toList(),
+                workspaceSeed.resolutions().values().stream().map(resolution -> new InitialSetupResponse.KeyedId(resolution.getId(), resolution.getKey(), resolution.getName())).toList(),
                 new InitialSetupResponse.WorkflowSummary(
-                        workflow.getId(),
-                        workflow.getName(),
-                        statuses.values().stream().map(status -> new InitialSetupResponse.KeyedId(status.getId(), status.getKey(), status.getName())).toList(),
-                        transitions.stream().map(transition -> new InitialSetupResponse.KeyedId(transition.getId(), transition.getKey(), transition.getName())).toList()
+                        workspaceSeed.workflow().getId(),
+                        workspaceSeed.workflow().getName(),
+                        workspaceSeed.statuses().values().stream().map(status -> new InitialSetupResponse.KeyedId(status.getId(), status.getKey(), status.getName())).toList(),
+                        workspaceSeed.transitions().stream().map(transition -> new InitialSetupResponse.KeyedId(transition.getId(), transition.getKey(), transition.getName())).toList()
                 ),
                 new InitialSetupResponse.BoardSummary(
-                        board.getId(),
-                        board.getName(),
-                        columns.stream().map(column -> new InitialSetupResponse.KeyedId(column.getId(), slugKey(column.getName()), column.getName())).toList()
+                        projectSeed.board().getId(),
+                        projectSeed.board().getName(),
+                        projectSeed.columns().stream().map(column -> new InitialSetupResponse.KeyedId(column.getId(), slugKey(column.getName()), column.getName())).toList()
                 ),
-                roles.stream().map(role -> new InitialSetupResponse.KeyedId(role.getId(), role.getKey(), role.getName())).toList(),
-                projectWorkItemTypes.stream()
+                rolesForSummary(workspaceSeed, projectSeed).stream()
+                        .map(role -> new InitialSetupResponse.KeyedId(role.getId(), role.getKey(), role.getName()))
+                        .toList(),
+                projectSeed.projectWorkItemTypes().stream()
                         .map(projectType -> new InitialSetupResponse.KeyedId(projectType.getId(), findTypeKey(workItemTypes, projectType.getWorkItemTypeId()), findTypeName(workItemTypes, projectType.getWorkItemTypeId())))
                         .toList(),
-                workflowAssignments.stream()
+                projectSeed.workflowAssignments().stream()
                         .map(assignment -> new InitialSetupResponse.KeyedId(assignment.getId(), findTypeKey(workItemTypes, assignment.getWorkItemTypeId()), "Default workflow for " + findTypeName(workItemTypes, assignment.getWorkItemTypeId())))
                         .toList(),
-                new InitialSetupResponse.KeyedId(projectSettings.getProjectId(), "project_settings", "Project Settings"),
-                new InitialSetupResponse.KeyedId(attachmentStorageConfig.getId(), "filesystem", attachmentStorageConfig.getName())
+                new InitialSetupResponse.KeyedId(projectSeed.projectSettings().getProjectId(), "project_settings", "Project Settings"),
+                new InitialSetupResponse.KeyedId(workspaceSeed.attachmentStorageConfig().getId(), "filesystem", workspaceSeed.attachmentStorageConfig().getName())
         );
     }
 
@@ -495,7 +564,7 @@ public class WorkspaceSeedService {
         return projectSettingsRepository.save(settings);
     }
 
-    private List<Role> seedRolesAndMemberships(UUID workspaceId, UUID projectId, UUID adminUserId) {
+    private List<Role> seedWorkspaceRolesAndMembership(UUID workspaceId, UUID ownerUserId) {
         Map<String, Permission> permissions = loadPermissions();
         List<Role> roles = new ArrayList<>();
         roles.add(seedWorkspaceRole(workspaceId, "Workspace Owner", "workspace_owner", "Owns all workspace configuration.", permissions));
@@ -503,25 +572,35 @@ public class WorkspaceSeedService {
         roles.add(seedWorkspaceRole(workspaceId, "Agent Manager", "agent_manager", "Configures agents and agent task execution.", permissions));
         roles.add(seedWorkspaceRole(workspaceId, "Member", "member", "Creates and updates project work.", permissions));
         roles.add(seedWorkspaceRole(workspaceId, "Viewer", "viewer", "Reads workspace and project work.", permissions));
-        Role projectAdmin = seedProjectRole(workspaceId, projectId, "Project Admin", "project_admin", "Administers one project.", permissions);
-        roles.add(projectAdmin);
 
         WorkspaceMembership workspaceMembership = new WorkspaceMembership();
         workspaceMembership.setWorkspaceId(workspaceId);
-        workspaceMembership.setUserId(adminUserId);
+        workspaceMembership.setUserId(ownerUserId);
         workspaceMembership.setRoleId(roles.get(0).getId());
         workspaceMembership.setStatus("active");
         workspaceMembership.setJoinedAt(OffsetDateTime.now());
         workspaceMembershipRepository.save(workspaceMembership);
 
+        return roles;
+    }
+
+    private Role seedProjectRoleAndMembership(UUID workspaceId, UUID projectId, UUID projectAdminUserId) {
+        Role projectAdmin = seedProjectRole(
+                workspaceId,
+                projectId,
+                "Project Admin",
+                "project_admin",
+                "Administers one project.",
+                loadPermissions()
+        );
         ProjectMembership projectMembership = new ProjectMembership();
         projectMembership.setProjectId(projectId);
-        projectMembership.setUserId(adminUserId);
+        projectMembership.setUserId(projectAdminUserId);
         projectMembership.setRoleId(projectAdmin.getId());
         projectMembership.setStatus("active");
         projectMembershipRepository.save(projectMembership);
 
-        return roles;
+        return projectAdmin;
     }
 
     private Role seedWorkspaceRole(UUID workspaceId, String name, String key, String description, Map<String, Permission> permissions) {
@@ -605,6 +684,62 @@ public class WorkspaceSeedService {
         return attachmentStorageConfigRepository.save(storageConfig);
     }
 
+    private Map<String, WorkItemType> loadWorkspaceWorkItemTypes(UUID workspaceId) {
+        Map<String, WorkItemType> workItemTypes = new LinkedHashMap<>();
+        for (WorkItemType type : workItemTypeRepository.findByWorkspaceIdOrderByHierarchyLevelDescNameAsc(workspaceId)) {
+            workItemTypes.put(type.getKey(), type);
+        }
+        if (workItemTypes.isEmpty()) {
+            throw new IllegalStateException("Workspace defaults have not been seeded");
+        }
+        return workItemTypes;
+    }
+
+    private Workflow loadDefaultWorkflow(UUID workspaceId) {
+        return workflowRepository.findFirstByWorkspaceIdAndActiveTrueOrderByCreatedAtAsc(workspaceId)
+                .orElseThrow(() -> new IllegalStateException("Workspace default workflow has not been seeded"));
+    }
+
+    private Map<String, WorkflowStatus> loadWorkflowStatuses(UUID workflowId) {
+        Map<String, WorkflowStatus> statuses = new LinkedHashMap<>();
+        for (WorkflowStatus status : workflowStatusRepository.findByWorkflowIdOrderBySortOrderAsc(workflowId)) {
+            statuses.put(status.getKey(), status);
+        }
+        if (statuses.isEmpty()) {
+            throw new IllegalStateException("Workspace default workflow statuses have not been seeded");
+        }
+        return statuses;
+    }
+
+    private WorkspaceSeedResult loadWorkspaceSeedResult(UUID workspaceId) {
+        Map<String, WorkItemType> workItemTypes = loadWorkspaceWorkItemTypes(workspaceId);
+        Workflow workflow = loadDefaultWorkflow(workspaceId);
+        Map<String, WorkflowStatus> statuses = loadWorkflowStatuses(workflow.getId());
+        List<Priority> priorities = priorityRepository.findByWorkspaceIdOrderBySortOrderAscNameAsc(workspaceId);
+        Map<String, Resolution> resolutions = resolutionRepository.findByWorkspaceIdOrderBySortOrderAscNameAsc(workspaceId).stream()
+                .collect(Collectors.toMap(Resolution::getKey, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        AttachmentStorageConfig attachmentStorageConfig = attachmentStorageConfigRepository
+                .findFirstByWorkspaceIdAndActiveTrueAndDefaultConfigTrue(workspaceId)
+                .orElseThrow(() -> new IllegalStateException("Workspace attachment storage has not been seeded"));
+        return new WorkspaceSeedResult(
+                workItemTypes,
+                workItemTypeRuleRepository.findByWorkspaceId(workspaceId),
+                priorities,
+                resolutions,
+                workflow,
+                statuses,
+                workflowTransitionRepository.findByWorkflowIdOrderBySortOrderAscKeyAsc(workflow.getId()),
+                roleRepository.findByWorkspaceIdAndProjectIdIsNullOrderByNameAsc(workspaceId),
+                attachmentStorageConfig
+        );
+    }
+
+    private List<Role> rolesForSummary(WorkspaceSeedResult workspaceSeed, ProjectSeedResult projectSeed) {
+        List<Role> roles = new ArrayList<>(workspaceSeed.roles());
+        roles.add(projectSeed.projectAdminRole());
+        return roles;
+    }
+
     private List<InitialSetupResponse.KeyedId> keyed(Collection<WorkItemType> types) {
         return types.stream()
                 .map(type -> new InitialSetupResponse.KeyedId(type.getId(), type.getKey(), type.getName()))
@@ -629,6 +764,29 @@ public class WorkspaceSeedService {
 
     private String slugKey(String name) {
         return name.toLowerCase().replaceAll("[^a-z0-9]+", "_").replaceAll("^_|_$", "");
+    }
+
+    private record WorkspaceSeedResult(
+            Map<String, WorkItemType> workItemTypes,
+            List<WorkItemTypeRule> typeRules,
+            List<Priority> priorities,
+            Map<String, Resolution> resolutions,
+            Workflow workflow,
+            Map<String, WorkflowStatus> statuses,
+            List<WorkflowTransition> transitions,
+            List<Role> roles,
+            AttachmentStorageConfig attachmentStorageConfig
+    ) {
+    }
+
+    private record ProjectSeedResult(
+            List<ProjectWorkItemType> projectWorkItemTypes,
+            List<WorkflowAssignment> workflowAssignments,
+            Board board,
+            List<BoardColumn> columns,
+            ProjectSettings projectSettings,
+            Role projectAdminRole
+    ) {
     }
 
     private record TypeSeed(String name, String key, int hierarchyLevel, boolean leaf, String icon, String color) {

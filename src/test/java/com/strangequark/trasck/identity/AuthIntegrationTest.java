@@ -528,7 +528,18 @@ class AuthIntegrationTest {
                 .put("visibility", "public"));
         HttpResponse<String> response = post("/api/v1/setup", body, null);
         assertThat(response.statusCode()).isEqualTo(201);
-        return read(response);
+        JsonNode setup = read(response);
+        AuthSession admin = login(setup.at("/adminUser/email").asText(), "correct-horse-battery-staple");
+        JsonNode organization = read(post("/api/v1/organizations", body.get("organization"), admin.accessToken()));
+        JsonNode workspace = read(post("/api/v1/organizations/" + uuid(organization, "/id") + "/workspaces", body.get("workspace"), admin.accessToken()));
+        JsonNode project = read(post("/api/v1/workspaces/" + uuid(workspace, "/id") + "/projects", body.get("project"), admin.accessToken()));
+        ObjectNode result = objectMapper.createObjectNode();
+        result.set("adminUser", setup.at("/adminUser"));
+        result.set("organization", organization);
+        result.set("workspace", workspace);
+        result.set("project", project);
+        result.set("seedData", project.at("/seedData"));
+        return result;
     }
 
     private AuthSession login(String identifier, String password) throws Exception {

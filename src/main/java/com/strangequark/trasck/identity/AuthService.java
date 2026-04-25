@@ -169,7 +169,24 @@ public class AuthService {
         Map<UUID, ProjectMembership> membershipByProjectId = projectMemberships.stream()
                 .filter(membership -> membership.getProjectId() != null)
                 .collect(Collectors.toMap(ProjectMembership::getProjectId, Function.identity(), (left, right) -> left));
-        List<AuthProjectContextResponse> projects = projectRepository.findAllById(membershipByProjectId.keySet()).stream()
+        Set<UUID> activeWorkspaceIds = workspaces.stream()
+                .map(AuthWorkspaceContextResponse::id)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<UUID> workspacesWithProjectRead = workspaceMemberships.stream()
+                .filter(membership -> activeWorkspaceIds.contains(membership.getWorkspaceId()))
+                .filter(membership -> permissionKeysByRoleId.getOrDefault(membership.getRoleId(), List.of()).contains("project.read"))
+                .map(WorkspaceMembership::getWorkspaceId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<UUID, Project> visibleProjects = new java.util.LinkedHashMap<>();
+        if (!workspacesWithProjectRead.isEmpty()) {
+            projectRepository.findByWorkspaceIdInAndDeletedAtIsNullOrderByKeyAscNameAsc(workspacesWithProjectRead)
+                    .forEach(project -> visibleProjects.put(project.getId(), project));
+        }
+        if (!membershipByProjectId.isEmpty()) {
+            projectRepository.findByIdInAndDeletedAtIsNullOrderByKeyAscNameAsc(membershipByProjectId.keySet())
+                    .forEach(project -> visibleProjects.put(project.getId(), project));
+        }
+        List<AuthProjectContextResponse> projects = visibleProjects.values().stream()
                 .filter(project -> project.getDeletedAt() == null)
                 .filter(project -> "active".equalsIgnoreCase(project.getStatus()))
                 .filter(project -> membershipByWorkspaceId.containsKey(project.getWorkspaceId()))
@@ -178,12 +195,15 @@ public class AuthService {
                 .map(project -> {
                     WorkspaceMembership workspaceMembership = membershipByWorkspaceId.get(project.getWorkspaceId());
                     ProjectMembership projectMembership = membershipByProjectId.get(project.getId());
+                    List<String> projectPermissions = projectMembership == null
+                            ? List.of()
+                            : permissionKeysByRoleId.getOrDefault(projectMembership.getRoleId(), List.of());
                     return AuthProjectContextResponse.from(
                             project,
                             projectMembership,
                             combinedPermissionKeys(
                                     permissionKeysByRoleId.getOrDefault(workspaceMembership.getRoleId(), List.of()),
-                                    permissionKeysByRoleId.getOrDefault(projectMembership.getRoleId(), List.of())
+                                    projectPermissions
                             )
                     );
                 })

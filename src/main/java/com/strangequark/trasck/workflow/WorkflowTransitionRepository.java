@@ -10,6 +10,8 @@ import org.springframework.data.repository.query.Param;
 public interface WorkflowTransitionRepository extends JpaRepository<WorkflowTransition, UUID> {
     Optional<WorkflowTransition> findByWorkflowIdAndFromStatusIdAndToStatusId(UUID workflowId, UUID fromStatusId, UUID toStatusId);
 
+    List<WorkflowTransition> findByWorkflowIdOrderBySortOrderAscKeyAsc(UUID workflowId);
+
     @Query("""
             select wt
             from WorkflowTransition wt

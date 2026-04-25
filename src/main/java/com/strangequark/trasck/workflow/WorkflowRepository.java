@@ -9,4 +9,6 @@ public interface WorkflowRepository extends JpaRepository<Workflow, UUID> {
     @Override
     @EntityGraph(attributePaths = {"workspace", "statuses", "transitions", "transitions.fromStatus", "transitions.toStatus"})
     Optional<Workflow> findById(UUID id);
+
+    Optional<Workflow> findFirstByWorkspaceIdAndActiveTrueOrderByCreatedAtAsc(UUID workspaceId);
 }

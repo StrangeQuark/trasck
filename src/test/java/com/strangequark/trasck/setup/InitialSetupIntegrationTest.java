@@ -173,10 +173,30 @@ class InitialSetupIntegrationTest {
         ObjectNode body = setupBody(prefix, anonymousReadEnabled, projectVisibility);
         HttpResponse<String> response = post("/api/v1/setup", body);
         assertThat(response.statusCode()).isEqualTo(201);
-        JsonNode responseBody = objectMapper.readTree(response.body());
-        assertThat(responseBody.at("/adminUser/accountType").asText()).isEqualTo("human");
-        assertThat(responseBody.at("/workspace/anonymousReadEnabled").asBoolean()).isEqualTo(anonymousReadEnabled);
-        return responseBody;
+        JsonNode setup = objectMapper.readTree(response.body());
+        assertThat(setup.at("/adminUser/accountType").asText()).isEqualTo("human");
+
+        String token = login(setup.at("/adminUser/email").asText());
+        JsonNode organization = postJson("/api/v1/organizations", body.get("organization"), token);
+        JsonNode workspace = postJson(
+                "/api/v1/organizations/" + organization.at("/id").asText() + "/workspaces",
+                body.get("workspace"),
+                token
+        );
+        assertThat(workspace.at("/anonymousReadEnabled").asBoolean()).isEqualTo(anonymousReadEnabled);
+        JsonNode project = postJson(
+                "/api/v1/workspaces/" + workspace.at("/id").asText() + "/projects",
+                body.get("project"),
+                token
+        );
+
+        ObjectNode result = objectMapper.createObjectNode();
+        result.set("adminUser", setup.at("/adminUser"));
+        result.set("organization", organization);
+        result.set("workspace", workspace);
+        result.set("project", project);
+        result.set("seedData", project.at("/seedData"));
+        return result;
     }
 
     private ObjectNode setupBody(String prefix, boolean anonymousReadEnabled, String projectVisibility) {
@@ -205,11 +225,32 @@ class InitialSetupIntegrationTest {
     }
 
     private HttpResponse<String> post(String path, JsonNode body) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(uri(path))
-                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+        return post(path, body, null);
+    }
+
+    private JsonNode postJson(String path, JsonNode body, String token) throws Exception {
+        HttpResponse<String> response = post(path, body, token);
+        assertThat(response.statusCode()).isIn(200, 201);
+        return objectMapper.readTree(response.body());
+    }
+
+    private HttpResponse<String> post(String path, JsonNode body, String token) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
+                .header("Content-Type", MediaType.APPLICATION_JSON_VALUE);
+        if (token != null) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        HttpRequest request = builder
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
                 .build();
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private String login(String email) throws Exception {
+        JsonNode login = postJson("/api/v1/auth/login", objectMapper.createObjectNode()
+                .put("identifier", email)
+                .put("password", "correct-horse-battery-staple"), null);
+        return login.at("/accessToken").asText();
     }
 
     private HttpResponse<String> get(String path) throws Exception {

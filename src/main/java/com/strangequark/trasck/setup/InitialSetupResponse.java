@@ -4,11 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 public record InitialSetupResponse(
-        UserSummary adminUser,
-        OrganizationSummary organization,
-        WorkspaceSummary workspace,
-        ProjectSummary project,
-        SeedDataSummary seedData
+        UserSummary adminUser
 ) {
     public record UserSummary(
             UUID id,
@@ -16,31 +12,6 @@ public record InitialSetupResponse(
             String username,
             String displayName,
             String accountType
-    ) {
-    }
-
-    public record OrganizationSummary(
-            UUID id,
-            String name,
-            String slug
-    ) {
-    }
-
-    public record WorkspaceSummary(
-            UUID id,
-            UUID organizationId,
-            String name,
-            String key,
-            Boolean anonymousReadEnabled
-    ) {
-    }
-
-    public record ProjectSummary(
-            UUID id,
-            UUID workspaceId,
-            String name,
-            String key,
-            String visibility
     ) {
     }
 

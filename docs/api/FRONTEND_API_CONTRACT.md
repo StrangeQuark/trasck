@@ -56,9 +56,31 @@ export interface CursorPage<T> {
 
 export interface SetupRequest {
   adminUser: { email: string; username: string; displayName: string; password: string };
-  organization: { name: string; slug: string };
-  workspace: { name: string; key: string; timezone?: string; locale?: string; anonymousReadEnabled?: boolean };
-  project: { name: string; key: string; description?: string; visibility?: "private" | "workspace" | "public" };
+}
+
+export interface OrganizationRequest {
+  name?: string;
+  slug?: string;
+  status?: "active" | "inactive" | "archived";
+}
+
+export interface WorkspaceRequest {
+  name?: string;
+  key?: string;
+  timezone?: string;
+  locale?: string;
+  anonymousReadEnabled?: boolean;
+  status?: "active" | "inactive" | "archived";
+}
+
+export interface ProjectRequest {
+  name?: string;
+  key?: string;
+  description?: string;
+  visibility?: "private" | "workspace" | "public";
+  status?: "active" | "inactive" | "archived";
+  parentProjectId?: UUID;
+  leadUserId?: UUID;
 }
 
 export interface AuthSession {
@@ -1152,7 +1174,7 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 
 ## Common Flows
 
-1. First setup: call `GET /api/v1/setup/status` before showing first-run setup links. When `available=true`, submit `POST /api/v1/setup`, store IDs from `workspace`, `project`, `adminUser`, and `seedData`, refresh/login the new admin context, hide setup links, and return the browser to `/`. When `available=false`, hide first-run setup entry points.
+1. First setup: call `GET /api/v1/setup/status` before showing first-run setup links. When `available=true`, submit `POST /api/v1/setup` with only `adminUser`, then login/refresh the new super-admin context. The product setup chain should then use normal authenticated APIs: `POST /api/v1/organizations`, optionally `POST /api/v1/organizations/{organizationId}/workspaces`, optionally `POST /api/v1/workspaces/{workspaceId}/projects`, and planning/team APIs as needed. Only the super-admin account is required; every later setup step can be skipped and resumed through normal product flows. When `available=false`, hide first-run setup entry points.
 2. Login: `POST /api/v1/auth/login`; browser sessions should prefer the HTTP-only cookie plus `GET /api/v1/auth/csrf` for unsafe requests. The returned `accessToken` remains available for API tools and development overrides.
 3. Project work list: `GET /api/v1/projects/{projectId}/work-items?limit=50`, optionally add one typed custom-field filter, follow `nextCursor` for more pages, then `GET /api/v1/work-items/{workItemId}` for detail.
 4. Work item detail tabs: comments, links, watchers, work logs, labels, attachments, activity, and reporting history all hang off the selected work item ID.
@@ -1169,7 +1191,8 @@ Browser UI code should use `AuthSession.user` and the auth cookie. The returned 
 
 ## Endpoint Coverage
 
-- Setup: `GET /setup/status`, `POST /setup`
+- Setup: `GET /setup/status`, `POST /setup` for the first super-admin user only.
+- Organization/workspace/project management: organization list/create/detail/update/archive through `GET/POST/PATCH/DELETE /api/v1/organizations...`, workspace list/create/detail/update/archive through `GET/POST/PATCH/DELETE /api/v1/organizations/{organizationId}/workspaces` and `/api/v1/workspaces/{workspaceId}`, and project list/create/detail/update/archive through `GET/POST/PATCH/DELETE /api/v1/workspaces/{workspaceId}/projects` and `/api/v1/projects/{projectId}`. Workspace creation seeds workspace defaults and owner membership; project creation seeds default project configuration and project admin membership.
 - Auth/security: login, current user, CSRF, personal tokens, workspace service tokens, invitations and invitation list/cancellation, human workspace user list/creation/removal, workspace/project role management, system-admin list/grant/revoke, workspace security-policy read/update including anonymous read, project security-policy read/update including visibility, and public project/work-item/comment/attachment reads with signed public attachment downloads.
 - Work items: project list/create, typed single custom-field list filter, create/update keyed `customFields`, screen required-field enforcement on create/update, targeted required-field checks on assignee/team commands, detail/update/archive, assignment, rank, transition, team assignment, comments, links, watchers, work logs, workspace labels create/list/delete, work-item labels add/remove/list, attachments.
 - Product configuration: custom field/context/value CRUD, field configuration CRUD with project/type overrides, screen/field/assignment CRUD.

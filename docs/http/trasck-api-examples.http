@@ -2,6 +2,7 @@
 @accessToken = replace-with-login-access-token
 @apiToken = replace-with-personal-or-service-token
 @csrfToken = replace-with-csrf-token
+@organizationId = replace-with-organization-id
 @workspaceId = replace-with-workspace-id
 @projectId = replace-with-project-id
 @programId = replace-with-program-id
@@ -48,23 +49,6 @@ Content-Type: application/json
     "username": "admin",
     "displayName": "Admin User",
     "password": "correct-horse-battery-staple"
-  },
-  "organization": {
-    "name": "Trasck Local",
-    "slug": "trasck-local"
-  },
-  "workspace": {
-    "name": "Trasck Workspace",
-    "key": "TR",
-    "timezone": "America/Chicago",
-    "locale": "en-US",
-    "anonymousReadEnabled": false
-  },
-  "project": {
-    "name": "Trasck Project",
-    "key": "TRP",
-    "description": "Local project",
-    "visibility": "private"
   }
 }
 
@@ -75,6 +59,41 @@ Content-Type: application/json
 {
   "identifier": "admin@example.com",
   "password": "correct-horse-battery-staple"
+}
+
+### Create Organization
+POST {{baseUrl}}/api/v1/organizations
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Trasck Local",
+  "slug": "trasck-local"
+}
+
+### Create Workspace
+POST {{baseUrl}}/api/v1/organizations/{{organizationId}}/workspaces
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Trasck Workspace",
+  "key": "TR",
+  "timezone": "America/Chicago",
+  "locale": "en-US",
+  "anonymousReadEnabled": false
+}
+
+### Create Project
+POST {{baseUrl}}/api/v1/workspaces/{{workspaceId}}/projects
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Trasck Project",
+  "key": "TRP",
+  "description": "Local project",
+  "visibility": "private"
 }
 
 ### Get CSRF Token For Cookie-Authenticated Browser Calls

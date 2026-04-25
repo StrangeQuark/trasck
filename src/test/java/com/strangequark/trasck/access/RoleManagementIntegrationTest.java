@@ -51,10 +51,14 @@ class RoleManagementIntegrationTest {
 
     @Test
     void adminsCanPreviewConfirmVersionRollbackAndArchiveManagedRoles() throws Exception {
-        JsonNode setup = postJson("/api/v1/setup", setupBody());
+        ObjectNode setupRequest = (ObjectNode) setupBody();
+        JsonNode setup = postJson("/api/v1/setup", setupRequest);
         String token = login(setup.at("/adminUser/email").asText());
-        UUID workspaceId = UUID.fromString(setup.at("/workspace/id").asText());
-        UUID projectId = UUID.fromString(setup.at("/project/id").asText());
+        JsonNode organization = postJson("/api/v1/organizations", setupRequest.get("organization"), token);
+        JsonNode workspace = postJson("/api/v1/organizations/" + organization.at("/id").asText() + "/workspaces", setupRequest.get("workspace"), token);
+        JsonNode project = postJson("/api/v1/workspaces/" + workspace.at("/id").asText() + "/projects", setupRequest.get("project"), token);
+        UUID workspaceId = UUID.fromString(workspace.at("/id").asText());
+        UUID projectId = UUID.fromString(project.at("/id").asText());
 
         JsonNode permissions = getJson("/api/v1/workspaces/" + workspaceId + "/roles/permissions", token);
         assertThat(containsPermission(permissions, "work_item.read")).isTrue();

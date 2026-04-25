@@ -185,7 +185,18 @@ class ProductionSecurityIntegrationTest {
                 .put("visibility", "private"));
         HttpResponse<String> response = post("/api/v1/setup", body, null);
         assertThat(response.statusCode()).isEqualTo(201);
-        return objectMapper.readTree(response.body());
+        JsonNode setup = objectMapper.readTree(response.body());
+        String accessToken = login(setup);
+        JsonNode organization = read(post("/api/v1/organizations", body.get("organization"), accessToken));
+        JsonNode workspace = read(post("/api/v1/organizations/" + uuid(organization, "/id") + "/workspaces", body.get("workspace"), accessToken));
+        JsonNode project = read(post("/api/v1/workspaces/" + uuid(workspace, "/id") + "/projects", body.get("project"), accessToken));
+        ObjectNode result = objectMapper.createObjectNode();
+        result.set("adminUser", setup.at("/adminUser"));
+        result.set("organization", organization);
+        result.set("workspace", workspace);
+        result.set("project", project);
+        result.set("seedData", project.at("/seedData"));
+        return result;
     }
 
     private String login(JsonNode setup) throws Exception {
@@ -231,6 +242,10 @@ class ProductionSecurityIntegrationTest {
     private JsonNode read(HttpResponse<String> response) throws Exception {
         assertThat(response.statusCode()).isBetween(200, 299);
         return objectMapper.readTree(response.body());
+    }
+
+    private UUID uuid(JsonNode node, String pointer) {
+        return UUID.fromString(node.at(pointer).asText());
     }
 
     private UUID roleId(JsonNode setup, String key) {

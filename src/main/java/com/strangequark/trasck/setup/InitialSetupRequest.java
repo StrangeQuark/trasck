@@ -1,10 +1,7 @@
 package com.strangequark.trasck.setup;
 
 public record InitialSetupRequest(
-        AdminUserRequest adminUser,
-        OrganizationRequest organization,
-        WorkspaceRequest workspace,
-        ProjectRequest project
+        AdminUserRequest adminUser
 ) {
     public record AdminUserRequest(
             String email,

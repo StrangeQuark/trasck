@@ -1024,7 +1024,20 @@ class WorkItemApiIntegrationTest {
                 .put("visibility", "public"));
         HttpResponse<String> response = rawPost("/api/v1/setup", body);
         assertThat(response.statusCode()).isEqualTo(201);
-        return objectMapper.readTree(response.body());
+        JsonNode setup = objectMapper.readTree(response.body());
+        String previousAccessToken = accessToken;
+        accessToken = login(setup);
+        JsonNode organization = objectMapper.readTree(post("/api/v1/organizations", body.get("organization")).body());
+        JsonNode workspace = objectMapper.readTree(post("/api/v1/organizations/" + uuid(organization, "/id") + "/workspaces", body.get("workspace")).body());
+        JsonNode project = objectMapper.readTree(post("/api/v1/workspaces/" + uuid(workspace, "/id") + "/projects", body.get("project")).body());
+        accessToken = previousAccessToken;
+        ObjectNode result = objectMapper.createObjectNode();
+        result.set("adminUser", setup.at("/adminUser"));
+        result.set("organization", organization);
+        result.set("workspace", workspace);
+        result.set("project", project);
+        result.set("seedData", project.at("/seedData"));
+        return result;
     }
 
     private String login(JsonNode setup) throws Exception {

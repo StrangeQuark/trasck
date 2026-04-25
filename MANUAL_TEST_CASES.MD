@@ -58,7 +58,7 @@ Steps:
 8. Open `http://localhost:8080`.
 9. Confirm the Trasck shell loads without a browser console error.
 
-### TC-002 - First-Run Setup Creates Workspace
+### TC-002 - First-Run Setup Creates Super Admin And Optional Starter Records
 
 Result: Pass / Fail / Blocked / Not Run
 
@@ -72,14 +72,18 @@ Steps:
 2. Confirm the homepage shows the `First-run setup` button when the backend has no users.
 3. Navigate to `/setup`.
 4. In `Initial Setup`, enter an admin email, username, display name, and password.
-5. Enter organization, workspace, and project names and keys.
-6. Click `Create`.
-7. Confirm the browser returns to `/` after the setup request succeeds.
-8. Confirm the shell shows the new admin as signed in.
-9. Confirm the `First-run setup` button is no longer visible on the homepage.
-10. Use the workspace and project selectors in the shell for later tests instead of pasting IDs.
-11. Navigate to `/auth`.
-12. Confirm the account summary shows the admin user and the sign-in form is hidden.
+5. Click `Create super admin`.
+6. Confirm the setup flow advances to optional organization creation and the `Skip for now` button is available.
+7. Create an organization.
+8. Create a workspace.
+9. Create a team or click `Skip for now`.
+10. Create a project if a workspace exists, or click `Skip for now`.
+11. Confirm the browser returns to `/` after completing or skipping the optional chain.
+12. Confirm the shell shows the new admin as signed in.
+13. Confirm the `First-run setup` button is no longer visible on the homepage.
+14. Use the workspace and project selectors in the shell for later tests instead of pasting IDs when starter records were created.
+15. Navigate to `/auth`.
+16. Confirm the account summary shows the admin user and the sign-in form is hidden.
 
 ### TC-003 - First-Run Setup Is Locked After Bootstrap
 
@@ -95,10 +99,9 @@ Steps:
 2. Open `/`.
 3. Confirm the `First-run setup` button is hidden.
 4. Navigate directly to `/setup`.
-5. Fill the setup form with different organization/workspace/project values.
-6. Click `Create`.
-7. Confirm the request is rejected because setup has already run.
-8. Confirm the original workspace and project still load.
+5. Confirm the setup page does not require another super-admin creation.
+6. Create or skip optional organization/workspace/team/project records through the normal authenticated flow.
+7. Confirm the original workspace and project still load if they were created earlier.
 
 ### TC-004 - Browser Auth Uses Cookie And CSRF
 
@@ -1426,7 +1429,7 @@ Defect IDs:
 Steps:
 
 1. Ensure backend is running on `http://localhost:6100`.
-2. Ensure test environment variables point to the login, workspace, and project IDs or enable disposable setup.
+2. Ensure test environment variables point to the login, workspace, and project IDs or enable disposable setup plus authenticated org/workspace/project creation.
 3. Open a terminal in `trasck-test`.
 4. Run `mvn test -Dgroups=api`.
 5. Confirm tests pass or skipped tests explain missing optional config.

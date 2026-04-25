@@ -674,7 +674,18 @@ class AgentIntegrationTest {
                 .put("visibility", "private"));
         HttpResponse<String> response = post("/api/v1/setup", body, null);
         assertThat(response.statusCode()).isEqualTo(201);
-        return read(response);
+        JsonNode setup = read(response);
+        String accessToken = login(setup);
+        JsonNode organization = read(post("/api/v1/organizations", body.get("organization"), accessToken));
+        JsonNode workspace = read(post("/api/v1/organizations/" + uuid(organization, "/id") + "/workspaces", body.get("workspace"), accessToken));
+        JsonNode project = read(post("/api/v1/workspaces/" + uuid(workspace, "/id") + "/projects", body.get("project"), accessToken));
+        ObjectNode result = objectMapper.createObjectNode();
+        result.set("adminUser", setup.at("/adminUser"));
+        result.set("organization", organization);
+        result.set("workspace", workspace);
+        result.set("project", project);
+        result.set("seedData", project.at("/seedData"));
+        return result;
     }
 
     private String login(JsonNode setup) throws Exception {

@@ -25,9 +25,9 @@ public record AuthProjectContextResponse(
                 project.getKey(),
                 project.getVisibility(),
                 project.getStatus(),
-                membership.getId(),
-                membership.getRoleId(),
-                membership.getStatus(),
+                membership == null ? null : membership.getId(),
+                membership == null ? null : membership.getRoleId(),
+                membership == null ? "inherited" : membership.getStatus(),
                 permissionKeys == null ? List.of() : List.copyOf(permissionKeys)
         );
     }
